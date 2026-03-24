@@ -1,0 +1,27 @@
+{
+	"name": "constellation",
+	"version": "1.0.0",
+	"description": "A plugin that supercharges Claude Code with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
+	"author": {
+		"name": "ShiftinBits Inc"
+	},
+	"homepage": "https://constellationdev.io",
+	"repository": "https://github.com/ShiftinBits/constellation-claude",
+	"license": "AGPL-3.0",
+	"keywords": [
+		"code-intelligence",
+		"code-analysis",
+		"dependency-analysis",
+		"impact-analysis",
+		"code-metadata",
+		"code-graph",
+		"mcp",
+		"constellation"
+	],
+	"commands": "./commands/",
+	"agents": "./agents/",
+	"skills": "./skills/",
+	"hooks": "./hooks/hooks.json",
+	"mcpServers": "./.mcp.json",
+	"outputStyles": "./output-styles/"
+}

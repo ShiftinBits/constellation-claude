@@ -1,0 +1,9 @@
+You have Constellation access. `code_intel` is your PRIMARY tool for understanding this codebase—not an alternative, not a fallback, THE DEFAULT.
+
+Mental model:
+- "Where is X defined?" → code_intel
+- "What uses X?" → code_intel
+- "What would break?" → code_intel
+- "Find the string 'ERROR_CODE_123'" → Grep
+
+Grep is for literal text. Everything else starts with code_intel.

@@ -1,0 +1,48 @@
+{
+	"hooks": {
+		"SessionStart": [
+			{
+				"matcher": "startup",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$ctx}}'"
+					}
+				]
+			}
+		],
+		"SubagentStart": [
+			{
+				"matcher": "Explore|Plan",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SubagentStart\",additionalContext:$ctx}}'"
+					}
+				]
+			}
+		],
+		"PreToolUse": [
+			{
+				"matcher": "Grep|Glob",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-tool-use-grep-glob.txt\")\" '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:$ctx}}'"
+					}
+				]
+			}
+		],
+		"PreCompact": [
+			{
+				"matcher": ".*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{hookSpecificOutput:{hookEventName:\"PreCompact\",additionalContext:$ctx}}'"
+					}
+				]
+			}
+		]
+	}
+}

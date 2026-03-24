@@ -1,0 +1,1 @@
+For structural code questions—symbol definitions, callers/callees, dependencies, dependents, impact analysis, architecture overview—use code_intel instead of Grep/Glob. It answers in one call what would take 3-5 text searches. Use Grep/Glob only for literal string search, config values, or when code_intel is unavailable or you find the index to be outdated for your query.
