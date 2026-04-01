@@ -1,52 +1,52 @@
 ---
 name: source-scout
-description: Use this agent for any codebase exploration, understanding, or navigation task. This agent proactively uses Constellation to provide intelligent code search, symbol discovery, and architectural understanding. Examples:
+description: |
+  Use this agent for any codebase exploration, understanding, or navigation task. This agent proactively uses Constellation to provide intelligent code search, symbol discovery, and architectural understanding. Examples:
 
-<example>
-Context: User wants to understand the codebase
-user: "What does this codebase do?"
-assistant: "I'll use Constellation to analyze the architecture and give you an overview."
-<commentary>
-Open-ended codebase questions should trigger intelligent analysis using getArchitectureOverview.
-</commentary>
-</example>
+  <example>
+  Context: User wants to understand the codebase
+  user: "What does this codebase do?"
+  assistant: "I'll use Constellation to analyze the architecture and give you an overview."
+  <commentary>
+  Open-ended codebase questions should trigger intelligent analysis using getArchitectureOverview.
+  </commentary>
+  </example>
 
-<example>
-Context: User is looking for where something is implemented
-user: "Where is the authentication logic?"
-assistant: "I'll search for authentication-related symbols and trace their implementations."
-<commentary>
-Implementation questions should use searchSymbols and traceSymbolUsage instead of grep.
-</commentary>
-</example>
+  <example>
+  Context: User is looking for where something is implemented
+  user: "Where is the authentication logic?"
+  assistant: "I'll search for authentication-related symbols and trace their implementations."
+  <commentary>
+  Implementation questions should use searchSymbols and traceSymbolUsage instead of grep.
+  </commentary>
+  </example>
 
-<example>
-Context: User wants to find usages of something
-user: "Find all places that use the UserService"
-assistant: "I'll trace all usages of UserService across the codebase."
-<commentary>
-Usage questions should use traceSymbolUsage for accurate results.
-</commentary>
-</example>
+  <example>
+  Context: User wants to find usages of something
+  user: "Find all places that use the UserService"
+  assistant: "I'll trace all usages of UserService across the codebase."
+  <commentary>
+  Usage questions should use traceSymbolUsage for accurate results.
+  </commentary>
+  </example>
 
-<example>
-Context: User asks how something works
-user: "How does the payment processing work?"
-assistant: "I'll analyze the payment-related symbols and their call graphs to explain the flow."
-<commentary>
-"How does X work" questions benefit from getCallGraph and dependency analysis.
-</commentary>
-</example>
+  <example>
+  Context: User asks how something works
+  user: "How does the payment processing work?"
+  assistant: "I'll analyze the payment-related symbols and their call graphs to explain the flow."
+  <commentary>
+  "How does X work" questions benefit from getCallGraph and dependency analysis.
+  </commentary>
+  </example>
 
-<example>
-Context: User wants to explore a specific area
-user: "Show me the API endpoints in this project"
-assistant: "I'll search for controller and route definitions using Constellation."
-<commentary>
-Exploration of specific code areas should use targeted symbol search.
-</commentary>
-</example>
-
+  <example>
+  Context: User wants to explore a specific area
+  user: "Show me the API endpoints in this project"
+  assistant: "I'll search for controller and route definitions using Constellation."
+  <commentary>
+  Exploration of specific code areas should use targeted symbol search.
+  </commentary>
+  </example>
 model: inherit
 effort: medium
 color: blue
