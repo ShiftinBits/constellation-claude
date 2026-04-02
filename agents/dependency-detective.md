@@ -1,34 +1,34 @@
 ---
 name: dependency-detective
-description: |
-  Use this agent proactively for ANY dependency-related task - checking imports, understanding module relationships, finding circular dependencies, or analyzing coupling. Trigger this agent whenever imports, dependencies, or module structure is discussed. Examples:
+description: Use this agent proactively for ANY dependency-related task - checking imports, understanding module relationships, finding circular dependencies, or analyzing coupling. Trigger this agent whenever imports, dependencies, or module structure is discussed. Examples:
 
-  <example>
-  Context: User is adding new imports to a file
-  user: "I need to import UserService into AuthService"
-  assistant: "Let me check if adding this import would create a circular dependency or unhealthy coupling."
-  <commentary>
-  Adding imports between services can create circular dependencies. The dependency-detective should verify this import won't create cycles.
-  </commentary>
-  </example>
+<example>
+Context: User is adding new imports to a file
+user: "I need to import UserService into AuthService"
+assistant: "Let me check if adding this import would create a circular dependency or unhealthy coupling."
+<commentary>
+Adding imports between services can create circular dependencies. The dependency-detective should verify this import won't create cycles.
+</commentary>
+</example>
 
-  <example>
-  Context: User is reviewing the codebase architecture
-  user: "I'm worried our modules are too tightly coupled"
-  assistant: "I'll analyze the module dependencies to identify any circular dependencies and tightly coupled areas."
-  <commentary>
-  Architecture concerns about coupling warrant a dependency analysis. The agent should map out module relationships and identify problems.
-  </commentary>
-  </example>
+<example>
+Context: User is reviewing the codebase architecture
+user: "I'm worried our modules are too tightly coupled"
+assistant: "I'll analyze the module dependencies to identify any circular dependencies and tightly coupled areas."
+<commentary>
+Architecture concerns about coupling warrant a dependency analysis. The agent should map out module relationships and identify problems.
+</commentary>
+</example>
 
-  <example>
-  Context: User is preparing for a code review or PR
-  user: "Before I submit this PR, are there any dependency issues I should know about?"
-  assistant: "I'll scan for circular dependencies and check if your changes introduced any new coupling issues."
-  <commentary>
-  Pre-PR checks are a good time to verify dependency health. The agent should check for cycles and report any concerns.
-  </commentary>
-  </example>
+<example>
+Context: User is preparing for a code review or PR
+user: "Before I submit this PR, are there any dependency issues I should know about?"
+assistant: "I'll scan for circular dependencies and check if your changes introduced any new coupling issues."
+<commentary>
+Pre-PR checks are a good time to verify dependency health. The agent should check for cycles and report any concerns.
+</commentary>
+</example>
+
 model: inherit
 effort: medium
 color: cyan

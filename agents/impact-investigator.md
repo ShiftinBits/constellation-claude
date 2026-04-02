@@ -1,34 +1,34 @@
 ---
 name: impact-investigator
-description: |
-  Use this agent proactively before ANY code modification to assess impact. Trigger whenever the user discusses changing, refactoring, renaming, deleting, or modifying code - even for seemingly small changes. Always analyze before acting. Examples:
+description: Use this agent proactively before ANY code modification to assess impact. Trigger whenever the user discusses changing, refactoring, renaming, deleting, or modifying code - even for seemingly small changes. Always analyze before acting. Examples:
 
-  <example>
-  Context: User has been discussing refactoring a core service class
-  user: "I'm going to rename UserAuthService to AuthenticationService"
-  assistant: "Before renaming UserAuthService, let me analyze the potential impact of this change to understand the blast radius."
-  <commentary>
-  The user is about to make a significant change to a service class. The impact-investigator should be triggered to assess which files and symbols depend on this class before proceeding.
-  </commentary>
-  </example>
+<example>
+Context: User has been discussing refactoring a core service class
+user: "I'm going to rename UserAuthService to AuthenticationService"
+assistant: "Before renaming UserAuthService, let me analyze the potential impact of this change to understand the blast radius."
+<commentary>
+The user is about to make a significant change to a service class. The impact-investigator should be triggered to assess which files and symbols depend on this class before proceeding.
+</commentary>
+</example>
 
-  <example>
-  Context: User is working on deleting unused code
-  user: "I think this validateInput function is dead code, going to remove it"
-  assistant: "Let me verify that validateInput is truly unused and check for any hidden dependencies before removal."
-  <commentary>
-  Before deleting code, it's prudent to verify it's actually unused. The impact-investigator can confirm this and identify any places that might dynamically reference the function.
-  </commentary>
-  </example>
+<example>
+Context: User is working on deleting unused code
+user: "I think this validateInput function is dead code, going to remove it"
+assistant: "Let me verify that validateInput is truly unused and check for any hidden dependencies before removal."
+<commentary>
+Before deleting code, it's prudent to verify it's actually unused. The impact-investigator can confirm this and identify any places that might dynamically reference the function.
+</commentary>
+</example>
 
-  <example>
-  Context: User is planning a major refactoring of a module
-  user: "We need to restructure the payment processing module"
-  assistant: "I'll analyze the payment module to understand its dependencies and dependents, helping identify the safest order for these changes."
-  <commentary>
-  Major restructuring benefits from understanding the full dependency graph. The agent should map out what depends on what to suggest a safe refactoring order.
-  </commentary>
-  </example>
+<example>
+Context: User is planning a major refactoring of a module
+user: "We need to restructure the payment processing module"
+assistant: "I'll analyze the payment module to understand its dependencies and dependents, helping identify the safest order for these changes."
+<commentary>
+Major restructuring benefits from understanding the full dependency graph. The agent should map out what depends on what to suggest a safe refactoring order.
+</commentary>
+</example>
+
 model: inherit
 effort: high
 color: yellow
