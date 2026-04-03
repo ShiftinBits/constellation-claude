@@ -1,6 +1,6 @@
 ---
 description: Analyze dependencies for a file or symbol
-argument-hint: [file-path] [--reverse]
+argument-hint: "<file-path> [--reverse]"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 context: fork
 effort: high

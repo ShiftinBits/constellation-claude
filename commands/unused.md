@@ -1,6 +1,6 @@
 ---
 description: Find orphaned/dead code that is exported but never imported
-argument-hint: [kind: function|class|type|interface|variable]
+argument-hint: "[kind: function|class|type|interface|variable]"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 effort: medium
 ---

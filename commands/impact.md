@@ -1,6 +1,6 @@
 ---
 description: Analyze the impact of changing a symbol or file
-argument-hint: [symbol-name] [file-path]
+argument-hint: "<symbol-name> <file-path>"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 effort: high
 ---
