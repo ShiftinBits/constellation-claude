@@ -6,7 +6,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$ctx}}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{systemMessage:$ctx}'"
 					}
 				]
 			}
@@ -17,7 +17,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SubagentStart\",additionalContext:$ctx}}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{systemMessage:$ctx}'"
 					}
 				]
 			}
@@ -39,7 +39,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{hookSpecificOutput:{hookEventName:\"PreCompact\",additionalContext:$ctx}}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{systemMessage:$ctx}'"
 					}
 				]
 			}
