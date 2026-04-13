@@ -9,7 +9,7 @@
 			"name": "constellation",
 			"description": "A plugin that supercharges Claude Code with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
 			"source": "./",
-			"version": "1.2.1",
+			"version": "1.2.2",
 			"license": "AGPL-3.0",
 			"repository": "https://github.com/ShiftinBits/constellation-claude",
 			"category": "development",

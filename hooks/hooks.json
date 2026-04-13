@@ -1,12 +1,14 @@
 {
+	"description": "Constellation code intelligence hooks — injects code_intel MCP awareness into sessions, subagents, and tool selection",
 	"hooks": {
 		"SessionStart": [
 			{
-				"matcher": "startup",
+				"matcher": "startup|resume|clear",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{systemMessage:$ctx}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$ctx}}'",
+						"statusMessage": "Loading Constellation context..."
 					}
 				]
 			}
@@ -17,7 +19,8 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{systemMessage:$ctx}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SubagentStart\",additionalContext:$ctx}}'",
+						"statusMessage": "Injecting Constellation context into subagent..."
 					}
 				]
 			}
@@ -35,11 +38,11 @@
 		],
 		"PreCompact": [
 			{
-				"matcher": ".*",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{systemMessage:$ctx}'"
+						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{systemMessage:$ctx}'",
+						"statusMessage": "Preserving Constellation context..."
 					}
 				]
 			}
