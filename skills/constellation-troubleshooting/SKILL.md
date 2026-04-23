@@ -63,7 +63,7 @@ Check error.code:
 1. **Configure credentials:**
 
    ```bash
-   constellation auth
+   npx @constellationdev/cli auth
    ```
 
 2. **Check if key is set:**
