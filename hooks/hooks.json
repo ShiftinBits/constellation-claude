@@ -7,7 +7,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/session-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SessionStart\",additionalContext:$ctx}}'",
+						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('SessionStart')\"",
 						"statusMessage": "Loading Constellation context..."
 					}
 				]
@@ -19,7 +19,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/subagent-start.txt\")\" '{hookSpecificOutput:{hookEventName:\"SubagentStart\",additionalContext:$ctx}}'",
+						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('SubagentStart')\"",
 						"statusMessage": "Injecting Constellation context into subagent..."
 					}
 				]
@@ -31,17 +31,18 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-tool-use-grep-glob.txt\")\" '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:$ctx}}'"
+						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('PreToolUse')\""
 					}
 				]
 			}
 		],
 		"PreCompact": [
 			{
+				"matcher": ".*",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "jq -n --arg ctx \"$(cat \"${CLAUDE_PLUGIN_ROOT}/hooks/prompts/pre-compact.txt\")\" '{systemMessage:$ctx}'",
+						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('PreCompact')\"",
 						"statusMessage": "Preserving Constellation context..."
 					}
 				]

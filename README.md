@@ -57,8 +57,10 @@ Event hooks enable intelligent, transparent assistance:
 
 | Hook | Event | Behavior |
 |------|-------|----------|
-| **Availability Check** | `SessionStart` | Silently checks Constellation connectivity at session start |
-| **Context Preservation** | `PreCompact` | Preserve any Constellation insights in compacted summary |
+| **Session Awareness** | `SessionStart` | Injects `code_intel` MCP tool awareness at session start |
+| **Subagent Awareness** | `SubagentStart` | Injects `code_intel` awareness into Explore and Plan subagents |
+| **Tool Nudge** | `PreToolUse` | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
+| **Context Preservation** | `PreCompact` | Preserves Constellation insights and `code_intel` instructions during compaction |
 
 ## Installation
 

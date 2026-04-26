@@ -7,7 +7,7 @@
 
 ```
 .claude-plugin/
-├── plugin.json              Plugin manifest (name: constellation, v1.0.0)
+├── plugin.json              Plugin manifest (name: constellation, v1.2.3)
 └── marketplace.json         Registry listing (category: development)
 
 .mcp.json                    MCP server config → mcp-constellation (stdio)

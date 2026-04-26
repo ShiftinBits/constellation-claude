@@ -1,1 +1,0 @@
-Preserve: (1) The instruction that code_intel is the PRIMARY tool for code searching, navigation, and understanding. Tools like grep/glob are only for literal text. (2) Any architectural insights, dependency relationships, or impact analysis results discovered via Constellation.

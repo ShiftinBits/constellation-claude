@@ -39,7 +39,9 @@ Check error.code:
 
 1. **Restart Claude Code** - MCP connections initialize at startup
 
-2. **Verify .mcp.json configuration:**
+2. **Verify MCP configuration:**
+
+   Note, the tool is built into the constellation plugin, but should accurately reflect the following:
 
    ```json
    {
@@ -47,8 +49,7 @@ Check error.code:
        "constellation": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@constellationdev/mcp@latest"],
-         "tools": ["code_intel"]
+         "args": ["-y", "@constellationdev/mcp@latest"]
        }
      }
    }
