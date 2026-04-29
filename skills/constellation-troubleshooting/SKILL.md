@@ -49,7 +49,10 @@ Check error.code:
        "constellation": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@constellationdev/mcp@latest"]
+         "args": ["-y", "@constellationdev/mcp@latest"],
+         "env": {
+           "CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
+         }
        }
      }
    }
@@ -67,11 +70,9 @@ Check error.code:
    npx @constellationdev/cli auth
    ```
 
-2. **Check if key is set:**
+2. **Check if access key is properly set:**
 
-   ```bash
-   echo $CONSTELLATION_ACCESS_KEY
-   ```
+   In the event of `AUTH_ERROR` failures the MCP server provides details in the `error.guidance[0]` value of the response object, indicating the current state of the `CONSTELLATION_ACCESS_KEY` environment variable.
 
 3. **If key is expired:** Regenerate in Constellation web UI under Settings > API Keys
 
@@ -118,6 +119,7 @@ These are typically **not errors** - the item simply wasn't found in the index.
 ## Diagnostic Command
 
 Run `/constellation:diagnose` for a quick health check that tests:
+
 - MCP server connectivity
 - API authentication
 - Project indexing status

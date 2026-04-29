@@ -1,6 +1,6 @@
 {
 	"name": "constellation-plugins",
-	"description": "Upgrade Claude from text search to code understanding.",
+	"description": "Supercharge Claude with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
 	"owner": {
 		"name": "ShiftinBits Inc",
 		"email": "hello@shiftinbits.com"
@@ -8,7 +8,7 @@
 	"plugins": [
 		{
 			"name": "constellation",
-			"description": "A plugin that supercharges Claude Code with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
+			"description": "Upgrade Claude from text search to code understanding.",
 			"source": "./",
 			"version": "1.2.4",
 			"license": "AGPL-3.0",

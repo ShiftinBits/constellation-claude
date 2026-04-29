@@ -1,7 +1,7 @@
 {
 	"name": "constellation",
 	"version": "1.2.4",
-	"description": "A plugin that supercharges Claude Code with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
+	"description": "Upgrade Claude from text search to code understanding.",
 	"author": {
 		"name": "ShiftinBits Inc"
 	},
