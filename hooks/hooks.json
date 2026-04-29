@@ -1,9 +1,9 @@
 {
-	"description": "Constellation code intelligence hooks — injects code_intel MCP awareness into sessions, subagents, and tool selection",
+	"description": "Constellation code intelligence hooks inject code_intel MCP awareness into sessions, subagents, and tool selection",
 	"hooks": {
 		"SessionStart": [
 			{
-				"matcher": "startup|resume|clear",
+				"matcher": "^(startup|resume|clear)$",
 				"hooks": [
 					{
 						"type": "command",
@@ -15,7 +15,7 @@
 		],
 		"SubagentStart": [
 			{
-				"matcher": "Explore|Plan",
+				"matcher": ".*",
 				"hooks": [
 					{
 						"type": "command",
@@ -27,7 +27,7 @@
 		],
 		"PreToolUse": [
 			{
-				"matcher": "Grep|Glob",
+				"matcher": "^(Grep|Glob|Bash)$",
 				"hooks": [
 					{
 						"type": "command",
