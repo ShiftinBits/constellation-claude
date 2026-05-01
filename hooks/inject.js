@@ -1,6 +1,6 @@
 'use strict';
 
-if (!process.env.CONSTELLATION_ACCESS_KEY?.startsWith('ak:')) process.exit(0);
+if (!(process.env.CONSTELLATION_ACCESS_KEY || '').startsWith('ak:')) process.exit(0);
 
 const hookEventName = process.argv[2];
 

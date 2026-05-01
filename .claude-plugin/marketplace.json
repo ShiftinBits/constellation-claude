@@ -10,7 +10,7 @@
 			"name": "constellation",
 			"description": "Upgrade Claude from text search to code understanding.",
 			"source": "./",
-			"version": "1.2.5",
+			"version": "1.2.6",
 			"license": "AGPL-3.0",
 			"repository": "https://github.com/ShiftinBits/constellation-claude",
 			"category": "development",

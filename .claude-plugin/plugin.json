@@ -1,6 +1,6 @@
 {
 	"name": "constellation",
-	"version": "1.2.5",
+	"version": "1.2.6",
 	"description": "Upgrade Claude from text search to code understanding.",
 	"author": {
 		"name": "ShiftinBits Inc"

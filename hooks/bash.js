@@ -1,6 +1,6 @@
 'use strict';
 
-if (!process.env.CONSTELLATION_ACCESS_KEY?.startsWith('ak:')) process.exit(0);
+if (!(process.env.CONSTELLATION_ACCESS_KEY || '').startsWith('ak:')) process.exit(0);
 
 const readline = require('readline');
 
@@ -16,7 +16,7 @@ async function main() {
 	let inputData;
 	try { inputData = JSON.parse(input); } catch (e) { return; }
 
-	const command = inputData.tool_input?.command || '';
+	const command = (inputData.tool_input && inputData.tool_input.command) || '';
 	if (!command || !TRIGGER_REGEX.test(command)) return;
 
 	process.stdout.write(JSON.stringify({
