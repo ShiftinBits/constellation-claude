@@ -21,18 +21,18 @@ commands/                    6 slash commands (user-invoked)
 ├── unused.md                Dead code finder
 └── architecture.md          Codebase architecture overview
 
-agents/                      3 autonomous agents (Claude-triggered)
-├── source-scout.md          Codebase exploration (blue, tools: MCP+Read+Grep+Glob)
-├── impact-investigator.md   Change risk assessment (yellow, tools: MCP+Read+Grep+Glob)
-└── dependency-detective.md  Dependency health (cyan, tools: MCP+Read+Grep+Glob)
-
 skills/
-└── constellation-troubleshooting/
-    ├── SKILL.md             Troubleshooting guide (keyword-triggered)
-    └── references/
-        └── error-codes.md   Complete error code reference
+├── constellation-troubleshooting/
+│   ├── SKILL.md             Troubleshooting guide (keyword-triggered)
+│   └── references/
+│       └── error-codes.md   Complete error code reference
+└── impact-analysis/
+    └── SKILL.md             Pre-change impact assessment guidance (keyword-triggered)
 
-hooks/hooks.json             4 hooks (SessionStart, SubagentStart, PreToolUse, PreCompact)
+hooks/                       SessionStart, SubagentStart, PreToolUse (Grep|Glob, Bash)
+├── hooks.json               Hook registrations
+├── inject.js                Static context injector (SessionStart, SubagentStart, PreToolUse)
+└── bash.js                  Bash-command sniffer that nudges code_intel for grep/rg/glob/awk/findstr
 
 output-styles/
 └── code-intelligence.md     "Code Intelligence" output style (opt-in via /config)
@@ -42,7 +42,7 @@ output-styles/
 
 **Pure declarative plugin** — No package.json, no build step, no tests. All components are Markdown files with YAML frontmatter. Validation is manual (run commands in Claude Code).
 
-**Single MCP tool** — All API calls flow through `mcp__plugin_constellation_constellation__code_intel`. Commands and agents write JavaScript code blocks using an injected `api` object. The MCP server instructions (injected at system level) document all 10 API methods — do NOT duplicate that reference here.
+**Single MCP tool** — All API calls flow through `mcp__plugin_constellation_constellation__code_intel`. Commands write JavaScript code blocks using an injected `api` object. The MCP server instructions (injected at system level) document all 10 API methods — do NOT duplicate that reference here.
 
 ## Component Patterns
 
@@ -64,46 +64,27 @@ model: haiku
 - Output is formatted presentation of API results
 - `status` and `diagnose` use `model: haiku` (lightweight); others inherit session model
 
-### Agents
-
-YAML frontmatter fields: `name`, `description` (with `<example>` trigger blocks), `model`, `color`, `tools`
-
-```yaml
----
-name: agent-name
-description: Purpose + <example> blocks showing when Claude should trigger
-model: inherit
-color: blue
-tools: ["mcp__plugin_constellation_constellation__code_intel", "Read", "Glob", "Grep"]
----
-```
-
-- Claude's LLM evaluates conversation context against `<example>` blocks to decide when to trigger
-- All agents have **graceful degradation**: fall back to Grep/Glob/Read if MCP unavailable
-- Error handling is tiered: MCP failure → API error → query error (each has different fallback)
-
-| Agent | Color | Triggers | Tools |
-|-------|-------|----------|-------|
-| source-scout | blue | "What does X do?", "Where is X?" | MCP, Read, Grep, Glob |
-| impact-investigator | yellow | "I'm renaming/deleting/changing X" | MCP, Read, Grep, Glob |
-| dependency-detective | cyan | "Are modules coupled?", "Check imports" | MCP, Read, Grep, Glob |
-
 ### Skills
 
-YAML frontmatter fields: `name`, `description` (trigger keywords), `version`
+YAML frontmatter fields: `name`, `description` (trigger keywords)
 
 - Passive knowledge loaded when keywords match conversation
 - Not actively invoked — supplements Claude's context
 - Reference docs in `references/` subdirectory
 
+| Skill | Triggers |
+|-------|----------|
+| constellation-troubleshooting | Constellation errors, MCP failures, AUTH_ERROR / PROJECT_NOT_INDEXED, etc. |
+| impact-analysis | "I'm renaming / deleting / refactoring X", "what would break if...", "is X dead code" |
+
 ### Hooks
 
-JSON structure in `hooks/hooks.json`. Four hooks:
+JSON structure in `hooks/hooks.json`. Three events, four matchers, all `type: "command"` shelling out to Node scripts in `hooks/`:
 
-- **SessionStart** (`matcher: "startup"`): Injects Constellation MCP awareness at session start. Establishes `code_intel` as the primary tool for code understanding.
-- **SubagentStart** (`matcher: "Explore|Plan"`): Injects Constellation MCP awareness into built-in Explore and Plan subagents. Instructs them to prefer `code_intel` over Grep/Glob for structural code questions (symbol definitions, callers/callees, dependencies, impact analysis). Built-in subagents don't inherit AGENTS.md, so this hook bridges the gap.
-- **PreToolUse** (`matcher: "Grep|Glob"`): Reminds Claude to prefer `code_intel` for structural queries before falling back to text search. Allows Grep/Glob for literal string search and config values.
-- **PreCompact** (`matcher: ".*"`): Tells Claude to preserve architectural insights, dependency relationships, and impact analysis results during context compaction
+- **SessionStart** (`matcher: ".*"`): Runs `inject.js SessionStart`, which emits `hookSpecificOutput.additionalContext` establishing `code_intel` as the primary tool for code understanding. Gated on `CONSTELLATION_ACCESS_KEY` starting with `ak:`.
+- **SubagentStart** (`matcher: ".*"`): Runs `inject.js SubagentStart` to inject the same code_intel awareness into spawned subagents (built-ins don't inherit AGENTS.md).
+- **PreToolUse** `Grep|Glob` matcher: Runs `inject.js PreToolUse` to remind Claude to prefer `code_intel` for structural queries before falling back to text search.
+- **PreToolUse** `Bash` matcher: Runs `bash.js`, which inspects `tool_input.command` and emits the same reminder when the command starts with `grep`/`rg`/`glob`/`awk`/`findstr` (and isn't part of a pipeline).
 
 ## Development
 
@@ -115,23 +96,15 @@ JSON structure in `hooks/hooks.json`. Four hooks:
 4. Write JavaScript code block using `api.*` methods
 5. Define output formatting for success and error cases
 
-### Adding an Agent
-
-1. Create `agents/<name>.md`
-2. Add frontmatter: `name`, `description` with `<example>` trigger blocks, `model: inherit`, `color`, `tools` array
-3. Write system prompt with responsibilities, API usage, output format
-4. Include tiered error handling section (MCP unavailable → API error → query error)
-5. Ensure graceful degradation to Grep/Glob/Read
-
 ### Adding a Skill
 
-1. Create `skills/<name>/SKILL.md` with frontmatter: `name`, `description` (trigger keywords), `version`
+1. Create `skills/<name>/SKILL.md` with frontmatter: `name`, `description` (trigger keywords)
 2. Add reference docs in `skills/<name>/references/` if needed
-3. Focus on diagnostic procedures and actionable fixes
+3. Focus on diagnostic procedures and actionable guidance
 
 ### Modifying Hooks
 
-Edit `hooks/hooks.json`. Available events: `SubagentStart`, `PreCompact`, `SessionStart`, `PreToolUse`, `PostToolUse`. Hook type: `prompt` (AI-evaluated instruction).
+Edit `hooks/hooks.json`. Hook entries use `type: "command"` and shell out to Node scripts in `hooks/`. To inject context, scripts write `{"hookSpecificOutput":{"hookEventName":"<Event>","additionalContext":"..."}}` to stdout (per the [Claude Code hooks spec](https://code.claude.com/docs/en/hooks)). The shared `inject.js` handles `SessionStart`, `SubagentStart`, and `PreToolUse`; `bash.js` handles the `Bash` matcher and reads `tool_input.command` from stdin.
 
 ### Testing
 

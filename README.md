@@ -7,9 +7,8 @@ While Constellation's MCP server provides raw code intelligence capabilities, th
 | Feature | Benefit |
 |---------|---------|
 | **Slash Commands** | Quick access to common workflows |
-| **Contextual Skills** | Claude automatically loads relevant knowledge when needed |
-| **Proactive Agents** | Claude suggests analysis before you make risky changes |
-| **Safety Hooks** | Reminders to check impact before modifying code |
+| **Contextual Skills** | Claude automatically loads relevant knowledge — including proactive impact analysis before risky changes |
+| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, and before Grep/Glob/Bash search commands |
 
 ## Features
 
@@ -33,34 +32,27 @@ Claude automatically activates specialized knowledge based on your questions:
 | Skill | Triggers When You Ask About... |
 |-------|-------------------------------|
 | **constellation-troubleshooting** | Error codes, connectivity issues, debugging problems |
-
-### Agents
-
-Specialized AI agents for autonomous analysis:
-
-| Agent | Purpose |
-|-------|---------|
-| **source-scout** | Explores and navigates codebase, discovers symbols and architectural patterns |
-| **impact-investigator** | Proactively assesses risk before refactoring, renaming, or deleting code |
-| **dependency-detective** | Detects circular dependencies and unhealthy coupling patterns |
+| **impact-analysis** | Renaming, refactoring, deleting, or moving symbols/files; "what would break if...", "is X dead code", "what depends on X" |
 
 **Example Trigger:**
 ```
 You: "Rename AuthService to AuthenticationService"
 Claude: "Before renaming, let me analyze the potential impact..."
-[Launches impact-investigator agent]
+[impact-analysis skill activates, runs api.impactAnalysis, reports risk + dependents]
 ```
 
 ### Hooks
 
 Event hooks enable intelligent, transparent assistance:
 
-| Hook | Event | Behavior |
-|------|-------|----------|
+| Hook | Event (matcher) | Behavior |
+|------|-----------------|----------|
 | **Session Awareness** | `SessionStart` | Injects `code_intel` MCP tool awareness at session start |
-| **Subagent Awareness** | `SubagentStart` | Injects `code_intel` awareness into Explore and Plan subagents |
-| **Tool Nudge** | `PreToolUse` | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
-| **Context Preservation** | `PreCompact` | Preserves Constellation insights and `code_intel` instructions during compaction |
+| **Subagent Awareness** | `SubagentStart` | Injects `code_intel` awareness into spawned subagents (built-ins like Explore/Plan don't inherit project AGENTS.md) |
+| **Search Tool Nudge** | `PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
+| **Bash Search Nudge** | `PreToolUse` (`Bash`) | Inspects the command and emits the same reminder when it starts with `grep`/`rg`/`glob`/`awk`/`findstr` |
+
+All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set (no key → silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured).
 
 ## Installation
 

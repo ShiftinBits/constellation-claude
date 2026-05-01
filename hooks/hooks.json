@@ -3,11 +3,11 @@
 	"hooks": {
 		"SessionStart": [
 			{
-				"matcher": "^(startup|resume|clear)$",
+				"matcher": ".*",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('SessionStart')\"",
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" SessionStart",
 						"statusMessage": "Loading Constellation context..."
 					}
 				]
@@ -19,31 +19,27 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('SubagentStart')\"",
-						"statusMessage": "Injecting Constellation context into subagent..."
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" SubagentStart"
 					}
 				]
 			}
 		],
 		"PreToolUse": [
 			{
-				"matcher": "^(Grep|Glob|Bash)$",
+				"matcher": "Grep|Glob",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('PreToolUse')\""
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" PreToolUse"
 					}
 				]
-			}
-		],
-		"PreCompact": [
+			},
 			{
-				"matcher": ".*",
+				"matcher": "Bash",
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node -e \"require(require('path').join(process.env.CLAUDE_PLUGIN_ROOT,'hooks','inject.js'))('PreCompact')\"",
-						"statusMessage": "Preserving Constellation context..."
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/bash.js\""
 					}
 				]
 			}
