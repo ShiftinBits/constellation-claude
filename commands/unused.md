@@ -2,7 +2,6 @@
 description: Find orphaned/dead code that is exported but never imported
 argument-hint: "[kind: function|class|type|interface|variable]"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
-effort: medium
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**
@@ -19,9 +18,10 @@ Find exported code that is never imported or used anywhere in the codebase.
 Call the `mcp__plugin_constellation_constellation__code_intel` tool:
 
 ```javascript
-// $ARGUMENTS = user's argument (may be empty)
-const kindFilter = "$ARGUMENTS".trim();
-const params = kindFilter ? { filterByKind: [kindFilter] } : {};
+// $ARGUMENTS = user's argument (may be empty). Accept either "--kind function" or bare "function".
+const raw = "$ARGUMENTS".trim();
+const kind = raw.replace(/^(?:--kind|-k)\s+/, '').trim();
+const params = kind ? { filterByKind: [kind] } : {};
 const result = await api.findOrphanedCode(params);
 return result;
 ```

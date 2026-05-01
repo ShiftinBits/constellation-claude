@@ -7,15 +7,15 @@
 
 ```
 .claude-plugin/
-├── plugin.json              Plugin manifest (name: constellation, v1.2.3)
+├── plugin.json              Plugin manifest (name: constellation)
 └── marketplace.json         Registry listing (category: development)
 
 .mcp.json                    MCP server config → mcp-constellation (stdio)
 .claude/settings.local.json  Local enabled servers list
 
 commands/                    6 slash commands (user-invoked)
-├── status.md                API connectivity check (model: haiku)
-├── diagnose.md              Full health check (model: haiku)
+├── status.md                API connectivity check
+├── diagnose.md              Full health check
 ├── impact.md                Symbol change impact analysis
 ├── deps.md                  File dependency analysis
 ├── unused.md                Dead code finder
@@ -42,27 +42,26 @@ output-styles/
 
 **Pure declarative plugin** — No package.json, no build step, no tests. All components are Markdown files with YAML frontmatter. Validation is manual (run commands in Claude Code).
 
-**Single MCP tool** — All API calls flow through `mcp__plugin_constellation_constellation__code_intel`. Commands write JavaScript code blocks using an injected `api` object. The MCP server instructions (injected at system level) document all 10 API methods — do NOT duplicate that reference here.
+**Single MCP tool** — All API calls flow through `mcp__plugin_constellation_constellation__code_intel`. Commands write JavaScript code blocks using an injected `api` object. The MCP server instructions (injected at system level) document all 11 API methods — do NOT duplicate that reference here.
 
 ## Component Patterns
 
 ### Commands
 
-YAML frontmatter fields: `description`, `argument-hint` (optional), `allowed-tools`, `model` (optional: `haiku` or inherit)
+YAML frontmatter fields: `description`, `argument-hint` (optional), `allowed-tools`
 
 ```yaml
 ---
 description: What it does
 argument-hint: [arg1] [--flag]
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
-model: haiku
 ---
 ```
 
 - Arguments accessed via `$1`, `$2`, `$ARGUMENTS`
 - All commands include: `"IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below."`
 - Output is formatted presentation of API results
-- `status` and `diagnose` use `model: haiku` (lightweight); others inherit session model
+- All commands inherit the session model (no per-command `model:` override)
 
 ### Skills
 
@@ -75,7 +74,7 @@ YAML frontmatter fields: `name`, `description` (trigger keywords)
 | Skill | Triggers |
 |-------|----------|
 | constellation-troubleshooting | Constellation errors, MCP failures, AUTH_ERROR / PROJECT_NOT_INDEXED, etc. |
-| impact-analysis | "I'm renaming / deleting / refactoring X", "what would break if...", "is X dead code" |
+| impact-analysis | "I'm renaming / refactoring / deleting / moving X", "what would break if...", "is X safe to remove" |
 
 ### Hooks
 
@@ -91,7 +90,7 @@ JSON structure in `hooks/hooks.json`. Three events, four matchers, all `type: "c
 ### Adding a Command
 
 1. Create `commands/<name>.md`
-2. Add frontmatter: `description`, `allowed-tools: mcp__plugin_constellation_constellation__code_intel`, optional `argument-hint`, `model`
+2. Add frontmatter: `description`, `allowed-tools: mcp__plugin_constellation_constellation__code_intel`, optional `argument-hint`
 3. Include the "Do NOT invoke any skills" directive
 4. Write JavaScript code block using `api.*` methods
 5. Define output formatting for success and error cases

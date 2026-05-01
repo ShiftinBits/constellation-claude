@@ -1,8 +1,6 @@
 ---
 description: Check Constellation API connectivity and authentication status
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
-model: haiku
-effort: low
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**

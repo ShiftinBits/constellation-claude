@@ -2,7 +2,6 @@
 description: Analyze the impact of changing a symbol or file
 argument-hint: "<symbol-name> <file-path>"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
-effort: high
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**

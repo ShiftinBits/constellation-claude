@@ -1,8 +1,6 @@
 ---
 description: Quick health check for Constellation connectivity and authentication
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
-model: haiku
-effort: low
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**
