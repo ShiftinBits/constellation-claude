@@ -69,7 +69,7 @@ All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set (no key → silent n
 claude plugin marketplace add ShiftinBits/constellation-claude
 
 # Install the Constellation Claude plugin
-claude plugin install constellation@constellation-plugins
+claude plugin install constellation@constellation-plugins --scope project
 ```
 
 ## Usage Examples
