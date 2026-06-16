@@ -8,7 +8,6 @@
 					{
 						"type": "command",
 						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" SessionStart",
-						"commandWindows": "node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\inject.js\" SessionStart",
 						"statusMessage": "Loading Constellation context..."
 					}
 				]
@@ -20,8 +19,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" SubagentStart",
-						"commandWindows": "node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\inject.js\" SubagentStart"
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" SubagentStart"
 					}
 				]
 			}
@@ -32,8 +30,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" PreToolUse",
-						"commandWindows": "node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\inject.js\" PreToolUse"
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/inject.js\" PreToolUse"
 					}
 				]
 			},
@@ -42,8 +39,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/bash.js\"",
-						"commandWindows": "node \"$env:CLAUDE_PLUGIN_ROOT\\hooks\\bash.js\""
+						"command": "node \"$CLAUDE_PLUGIN_ROOT/hooks/bash.js\""
 					}
 				]
 			}
