@@ -52,21 +52,22 @@ return usage;
 
 ## Interpreting Results
 
-The `impactAnalysis` response includes a `breakingChangeRisk` field (`low` | `medium` | `high` | `critical`). Use this as the headline risk indicator. Cross-reference with:
+The `impactAnalysis` response includes a `data.breakingChangeRisk.riskLevel` field (`low` | `medium` | `high` | `critical`). Use this as the headline risk indicator. Cross-reference with:
 
 | Signal | Where to find it | What it tells you |
 |--------|------------------|-------------------|
-| Affected file count | `data.impactScope.filesAffected` | Blast radius |
-| Public API exposure | `data.breakdown.isPublicApi` | External consumers may break |
-| Test coverage | `data.breakdown.testCoverage` | Confidence in catching regressions |
+| Affected file count | `data.summary.impactedFileCount` | Blast radius |
+| Public API exposure | `data.symbol.isExported` | External consumers may break |
+| Test exposure | `data.summary.testFileCount` vs `data.summary.productionFileCount` | Confidence in catching regressions |
 | Direct dependents | `data.directDependents[]` | Where to look first |
-| Recommendations | `data.recommendations[]` | Suggested mitigation steps |
+| Risk factors | `data.breakingChangeRisk.factors[]` | Why the risk level is what it is |
+| Recommendations | `data.breakingChangeRisk.recommendations[]` | Suggested mitigation steps |
 
 **Risk thresholds (rule of thumb):**
 
-- **Low**: < 5 files affected, internal-only, good test coverage → proceed normally
+- **Low**: < 5 files affected, internal-only, tests among the dependents → proceed normally
 - **Medium**: 5–15 files affected, or some public surface → review dependents before changing
-- **High**: > 15 files affected, exported API, or low test coverage → stage the change, add tests first
+- **High**: > 15 files affected, exported API, or no impacted test files → stage the change, add tests first
 - **Critical**: Core infrastructure, security-adjacent, or hub modules → pause, propose a migration plan
 
 ## Reporting Format
@@ -77,7 +78,7 @@ When presenting results to the user, structure as:
 2. **Risk** — level + one-sentence rationale
 3. **Scope** — `N files, M symbols affected; public API: yes/no`
 4. **Top dependents** — first 5–10 from `directDependents`
-5. **Test coverage** — percentage if available
+5. **Test exposure** — impacted test files vs production files from `data.summary`
 6. **Recommendation** — concrete next step (proceed / review listed files / stage in N steps / add tests first)
 
 For high or critical risk, lead with the warning and offer to suggest a safer change order.

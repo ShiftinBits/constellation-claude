@@ -95,7 +95,7 @@ Symbol: validateUser (function)
 Risk Level: MEDIUM
 Files Affected: 12
 Symbols Affected: 34
-Test Coverage: 67%
+Impacted Test Files: 3
 
 Recommendations:
 - Update unit tests in auth.spec.ts

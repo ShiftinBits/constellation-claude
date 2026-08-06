@@ -29,7 +29,7 @@ return result;
 **If orphaned code is found**, present:
 1. **Summary**: Total count of orphaned exports, broken down by kind (function, class, etc.)
 2. **Files with Most Orphans**: Group results by file, sorted by count (show top 20)
-3. **For Each File**: List the orphaned symbol names, kinds, and line numbers
+3. **For Each File**: List the orphaned symbol names, kinds, and orphan reasons (each result includes reason and a confidence score; lineEnd is present when known)
 
 **Recommendations to include:**
 - Review each orphaned export to confirm it's truly unused

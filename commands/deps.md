@@ -21,7 +21,7 @@ Call the `mcp__plugin_constellation_constellation__code_intel` tool with this co
 ```javascript
 const [deps, circles] = await Promise.all([
   api.getDependencies({ filePath: "$1", depth: 2, includePackages: true }),
-  api.findCircularDependencies({ filePath: "$1", maxDepth: 5 })
+  api.findCircularDependencies({ filePath: "$1" })
 ]);
 return { dependencies: deps, circularDependencies: circles };
 ```
