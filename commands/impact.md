@@ -27,11 +27,11 @@ return result;
 
 **If successful**, present:
 1. **Symbol**: Name, kind (function/class/etc), and location
-2. **Risk Assessment**: Risk level (low/medium/high/critical) and score
-3. **Impact Scope**: Number of files and symbols affected, whether it's a public API
-4. **Direct Dependents**: Top 10 files that directly depend on this symbol
-5. **Test Coverage**: Percentage from result.data.breakdown.testCoverage
-6. **Recommendations**: From result.data.recommendations
+2. **Risk Assessment**: Risk level from result.data.breakingChangeRisk.riskLevel (low/medium/high/critical) and contributing factors
+3. **Impact Scope**: Files and dependents affected from result.data.summary (impactedFileCount, directDependentCount), whether it's exported (result.data.symbol.isExported)
+4. **Direct Dependents**: Top 10 from result.data.directDependents
+5. **Test Exposure**: Impacted test files vs production files from result.data.summary (testFileCount, productionFileCount)
+6. **Recommendations**: From result.data.breakingChangeRisk.recommendations
 
 **If high or critical risk**, emphasize caution and suggest reviewing dependents before making changes.
 

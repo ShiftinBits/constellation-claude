@@ -8,13 +8,13 @@ allowed-tools: mcp__plugin_constellation_constellation__code_intel
 Run a quick Constellation health check by calling `mcp__plugin_constellation_constellation__code_intel` with this code:
 
 ```javascript
-const result = await api.getArchitectureOverview({ includeMetrics: true });
+const result = await api.getArchitectureOverview({});
 return {
   success: result.success,
   error: result.error,
-  project: result.data?.projectName,
-  files: result.data?.metrics?.totalFiles,
-  symbols: result.data?.metrics?.totalSymbols
+  primaryLanguage: result.data?.metadata?.primaryLanguage,
+  files: result.data?.metadata?.totalFiles,
+  symbols: result.data?.structure?.symbols?.total
 };
 ```
 
@@ -43,7 +43,7 @@ Constellation Health Check
 ===========================
 MCP Server:  OK
 API Auth:    OK
-Project:     <project name>
+Project:     <primaryLanguage> project
 Index:       <files> files, <symbols> symbols
 
 All systems operational.
