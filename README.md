@@ -61,6 +61,7 @@ What the plugin runs, reads, and sends:
 | Component | Runs / reads | Sends |
 |-----------|--------------|-------|
 | **MCP server** | Started with `npx -y @constellationdev/mcp@<pinned version>`, which downloads the package from the npm registry. Reads `constellation.json` and the current git branch from your project, and reads lines from local source files to attach code snippets to query results | Queries (symbol names, file paths, project ID, branch) to the Constellation API at `https://api.constellationdev.io`, or the self-hosted URL you configure via `CONSTELLATION_API_URL` or `constellation.json`, authenticated with `CONSTELLATION_ACCESS_KEY`. **Source code is never sent to the Constellation API.** Code snippets are returned only to Claude in the local session |
+| **MCP server usage metrics** | Runs after each `code_intel` call. On by default; set `CONSTELLATION_USAGE_METRICS=false` to turn it off | A usage event (project ID, branch, which API methods ran, estimated token counts, durations) to the same Constellation API at `/intel/v1/usage`, or to `USAGE_ENDPOINT_URL` if you set it, authenticated with `CONSTELLATION_ACCESS_KEY`. Contains no source code, snippets, or symbol contents |
 | **Hooks** | Check whether `CONSTELLATION_ACCESS_KEY` is set and starts with `ak:`; the Bash hook inspects the command Claude is about to run | Nothing. They only add a `code_intel` reminder to Claude's context |
 | **Commands & skills** | Call the `code_intel` MCP tool | Nothing beyond the MCP server above |
 
