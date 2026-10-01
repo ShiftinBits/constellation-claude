@@ -1,5 +1,6 @@
 {
 	"name": "constellation",
+	"displayName": "Constellation",
 	"version": "1.2.8",
 	"description": "Upgrade Claude from text search to code understanding.",
 	"author": {
@@ -20,6 +21,5 @@
 		"mcp",
 		"constellation"
 	],
-	"icon": "./assets/logo.png",
-	"mcpServers": "./.mcp.json"
+	"icon": "./assets/logo.png"
 }
