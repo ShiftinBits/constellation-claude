@@ -2,8 +2,9 @@
 	"name": "constellation-plugins",
 	"description": "Supercharge Claude with Constellation, a privacy-first code intelligence platform that allows Claude Code to better understand your codebase and share knowledge across your team.",
 	"owner": {
-		"name": "ShiftinBits Inc",
-		"email": "hello@shiftinbits.com"
+		"name": "ShiftinBits Inc.",
+		"email": "hello@shiftinbits.com",
+		"url": "https://shiftinbits.com"
 	},
 	"plugins": [
 		{
@@ -19,7 +20,38 @@
 			"license": "AGPL-3.0",
 			"repository": "https://github.com/ShiftinBits/constellation-claude",
 			"category": "development",
-			"homepage": "https://constellationdev.io"
+			"homepage": "https://constellationdev.io",
+			"tags": [
+				"code-intelligence",
+				"code-graph",
+				"dependency-analysis",
+				"impact-analysis",
+				"dead-code",
+				"architecture",
+				"refactoring",
+				"mcp"
+			],
+			"relevance": {
+				"topic": "Constellation",
+				"signals": {
+					"cli": [
+						"constellation",
+						"const"
+					],
+					"filesRead": [
+						"**/constellation.json"
+					],
+					"hosts": [
+						"api.constellationdev.io"
+					],
+					"manifestDeps": [
+						{
+							"file": "[/\\\\]package\\.json$",
+							"pattern": "\"@constellationdev/"
+						}
+					]
+				}
+			}
 		}
 	]
 }
