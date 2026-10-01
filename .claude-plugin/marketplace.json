@@ -9,6 +9,11 @@
 		{
 			"name": "constellation",
 			"description": "Upgrade Claude from text search to code understanding.",
+			"author": {
+				"name": "ShiftinBits Inc.",
+				"email": "hello@shiftinbits.com",
+				"url": "https://shiftinbits.com"
+			},
 			"source": "./",
 			"version": "1.2.8",
 			"license": "AGPL-3.0",

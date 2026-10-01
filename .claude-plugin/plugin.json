@@ -3,7 +3,9 @@
 	"version": "1.2.8",
 	"description": "Upgrade Claude from text search to code understanding.",
 	"author": {
-		"name": "ShiftinBits Inc."
+		"name": "ShiftinBits Inc.",
+		"email": "hello@shiftinbits.com",
+		"url": "https://shiftinbits.com"
 	},
 	"homepage": "https://constellationdev.io",
 	"repository": "https://github.com/ShiftinBits/constellation-claude",
