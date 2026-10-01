@@ -49,7 +49,7 @@ Check error.code:
        "constellation": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@constellationdev/mcp@latest"],
+         "args": ["-y", "@constellationdev/mcp@1.2.10"],
          "env": {
            "CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
          }

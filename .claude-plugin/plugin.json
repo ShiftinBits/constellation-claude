@@ -18,5 +18,6 @@
 		"mcp",
 		"constellation"
 	],
+	"icon": "./assets/logo.svg",
 	"mcpServers": "./.mcp.json"
 }
