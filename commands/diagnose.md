@@ -32,7 +32,7 @@ Issue: The Constellation MCP server is not running or not configured.
 
 Quick Fixes:
 1. Restart Claude Code to reinitialize MCP connections
-2. Verify npm can run: npx @constellationdev/mcp@latest --version
+2. Verify npm can run: npx @constellationdev/mcp@1.2.10 --version
 3. Check .mcp.json configuration in the plugin directory
 ```
 
