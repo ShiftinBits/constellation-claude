@@ -34,6 +34,8 @@ hooks/                       In-process hooks module (no settings hooks, no node
 ├── register.ts              Hooks module entry: register(on, options), one call per handler file
 ├── nudge.ts                 code_intel awareness: classic.SessionStart, classic.SubagentStart, classic.PreToolUse
 ├── nudge.test.ts            Tests for nudge.ts (claude plugin test)
+├── classify.ts              Search classifier: symbolOf, isSymbolLike, bashSearchPattern, globHasSymbolStem
+├── classify.test.ts         Tests for classify.ts (claude plugin test)
 ├── describe.ts              Search tool description guidance: tool.describe, classic.CwdChanged
 ├── describe.test.ts         Tests for describe.ts (claude plugin test)
 ├── lib.ts                   Shared helpers: isConfigured, projectRoot, codeIntel, canDraw
@@ -89,7 +91,10 @@ All hooks live in the hooks module and run in-process. `hooks/nudge.ts` exports 
 
 - **`classic.SessionStart`**: adds `SESSION_TEXT`, establishing `code_intel` as the primary tool for code understanding. Fires for startup, clear, resume, and compact.
 - **`classic.SubagentStart`**: adds the same `SESSION_TEXT` to spawned subagents (built-ins don't inherit AGENTS.md).
-- **`classic.PreToolUse`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`): for Grep and Glob, adds `REMINDER_TEXT`. For Bash, adds it only when the command contains `grep`, `rg`, `glob`, `awk`, or `findstr` as a whole word, case-insensitively, anywhere in the command (pipelines count).
+- **`classic.PreToolUse`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`): adds `REMINDER_TEXT` only when all hold: the key starts with `ak:`; a `constellation.json` sits at or above the searched directory (`projectRoot`: the call's `path` for Grep and Glob when set, else the session cwd; Bash uses the cwd); and the input is symbol-like, decided by `hooks/classify.ts`:
+  - Grep: `isSymbolLike(pattern)`. A pattern is symbol-like when it is a bare identifier (`AuthService`, `get_user`), a declaration (`class X`, `interface X`, `function X`, `def X`, `func X`, `type X`), a call pattern (`X\(`), or a name in word boundaries (`\bX\b`). Quoted phrases and other text with whitespace, words with no lowercase letter (`TODO`, `FIXME`, `ERROR`, `MAX_RETRIES`), regex with character classes, alternation or quantifiers, and keys containing `.` or `/` are not.
+  - Glob: `globHasSymbolStem(pattern)`, true only when a path segment's stem (before the first `*` or `.`) holds a PascalCase or camelCase token. Extension globs such as `**/*.ts` never qualify.
+  - Bash: `isSymbolLike(bashSearchPattern(command) ?? '')`. Only the leading command counts (up to the first unquoted `|`, `;`, `&&` or `||`), and only when it is `grep`, `egrep`, `rg`, `ag`, `ack` or `git grep`. The pattern is the value of `-e` or `--regexp`, else the first argument not starting with `-`; other value-taking flags are not modeled. A grep after a pipe filters output, so it never triggers, and `awk`, `findstr` and the word `glob` no longer trigger either.
 
 - **`tool.describe`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`, in `hooks/describe.ts`): when the key starts with `ak:` and a `constellation.json` sits in the session cwd or a parent, appends the constant `GUIDANCE` paragraph to the description from `next(e)`, keeping its `isDeferred`. Bash is included because native macOS and Linux builds register no Grep or Glob, so the Bash description is the only search tool description the model sees there. The engine asks once per tool per session and caches the answer, so the text must stay constant.
 - **`classic.CwdChanged`**: recomputes the same gate for `e.new_cwd` and calls `$.ui.invalidate('tool.describe')` only when the result differs from the one the last description was built under (a module variable). Nothing is invalidated per turn.

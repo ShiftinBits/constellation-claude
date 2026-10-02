@@ -7,10 +7,17 @@ const KEY = 'ak:test-key';
 type Answer = { additionalContext?: string[]; deny?: string };
 
 type Handler = (
-	$: { env: { get: (name: string) => Promise<string | undefined> } },
+	$: {
+		env: { get: (name: string) => Promise<string | undefined> };
+		session: { cwd: () => Promise<string> };
+		fs: { exists: (path: string) => Promise<boolean> };
+	},
 	e: object,
 	next: (e: object) => Promise<Answer>,
 ) => Promise<Answer>;
+
+const PROJECT = '/work/app';
+const OUTSIDE = '/elsewhere';
 
 /** The PreToolUse handler the module registers, called directly with a constructed envelope. */
 function preToolUse(): Handler {
@@ -23,17 +30,49 @@ function preToolUse(): Handler {
 	return handler;
 }
 
-/** What the PreToolUse handler adds for a tool call, given the key and what the chain beneath answers. */
-async function nudgesFor(e: object, key: string | undefined, beneath: Answer = {}): Promise<Answer> {
-	const $ = { env: { get: async () => key } };
+/**
+ * What the PreToolUse handler adds for a tool call, given the key, the working
+ * directory, and what the chain beneath answers. `/work/app` holds a
+ * constellation.json; `/elsewhere` does not.
+ */
+async function nudgesFor(
+	e: object,
+	key: string | undefined,
+	beneath: Answer = {},
+	cwd: string = PROJECT,
+): Promise<Answer> {
+	const $ = {
+		env: { get: async () => key },
+		session: { cwd: async () => cwd },
+		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
+	};
 	return preToolUse()($, e, async () => beneath);
 }
 
 const CASES: ReadonlyArray<readonly [string, object]> = [
-	['Bash rg', { tool: 'Bash', command: 'rg foo src' }],
-	['Bash grep in a pipeline', { tool: 'Bash', command: 'git log | grep x' }],
-	['Grep', { tool: 'Grep', pattern: 'foo' }],
-	['Glob', { tool: 'Glob', pattern: '**/*.ts' }],
+	['Bash rg of a symbol', { tool: 'Bash', command: 'rg AuthService src/' }],
+	['Bash grep of a symbol', { tool: 'Bash', command: 'grep -rn getUser .' }],
+	['Bash git grep of a symbol', { tool: 'Bash', command: 'git grep Foo' }],
+	['Grep of a declaration', { tool: 'Grep', pattern: 'class UserService' }],
+	['Grep of a symbol', { tool: 'Grep', pattern: 'AuthService' }],
+	['Glob with a PascalCase stem', { tool: 'Glob', pattern: '**/UserService.ts' }],
+];
+
+const QUIET_CASES: ReadonlyArray<readonly [string, object]> = [
+	['Bash grep of quoted text', { tool: 'Bash', command: "grep -rn 'connection refused' src" }],
+	['Bash grep after a pipe', { tool: 'Bash', command: 'cat log.txt | grep ERROR' }],
+	['Bash git log piped to grep', { tool: 'Bash', command: 'git log | grep x' }],
+	['Bash awk', { tool: 'Bash', command: 'awk /AuthService/ file' }],
+	['Bash findstr', { tool: 'Bash', command: 'findstr AuthService file' }],
+	['Bash without a search command', { tool: 'Bash', command: 'ls -la' }],
+	['Bash with an empty command', { tool: 'Bash', command: '' }],
+	['Grep of a marker word', { tool: 'Grep', pattern: 'TODO' }],
+	['Grep of error text', { tool: 'Grep', pattern: 'connection refused' }],
+	['Grep with no pattern', { tool: 'Grep' }],
+	['Glob of an extension', { tool: 'Glob', pattern: '**/*.ts' }],
+	['Grep of a symbol in a path outside any project', { tool: 'Grep', pattern: 'AuthService', path: `${OUTSIDE}/src` }],
+	['Glob of a symbol in a path outside any project', { tool: 'Glob', pattern: '**/UserService.ts', path: OUTSIDE }],
+	['another tool', { tool: 'Read', pattern: 'AuthService' }],
 ];
 
 describe('session and subagent awareness', () => {
@@ -93,25 +132,35 @@ describe('search nudge', () => {
 		test(`${name} adds nothing when the key does not start with ak:`, async () => {
 			expect((await nudgesFor(e, 'sk:other')).additionalContext).toBeUndefined();
 		});
+
+		test(`${name} adds nothing when the working directory is outside an indexed project`, async () => {
+			expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toBeUndefined();
+		});
 	}
 
-	test('Bash without a search command adds nothing', async () => {
-		const r = await nudgesFor({ tool: 'Bash', command: 'ls -la' }, KEY);
-		expect(r.additionalContext).toBeUndefined();
+	for (const [name, e] of QUIET_CASES) {
+		test(`${name} adds nothing`, async () => {
+			expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
+		});
+	}
+
+	test('a Grep path inside the project nudges even when the working directory is outside it', async () => {
+		const e = { tool: 'Grep', pattern: 'AuthService', path: `${PROJECT}/src` };
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
 	});
 
-	test('Bash with an empty command adds nothing', async () => {
-		const r = await nudgesFor({ tool: 'Bash', command: '' }, KEY);
-		expect(r.additionalContext).toBeUndefined();
+	test('a Glob path inside the project nudges even when the working directory is outside it', async () => {
+		const e = { tool: 'Glob', pattern: '**/UserService.ts', path: PROJECT };
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
 	});
 
-	test('the Bash trigger matches case-insensitively on word boundaries', async () => {
-		expect((await nudgesFor({ tool: 'Bash', command: 'GREP -r x .' }, KEY)).additionalContext).toEqual([REMINDER_TEXT]);
-		expect((await nudgesFor({ tool: 'Bash', command: 'echo fargrepper' }, KEY)).additionalContext).toBeUndefined();
+	test('a Grep path outside the project adds nothing even when the working directory is inside it', async () => {
+		const e = { tool: 'Grep', pattern: 'AuthService', path: OUTSIDE };
+		expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
 	});
 
 	test('keeps a decision and the context the chain beneath produced', async () => {
-		const r = await nudgesFor({ tool: 'Grep', pattern: 'foo' }, KEY, { deny: 'no', additionalContext: ['earlier'] });
+		const r = await nudgesFor({ tool: 'Grep', pattern: 'AuthService' }, KEY, { deny: 'no', additionalContext: ['earlier'] });
 		expect(r).toEqual({ deny: 'no', additionalContext: ['earlier', REMINDER_TEXT] });
 	});
 });

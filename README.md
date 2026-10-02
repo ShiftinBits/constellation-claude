@@ -8,7 +8,7 @@ While Constellation's MCP server provides raw code intelligence capabilities, th
 |---------|---------|
 | **Slash Commands** | Quick access to common workflows |
 | **Contextual Skills** | Claude automatically loads relevant knowledge — including proactive impact analysis before risky changes |
-| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, in the search tools' descriptions, and before Grep/Glob/Bash search commands |
+| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, in the search tools' descriptions, and before symbol-like searches inside indexed projects |
 
 ## Features
 
@@ -49,11 +49,11 @@ Event hooks enable intelligent, transparent assistance. They run in-process insi
 |------|-----------------|----------|
 | **Session Awareness** | `classic.SessionStart` | Injects `code_intel` MCP tool awareness at session start, including after clear, resume, and compact |
 | **Subagent Awareness** | `classic.SubagentStart` | Injects `code_intel` awareness into spawned subagents (built-ins like Explore/Plan don't inherit project AGENTS.md) |
-| **Search Tool Nudge** | `classic.PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
-| **Bash Search Nudge** | `classic.PreToolUse` (`Bash`) | Inspects the command and adds the same reminder when it contains `grep`, `rg`, `glob`, `awk`, or `findstr` anywhere, including inside a pipeline |
+| **Search Tool Nudge** | `classic.PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` when a Grep pattern looks like a symbol (`AuthService`, `class UserService`, `getUser\(`), or a Glob has a PascalCase or camelCase file stem (`**/UserService.ts`), and the search is inside an indexed project. Quoted phrases, error text, `TODO`-style markers, regex with character classes or alternation, and extension globs such as `**/*.ts` get no reminder |
+| **Bash Search Nudge** | `classic.PreToolUse` (`Bash`) | Parses only the leading command, up to the first unquoted `\|`, `;`, `&&` or `\|\|`. When it is `grep`, `egrep`, `rg`, `ag`, `ack` or `git grep` and the pattern looks like a symbol, adds the same reminder inside an indexed project. A grep after a pipe, `awk`, and `findstr` no longer trigger a reminder |
 | **Tool description guidance** | `tool.describe` (`Grep\|Glob\|Bash`) | Appends a short rule to the description of the search tools: use `code_intel` for symbol definitions, references, dependents, call graphs and impact, and keep text search for literal text. Applied once per session, and again only when the working directory moves into or out of an indexed project. Native macOS and Linux builds have no Grep or Glob tool, so there it is the Bash description that carries the rule |
 
-All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set and starting with `ak:` (no key means a silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured). The tool description guidance also requires a `constellation.json` in the working directory or a parent, so it stays out of projects that are not indexed. Subagents such as Explore see the same rewritten descriptions. The reminders are added to what the call already returns, so a permission decision made by another hook is kept.
+All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set and starting with `ak:` (no key means a silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured). The tool description guidance and the search nudges also require a `constellation.json` in the searched directory (the call's `path` for Grep and Glob when set, else the working directory) or a parent, so they stay out of projects that are not indexed. Subagents such as Explore see the same rewritten descriptions. The reminders are added to what the call already returns, so a permission decision made by another hook is kept.
 
 ### Mods
 
