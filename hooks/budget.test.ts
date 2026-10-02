@@ -1,0 +1,252 @@
+import type { On, PluginOptions } from 'claude-code';
+import { describe, expect, mock, test } from 'claude-code/testing';
+import { registerBudget } from './budget';
+import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { registerSession } from './session';
+
+const KEY = 'ak:test-key';
+const PROJECT = '/work/app';
+const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
+
+type Answer = { additionalContext?: string[]; deny?: string };
+type Next = (e: object) => Promise<Answer>;
+type Handler = ($: object, e: object, next: Next) => Promise<Answer>;
+type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
+
+/** True when the event `e` satisfies a matcher: a pattern, a list of values, or a value per field. */
+function matches(matcher: Record<string, unknown>, e: object): boolean {
+	return Object.entries(matcher).every(([field, want]) => {
+		const got: unknown = Reflect.get(e, field);
+		if (want instanceof RegExp) return want.test(String(got));
+		if (Array.isArray(want)) return want.includes(got);
+		return want === got;
+	});
+}
+
+/** How many `$.fs.exists` calls the handlers made. */
+let existsCalls = 0;
+
+const $ = {
+	env: { get: async () => KEY },
+	session: { cwd: async () => PROJECT },
+	fs: {
+		exists: async (path: string) => {
+			existsCalls += 1;
+			return path === `${PROJECT}/constellation.json`;
+		},
+	},
+};
+
+/**
+ * The budget and nudge handlers as one hooks module registers them, raised
+ * directly: the test kit does not surface a PreToolUse handler's added context.
+ */
+function load(options: PluginOptions) {
+	const registered: Registered[] = [];
+	const capture = (event: string, ...rest: unknown[]) => {
+		const handler = rest[rest.length - 1] as Handler;
+		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
+		registered.push({ event, matcher, handler });
+	};
+	registerBudget(capture as unknown as On, options);
+	registerNudges(capture as unknown as On);
+	registerSession(capture as unknown as On);
+
+	/**
+	 * Raises `event` through the handlers that match it, in registration order;
+	 * what sits beneath them is `bottom`.
+	 */
+	const raise = (event: string, e: object, bottom: Next = async () => ({})): Promise<Answer> => {
+		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
+		const step =
+			(i: number): Next =>
+			(input) => {
+				const hook = chain[i];
+				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+			};
+		return step(0)(e);
+	};
+
+	let calls = 0;
+	/** A PreToolUse envelope for a Grep of `pattern`: it carries no `agentId`. */
+	const grep = (pattern: string, tool_use_id: string) => ({ tool: 'Grep', pattern, tool_use_id });
+
+	return {
+		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
+		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
+		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
+		/**
+		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
+		 * PreToolUse event runs beneath the call's tool.call, which alone carries `agentId`.
+		 */
+		search: async (agentId?: string, pattern = 'AuthService') => {
+			const id = `call-${(calls += 1)}`;
+			const answer = await raise('tool.call', { ...grep(pattern, id), agentId }, (e) =>
+				raise('classic.PreToolUse', grep(pattern, Reflect.get(e, 'tool_use_id'))),
+			);
+			return answer.additionalContext;
+		},
+		/** A PreToolUse event with no tool.call above it. */
+		bareSearch: async (tool_use_id: string) =>
+			(await raise('classic.PreToolUse', grep('AuthService', tool_use_id))).additionalContext,
+	};
+}
+
+const REMINDER = [REMINDER_TEXT];
+
+describe('nudge budget', () => {
+	test('gives exactly nudgeLimit reminders and then none', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.turn('t1');
+		expect([await m.search(), await m.search(), await m.search(), await m.search()]).toEqual([
+			REMINDER,
+			REMINDER,
+			undefined,
+			undefined,
+		]);
+	});
+
+	test('defaults to three reminders', async () => {
+		const m = load({});
+		await m.turn('t1');
+		expect([await m.search(), await m.search(), await m.search(), await m.search()]).toEqual([
+			REMINDER,
+			REMINDER,
+			REMINDER,
+			undefined,
+		]);
+	});
+
+	test('a limit of zero gives no reminders', async () => {
+		const m = load({ nudgeLimit: 0 });
+		await m.turn('t1');
+		expect(await m.search()).toBeUndefined();
+	});
+
+	test('a search that does not qualify spends nothing', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search(undefined, 'connection refused')).toBeUndefined();
+		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	test('a code_intel call earlier in the turn silences the searches after it and spends nothing', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.turn('t1');
+		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+		expect(await m.search()).toBeUndefined();
+		await m.turn('t2');
+		expect([await m.search(), await m.search(), await m.search()]).toEqual([REMINDER, REMINDER, undefined]);
+	});
+
+	test('a search before the code_intel call in the same turn still nudges', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.turn('t1');
+		expect(await m.search()).toEqual(REMINDER);
+		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+	});
+
+	test('a code_intel call outside any turn silences nothing', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.codeIntel();
+		await m.turn('t1');
+		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	for (const source of ['clear', 'resume', 'fork']) {
+		test(`SessionStart from ${source} resets the budget`, async () => {
+			const m = load({ nudgeLimit: 1 });
+			await m.turn('t1');
+			expect(await m.search()).toEqual(REMINDER);
+			expect(await m.search()).toBeUndefined();
+			await m.sessionStart(source);
+			expect(await m.search()).toEqual(REMINDER);
+		});
+	}
+
+	for (const source of ['startup', 'compact']) {
+		test(`SessionStart from ${source} keeps the budget`, async () => {
+			const m = load({ nudgeLimit: 1 });
+			await m.turn('t1');
+			expect(await m.search()).toEqual(REMINDER);
+			await m.sessionStart(source);
+			expect(await m.search()).toBeUndefined();
+		});
+	}
+
+	test('a subagent has its own budget', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search()).toEqual(REMINDER);
+		expect(await m.search()).toBeUndefined();
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+		expect(await m.search('agent-1')).toBeUndefined();
+		expect(await m.search('agent-2')).toEqual(REMINDER);
+	});
+
+	test('a subagent spending its budget leaves the main conversation its own', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	test('a subagent search does not leave its agent behind for a later call', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+		expect(await m.bareSearch('call-1')).toEqual(REMINDER);
+	});
+
+	test('a subagent that called code_intel gets no reminder for the rest of its run', async () => {
+		const m = load({ nudgeLimit: 3 });
+		await m.turn('t1');
+		await m.codeIntel('agent-1');
+		expect(await m.search('agent-1')).toBeUndefined();
+		expect(await m.search('agent-2')).toEqual(REMINDER);
+		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	test('a subagent continued after its run ended gets a fresh budget and turn', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		await m.codeIntel('agent-1');
+		expect(await m.search('agent-1')).toBeUndefined();
+		await m.runEnds('agent-1');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+	});
+
+	test('a used-up budget skips the walk for constellation.json', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search()).toEqual(REMINDER);
+		existsCalls = 0;
+		expect(await m.search()).toBeUndefined();
+		expect(existsCalls).toBe(0);
+	});
+
+	test('a SessionStart reset clears subagent budgets too', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		await m.search('agent-1');
+		await m.sessionStart('clear');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+	});
+});
+
+describe('budget hooks as a loaded plugin', () => {
+	test('turn.start, a code_intel call and SessionStart pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		on('turn.start', (_$, e) => ({ turnId: e.turnId }));
+		on('tool.call', () => ({ result: 'beneath' }));
+		on('classic.SessionStart', () => ({ additionalContext: ['beneath'] }));
+		expect(await $.turn.start({ text: 'hi', turnId: 't1' })).toEqual({ turnId: 't1' });
+		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
+		expect(call).toEqual({ result: 'beneath' });
+		const start = await $.classic.SessionStart({ source: 'clear' });
+		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
+	});
+});
