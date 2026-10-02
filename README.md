@@ -8,7 +8,7 @@ While Constellation's MCP server provides raw code intelligence capabilities, th
 |---------|---------|
 | **Slash Commands** | Quick access to common workflows |
 | **Contextual Skills** | Claude automatically loads relevant knowledge — including proactive impact analysis before risky changes |
-| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, and before Grep/Glob/Bash search commands |
+| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, in the search tools' descriptions, and before Grep/Glob/Bash search commands |
 
 ## Features
 
@@ -51,8 +51,9 @@ Event hooks enable intelligent, transparent assistance. They run in-process insi
 | **Subagent Awareness** | `classic.SubagentStart` | Injects `code_intel` awareness into spawned subagents (built-ins like Explore/Plan don't inherit project AGENTS.md) |
 | **Search Tool Nudge** | `classic.PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
 | **Bash Search Nudge** | `classic.PreToolUse` (`Bash`) | Inspects the command and adds the same reminder when it contains `grep`, `rg`, `glob`, `awk`, or `findstr` anywhere, including inside a pipeline |
+| **Tool description guidance** | `tool.describe` (`Grep\|Glob\|Bash`) | Appends a short rule to the description of the search tools: use `code_intel` for symbol definitions, references, dependents, call graphs and impact, and keep text search for literal text. Applied once per session, and again only when the working directory moves into or out of an indexed project. Native macOS and Linux builds have no Grep or Glob tool, so there it is the Bash description that carries the rule |
 
-All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set and starting with `ak:` (no key means a silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured). The reminders are added to what the call already returns, so a permission decision made by another hook is kept.
+All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set and starting with `ak:` (no key means a silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured). The tool description guidance also requires a `constellation.json` in the working directory or a parent, so it stays out of projects that are not indexed. Subagents such as Explore see the same rewritten descriptions. The reminders are added to what the call already returns, so a permission decision made by another hook is kept.
 
 ### Mods
 
@@ -69,7 +70,7 @@ What the plugin runs, reads, and sends:
 |-----------|--------------|-------|
 | **MCP server** | Started with `npx -y @constellationdev/mcp@<pinned version>`, which downloads the package from the npm registry. Reads `constellation.json` and the current git branch from your project, and reads lines from local source files to attach code snippets to query results | Queries (symbol names, file paths, project ID, branch) to the Constellation API at `https://api.constellationdev.io`, or the self-hosted URL you configure via `CONSTELLATION_API_URL` or `constellation.json`, authenticated with `CONSTELLATION_ACCESS_KEY`. **Source code is never sent to the Constellation API.** Code snippets are returned only to Claude in the local session |
 | **MCP server usage metrics** | Runs after each `code_intel` call. On by default; set `CONSTELLATION_USAGE_METRICS=false` to turn it off | A usage event (project ID, branch, which API methods ran, estimated token counts, durations) to the same Constellation API at `/intel/v1/usage`, or to `USAGE_ENDPOINT_URL` if you set it, authenticated with `CONSTELLATION_ACCESS_KEY`. Contains no source code, snippets, or symbol contents |
-| **Hooks** (`hooks/register.ts`) | Run in-process in Claude Code. Calls: `$.env.get` (reads `CONSTELLATION_ACCESS_KEY` and checks it starts with `ak:`). For a Bash call they inspect the command Claude is about to run | Nothing. They only add a `code_intel` reminder to Claude's context |
+| **Hooks** (`hooks/register.ts`) | Run in-process in Claude Code. Calls: `$.env.get` (reads `CONSTELLATION_ACCESS_KEY` and checks it starts with `ak:`), `$.session.cwd` (reads the working directory), `$.fs.exists` (checks for `constellation.json` in the working directory and its parents), `$.ui.invalidate` (asks Claude Code to rebuild the search tool descriptions when the working directory moves in or out of an indexed project). For a Bash call they inspect the command Claude is about to run | Nothing. They only add `code_intel` reminders and guidance to Claude's context |
 | **Commands & skills** | Call the `code_intel` MCP tool | Nothing beyond the MCP server above |
 
 `CONSTELLATION_ACCESS_KEY` is the same credential used by the `constellation` CLI and other Constellation integrations. Set it with `constellation auth`, which signs you in through the browser.
