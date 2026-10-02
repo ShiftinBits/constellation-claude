@@ -25,12 +25,27 @@ const budgets = new Map<string, AgentBudget>();
  */
 const currentTurn = new Map<string, string>();
 
+/**
+ * The subagent a search call runs in, by `tool_use_id`, for the span of the call.
+ * The envelope `classic.PreToolUse` receives carries no `agentId`, but it runs
+ * inside the same call's `tool.call`, which does.
+ */
+const searchAgents = new Map<string, string>();
+
 let nudgeLimit = DEFAULT_NUDGE_LIMIT;
+
+/** The string field `name` of `e`, or undefined. */
+function fieldOf(e: object, name: string): string | undefined {
+	const value: unknown = Reflect.get(e, name);
+	return typeof value === 'string' ? value : undefined;
+}
 
 /** The agent a tool call belongs to: `agentId` in a subagent, else the main conversation. */
 function agentKey(e: object): string {
-	const id: unknown = Reflect.get(e, 'agentId');
-	return typeof id === 'string' ? id : MAIN;
+	const id = fieldOf(e, 'agentId');
+	if (id !== undefined) return id;
+	const callId = fieldOf(e, 'tool_use_id');
+	return (callId !== undefined ? searchAgents.get(callId) : undefined) ?? MAIN;
 }
 
 function budgetOf(key: string): AgentBudget {
@@ -62,6 +77,7 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	nudgeLimit = typeof limit === 'number' ? limit : DEFAULT_NUDGE_LIMIT;
 	budgets.clear();
 	currentTurn.clear();
+	searchAgents.clear();
 
 	on('turn.start', async (_$, e, next) => {
 		currentTurn.set(MAIN, e.turnId);
@@ -73,6 +89,16 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		const turn = currentTurn.get(key);
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
 		return next(e);
+	});
+
+	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async (_$, e, next) => {
+		if (e.agentId === undefined) return next(e);
+		searchAgents.set(e.tool_use_id, e.agentId);
+		try {
+			return await next(e);
+		} finally {
+			searchAgents.delete(e.tool_use_id);
+		}
 	});
 
 	on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async (_$, e, next) => {

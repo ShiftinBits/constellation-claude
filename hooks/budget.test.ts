@@ -1,7 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
-import { describe, expect, test } from 'claude-code/testing';
+import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
-import { REMINDER_TEXT, registerNudges } from './nudge';
+import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -42,23 +42,43 @@ function load(options: PluginOptions) {
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 
-	/** Raises `event` through the handlers that match it, in registration order. */
-	const raise = (event: string, e: object): Promise<Answer> => {
+	/**
+	 * Raises `event` through the handlers that match it, in registration order;
+	 * what sits beneath them is `bottom`.
+	 */
+	const raise = (event: string, e: object, bottom: Next = async () => ({})): Promise<Answer> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
 		const step =
 			(i: number): Next =>
-			async (input) =>
-				chain[i]?.handler($, input, step(i + 1)) ?? {};
+			(input) => {
+				const hook = chain[i];
+				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+			};
 		return step(0)(e);
 	};
+
+	let calls = 0;
+	/** A PreToolUse envelope for a Grep of `pattern`: it carries no `agentId`. */
+	const grep = (pattern: string, tool_use_id: string) => ({ tool: 'Grep', pattern, tool_use_id });
 
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
-		/** What the PreToolUse handler adds for a Grep of a symbol. */
-		search: async (agentId?: string, pattern = 'AuthService') =>
-			(await raise('classic.PreToolUse', { tool: 'Grep', pattern, agentId })).additionalContext,
+		/**
+		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
+		 * PreToolUse event runs beneath the call's tool.call, which alone carries `agentId`.
+		 */
+		search: async (agentId?: string, pattern = 'AuthService') => {
+			const id = `call-${(calls += 1)}`;
+			const answer = await raise('tool.call', { ...grep(pattern, id), agentId }, (e) =>
+				raise('classic.PreToolUse', grep(pattern, Reflect.get(e, 'tool_use_id'))),
+			);
+			return answer.additionalContext;
+		},
+		/** A PreToolUse event with no tool.call above it. */
+		bareSearch: async (tool_use_id: string) =>
+			(await raise('classic.PreToolUse', grep('AuthService', tool_use_id))).additionalContext,
 	};
 }
 
@@ -163,6 +183,13 @@ describe('nudge budget', () => {
 		expect(await m.search()).toEqual(REMINDER);
 	});
 
+	test('a subagent search does not leave its agent behind for a later call', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
+		expect(await m.bareSearch('call-1')).toEqual(REMINDER);
+	});
+
 	test('a SessionStart reset clears subagent budgets too', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
@@ -174,6 +201,7 @@ describe('nudge budget', () => {
 
 describe('budget hooks as a loaded plugin', () => {
 	test('turn.start, a code_intel call and SessionStart pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
 		on('turn.start', (_$, e) => ({ turnId: e.turnId }));
 		on('tool.call', () => ({ result: 'beneath' }));
 		on('classic.SessionStart', () => ({ additionalContext: ['beneath'] }));
@@ -181,6 +209,6 @@ describe('budget hooks as a loaded plugin', () => {
 		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 		expect(call).toEqual({ result: 'beneath' });
 		const start = await $.classic.SessionStart({ source: 'clear' });
-		expect(start.additionalContext).toEqual(['beneath']);
+		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
 	});
 });
