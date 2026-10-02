@@ -43,22 +43,22 @@ Claude: "Before renaming, let me analyze the potential impact..."
 
 ### Hooks
 
-Event hooks enable intelligent, transparent assistance:
+Event hooks enable intelligent, transparent assistance. They run in-process inside Claude Code, declared by the plugin's hooks module (`hooks/register.ts`):
 
 | Hook | Event (matcher) | Behavior |
 |------|-----------------|----------|
-| **Session Awareness** | `SessionStart` | Injects `code_intel` MCP tool awareness at session start |
-| **Subagent Awareness** | `SubagentStart` | Injects `code_intel` awareness into spawned subagents (built-ins like Explore/Plan don't inherit project AGENTS.md) |
-| **Search Tool Nudge** | `PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
-| **Bash Search Nudge** | `PreToolUse` (`Bash`) | Inspects the command and emits the same reminder when it starts with `grep`/`rg`/`glob`/`awk`/`findstr` |
+| **Session Awareness** | `classic.SessionStart` | Injects `code_intel` MCP tool awareness at session start, including after clear, resume, and compact |
+| **Subagent Awareness** | `classic.SubagentStart` | Injects `code_intel` awareness into spawned subagents (built-ins like Explore/Plan don't inherit project AGENTS.md) |
+| **Search Tool Nudge** | `classic.PreToolUse` (`Grep\|Glob`) | Reminds Claude to prefer `code_intel` over Grep/Glob for structural queries |
+| **Bash Search Nudge** | `classic.PreToolUse` (`Bash`) | Inspects the command and adds the same reminder when it contains `grep`, `rg`, `glob`, `awk`, or `findstr` anywhere, including inside a pipeline |
 
-All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set (no key → silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured).
+All hooks are gated on `CONSTELLATION_ACCESS_KEY` being set and starting with `ak:` (no key means a silent no-op, so the plugin doesn't nag in environments where Constellation isn't configured). The reminders are added to what the call already returns, so a permission decision made by another hook is kept.
 
 ### Mods
 
-Alongside the settings hooks above, the plugin ships a hooks module (`hooks/register.ts`) that Claude Code loads and runs in-process, in the same session, instead of starting a separate `node` process per event. The module makes no network requests and spawns no processes. It uses only the Claude Code calls listed under [Data Handling](#data-handling), and it queries the same `code_intel` MCP server the commands use.
+The hooks above come from a hooks module (`hooks/register.ts`) that Claude Code loads and runs in-process, in the same session, instead of starting a separate `node` process per event. The module makes no network requests and spawns no processes. It uses only the Claude Code calls listed under [Data Handling](#data-handling).
 
-- **Version floor:** Claude Code 2.1.287. Older builds are expected to ignore the module and keep running the settings hooks.
+- **Version floor:** Claude Code 2.1.287. Older builds are expected to ignore the module, so the hooks do nothing there.
 - **Turn it off:** disable the plugin from `/plugin`, start Claude Code with `--safe-mode`, or set `disableAllHooks` in your settings.
 
 ## Data Handling
@@ -69,8 +69,7 @@ What the plugin runs, reads, and sends:
 |-----------|--------------|-------|
 | **MCP server** | Started with `npx -y @constellationdev/mcp@<pinned version>`, which downloads the package from the npm registry. Reads `constellation.json` and the current git branch from your project, and reads lines from local source files to attach code snippets to query results | Queries (symbol names, file paths, project ID, branch) to the Constellation API at `https://api.constellationdev.io`, or the self-hosted URL you configure via `CONSTELLATION_API_URL` or `constellation.json`, authenticated with `CONSTELLATION_ACCESS_KEY`. **Source code is never sent to the Constellation API.** Code snippets are returned only to Claude in the local session |
 | **MCP server usage metrics** | Runs after each `code_intel` call. On by default; set `CONSTELLATION_USAGE_METRICS=false` to turn it off | A usage event (project ID, branch, which API methods ran, estimated token counts, durations) to the same Constellation API at `/intel/v1/usage`, or to `USAGE_ENDPOINT_URL` if you set it, authenticated with `CONSTELLATION_ACCESS_KEY`. Contains no source code, snippets, or symbol contents |
-| **Hooks module** (`hooks/register.ts`) | Runs in-process in Claude Code. Calls: `$.env.get` (reads `CONSTELLATION_ACCESS_KEY`), `$.session.cwd`, `$.session.surfaces`, `$.fs.exists` (looks for `constellation.json` in parent directories), `$.mcp.connect` and `$.mcp.call` (queries the `code_intel` server above) | Nothing beyond what `code_intel` already sends |
-| **Hooks** | Check whether `CONSTELLATION_ACCESS_KEY` is set and starts with `ak:`; the Bash hook inspects the command Claude is about to run | Nothing. They only add a `code_intel` reminder to Claude's context |
+| **Hooks** (`hooks/register.ts`) | Run in-process in Claude Code. Calls: `$.env.get` (reads `CONSTELLATION_ACCESS_KEY` and checks it starts with `ak:`). For a Bash call they inspect the command Claude is about to run | Nothing. They only add a `code_intel` reminder to Claude's context |
 | **Commands & skills** | Call the `code_intel` MCP tool | Nothing beyond the MCP server above |
 
 `CONSTELLATION_ACCESS_KEY` is the same credential used by the `constellation` CLI and other Constellation integrations. Set it with `constellation auth`, which signs you in through the browser.

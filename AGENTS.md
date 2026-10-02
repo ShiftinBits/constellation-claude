@@ -29,13 +29,13 @@ skills/
 └── impact-analysis/
     └── SKILL.md             Pre-change impact assessment guidance (keyword-triggered)
 
-hooks/                       Settings hooks plus the in-process hooks module
-├── hooks.json               Hook registrations (settings hooks) and the "modules" entry
+hooks/                       In-process hooks module (no settings hooks, no node scripts)
+├── hooks.json               The "modules" entry that loads register.ts
 ├── register.ts              Hooks module entry: register(on, options), one call per handler file
+├── nudge.ts                 code_intel awareness: classic.SessionStart, classic.SubagentStart, classic.PreToolUse
+├── nudge.test.ts            Tests for nudge.ts (claude plugin test)
 ├── lib.ts                   Shared helpers: isConfigured, projectRoot, codeIntel, canDraw
-├── lib.test.ts              Tests for lib.ts (claude plugin test)
-├── inject.js                Static context injector (SessionStart, SubagentStart, PreToolUse)
-└── bash.js                  Bash-command sniffer that nudges code_intel for grep/rg/glob/awk/findstr
+└── lib.test.ts              Tests for lib.ts (claude plugin test)
 
 output-styles/
 └── code-intelligence.md     "Code Intelligence" output style (opt-in via /config)
@@ -45,7 +45,7 @@ A session that loads the mod writes `.claude-plugin/types/` (generated `.d.ts` f
 
 ## Key Concepts
 
-**Declarative plugin with a hooks module.** No package.json and no build step. Commands, skills, and the output style are Markdown files with YAML frontmatter. The hooks module (`hooks/register.ts` plus the helpers beside it) runs in-process inside Claude Code and is declared by the `"modules"` entry in `hooks/hooks.json`. It is TypeScript ES modules with static `import` declarations only, no dynamic `import()`, types from `claude-code` (`import type { Register } from 'claude-code'`), tab indentation. Each handler lives in its own file under `hooks/` and exports a function taking `on`; `register.ts` imports and calls it, one line per handler. Tests sit beside the code as `hooks/*.test.ts` and import from `claude-code/testing`. Commands and skills are still validated by running them in Claude Code.
+**Declarative plugin with a hooks module.** No package.json and no build step. Commands, skills, and the output style are Markdown files with YAML frontmatter. The hooks module (`hooks/register.ts` plus the handler files and helpers beside it) runs in-process inside Claude Code and is declared by the `"modules"` entry in `hooks/hooks.json`. There are no settings hooks and no node scripts. The module is TypeScript ES modules with static `import` declarations only, no dynamic `import()`, types from `claude-code` (`import type { Register } from 'claude-code'`), tab indentation. Each handler lives in its own file under `hooks/` and exports a function taking `on`; `register.ts` imports and calls it, one line per handler. Tests sit beside the code as `hooks/*.test.ts` and import from `claude-code/testing`. Commands and skills are still validated by running them in Claude Code.
 
 **Single MCP tool** — All API calls flow through `mcp__plugin_constellation_constellation__code_intel`. Commands write JavaScript code blocks using an injected `api` object. The MCP server instructions (injected at system level) document all 11 API methods — do NOT duplicate that reference here.
 
@@ -83,12 +83,13 @@ YAML frontmatter fields: `name`, `description` (trigger keywords)
 
 ### Hooks
 
-JSON structure in `hooks/hooks.json`. Three events, four matchers, all `type: "command"` shelling out to Node scripts in `hooks/`:
+All hooks live in the hooks module and run in-process. `hooks/nudge.ts` exports `registerNudges(on)`, which `register.ts` calls. Every handler is `($, e, next)`: it awaits `next(e)` first, then, only when `CONSTELLATION_ACCESS_KEY` starts with `ak:`, extends what came back.
 
-- **SessionStart** (`matcher: ".*"`): Runs `inject.js SessionStart`, which emits `hookSpecificOutput.additionalContext` establishing `code_intel` as the primary tool for code understanding. Gated on `CONSTELLATION_ACCESS_KEY` starting with `ak:`.
-- **SubagentStart** (`matcher: ".*"`): Runs `inject.js SubagentStart` to inject the same code_intel awareness into spawned subagents (built-ins don't inherit AGENTS.md).
-- **PreToolUse** `Grep|Glob` matcher: Runs `inject.js PreToolUse` to remind Claude to prefer `code_intel` for structural queries before falling back to text search.
-- **PreToolUse** `Bash` matcher: Runs `bash.js`, which inspects `tool_input.command` and emits the same reminder when the command starts with `grep`/`rg`/`glob`/`awk`/`findstr` (and isn't part of a pipeline).
+- **`classic.SessionStart`**: adds `SESSION_TEXT`, establishing `code_intel` as the primary tool for code understanding. Fires for startup, clear, resume, and compact.
+- **`classic.SubagentStart`**: adds the same `SESSION_TEXT` to spawned subagents (built-ins don't inherit AGENTS.md).
+- **`classic.PreToolUse`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`): for Grep and Glob, adds `REMINDER_TEXT`. For Bash, adds it only when the command contains `grep`, `rg`, `glob`, `awk`, or `findstr` as a whole word, case-insensitively, anywhere in the command (pipelines count).
+
+Each handler returns `{ ...r, additionalContext: [...(r.additionalContext ?? []), TEXT] }`, where `r` is what `next(e)` returned. `additionalContext` is a `string[]`, one entry per hook, and spreading `r` keeps any `allow`, `ask`, or `deny` decision beneath. The text constants (`SESSION_TEXT`, `REMINDER_TEXT`) are exported from `hooks/nudge.ts`; keep them constant (no counts or paths) so the prompt cache stays valid.
 
 ## Development
 
@@ -108,14 +109,17 @@ JSON structure in `hooks/hooks.json`. Three events, four matchers, all `type: "c
 
 ### Modifying Hooks
 
-Edit `hooks/hooks.json`. The same file declares the in-process hooks module (`"modules": ["./register.ts"]`; see Key Concepts and Mods compatibility). Settings hook entries use `type: "command"` and shell out to Node scripts in `hooks/`. To inject context, scripts write `{"hookSpecificOutput":{"hookEventName":"<Event>","additionalContext":"..."}}` to stdout (per the [Claude Code hooks spec](https://code.claude.com/docs/en/hooks)). The shared `inject.js` handles `SessionStart`, `SubagentStart`, and `PreToolUse`; `bash.js` handles the `Bash` matcher and reads `tool_input.command` from stdin.
+Add a handler file under `hooks/` that exports a function taking `on` (for example `registerNudges(on: On)`), then import and call it from `hooks/register.ts`, one line per file. Read the key with the literal `$.env.get('CONSTELLATION_ACCESS_KEY')` (validate lists env names from literals) and pass the value to `isConfigured`. Compare tool names a build may not register (Grep, Glob) through `String(e.tool)`. Add a `hooks/<name>.test.ts` beside it using `claude-code/testing`:
+
+- `$.classic.SessionStart(...)` and `$.classic.SubagentStart(...)` raise those events through the loaded plugin; answer the event beneath with `on('classic.SessionStart', () => ({}))` and set the key with `mock.env(on, { CONSTELLATION_ACCESS_KEY: 'ak:...' })`.
+- `$.tool.call` does not surface a `classic.PreToolUse` handler's `additionalContext`, so the PreToolUse tests capture the handler through a stand-in `on` and call it with a constructed envelope.
 
 ### Mods compatibility
 
 Decisions that change behavior, verified on Claude Code 2.1.287 (macOS):
 
 - **code_intel server.** `.mcp.json` keys the server `constellation`. The module calls `$.mcp.connect('constellation')` once and caches the name it returns; that name is what `$.mcp.call` takes. Loaded as a plugin it is `plugin:constellation:constellation`. When the same server already runs under another name (for example, working inside this repo with `--plugin-dir`, where `.mcp.json` also loads as a project server) connect returns that name instead, so never hard-code it. A refusal does not throw: the result says why (`reason`, `message`) and `codeIntel` reports it as `MCP_UNAVAILABLE`.
-- **Version floor: Claude Code 2.1.287.** The hooks module needs a build that has function hooks. `claude plugin validate --strict` describes unrecognized manifest fields as issues "the runtime tolerates", so older builds should ignore `"modules"` and keep running the settings hooks; this was not tested on an older build.
+- **Version floor: Claude Code 2.1.287.** The hooks module needs a build that has function hooks. `claude plugin validate --strict` describes unrecognized manifest fields as issues "the runtime tolerates", so older builds should ignore `"modules"`. The settings hooks are retired, so an older build gets no nudges at all; this was not tested on an older build.
 - **Command naming.** Mod commands (`$.command.register`) allow only letters, digits, `_` and `-` (up to 64), so a mod command cannot be spelled `constellation:status`. The Markdown commands list as `constellation:<name>`. A probe registered two commands and `$.command.list()` did not show them in the same turn, so whether a mod command gets a plugin prefix is not established. The register call returns the bare name, and a built-in's name is refused. No mod command is registered; this is documentation only.
 - **Grep and Glob.** This native macOS build registers neither: `ToolSearch select:Grep,Glob` finds nothing, `tool.call` hooks saw only ToolSearch, Bash, and MCP tools while the model searched, and the generated `claude-code-tools/index.d.ts` has no entry for them. Search runs through Bash. Compare these names with `String(e.tool)` and write matchers (for example `/^(Grep|Glob|Bash)$/`) that type-check whether or not a build lists them.
 - **`$.fs.ancestors` is `.md` only.** It rejects any other name (`takes names, each a .md file name`), so it cannot find `constellation.json`. `projectRoot` walks up with `$.fs.exists` instead.
