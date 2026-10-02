@@ -1,5 +1,6 @@
 {
 	"description": "Constellation code intelligence hooks inject code_intel MCP awareness into sessions, subagents, and tool selection",
+	"modules": ["./register.ts"],
 	"hooks": {
 		"SessionStart": [
 			{
