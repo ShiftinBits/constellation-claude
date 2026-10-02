@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { canDraw, codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
+import { codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -204,21 +204,5 @@ describe('projectRoot', () => {
 	test('returns null when no ancestor has one', async () => {
 		const exists = existsIn(['/other/constellation.json']);
 		expect(await projectRoot('/work', exists, '/repo/src/file.ts')).toBeNull();
-	});
-});
-
-describe('canDraw', () => {
-	const surfaces = (found: readonly string[]) => async () => found;
-
-	test('is true when the event names a surface', async () => {
-		expect(await canDraw({ surface: 'terminal' }, surfaces([]))).toBe(true);
-	});
-
-	test('is true when the session has a surface', async () => {
-		expect(await canDraw({}, surfaces(['terminal']))).toBe(true);
-	});
-
-	test('is false with neither', async () => {
-		expect(await canDraw({}, surfaces([]))).toBe(false);
 	});
 });
