@@ -8,8 +8,9 @@
 .claude/plans
 .claude/worktrees
 
-# Claude Code mod engine output (generated type declarations and tsconfig)
+# Claude Code mod engine output (generated type declarations and tsconfigs)
 .claude-plugin/types/
+/tsconfig.json
 
 # Superpowers AI Plugin
 .superpowers/

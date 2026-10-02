@@ -73,9 +73,9 @@ describe('tool description guidance', () => {
 		expect(r.description).toBe(BASE);
 	});
 
-	test('the Bash description changes only when the gate result flips', async ($, on) => {
+	test('the guidance is added once the gate opens and then kept, so the prompt cache stays valid', async ($, on) => {
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
-		let cwd = '/repo/app';
+		let cwd = '/elsewhere';
 		on('session.cwd', () => ({ value: cwd }));
 		on('fs.exists', (_, e) => ({ value: e.path === '/repo/constellation.json' }));
 		on('tool.describe', (_, e) => ({ description: e.description }));
@@ -86,18 +86,19 @@ describe('tool description guidance', () => {
 			return { value: undefined };
 		});
 
-		await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER });
-		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/repo/lib' });
-		expect(invalidated).toEqual([]);
-
-		await $.classic.CwdChanged({ old_cwd: '/repo/lib', new_cwd: '/elsewhere' });
-		expect(invalidated).toEqual(['tool.describe']);
-
+		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE);
 		await $.classic.CwdChanged({ old_cwd: '/elsewhere', new_cwd: '/tmp' });
-		expect(invalidated).toEqual(['tool.describe']);
+		expect(invalidated).toEqual([]);
 
 		cwd = '/repo/app';
 		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
-		expect(invalidated).toEqual(['tool.describe', 'tool.describe']);
+		expect(invalidated).toEqual(['tool.describe']);
+		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
+
+		cwd = '/elsewhere';
+		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/elsewhere' });
+		await $.classic.CwdChanged({ old_cwd: '/elsewhere', new_cwd: '/repo/app' });
+		expect(invalidated).toEqual(['tool.describe']);
+		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
 	});
 });

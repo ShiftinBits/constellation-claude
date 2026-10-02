@@ -1,4 +1,5 @@
 import type { On, PluginOptions } from 'claude-code';
+import { stringArg } from './lib';
 
 /** How many nudges one agent gets when the option is unset. */
 const DEFAULT_NUDGE_LIMIT = 3;
@@ -20,10 +21,11 @@ type AgentBudget = {
 const budgets = new Map<string, AgentBudget>();
 
 /**
- * The turn each agent is in. `turn.start` carries no `agentId`, so only the main
- * conversation has an entry; a subagent has no turn to scope code_intel use to.
+ * The main conversation's current turn, from `turn.start`. A subagent's whole
+ * run is one turn (its loop's `turn.complete` closes the run), so its turn is
+ * its `agentId`.
  */
-const currentTurn = new Map<string, string>();
+let mainTurn: string | undefined;
 
 /**
  * The subagent a search call runs in, by `tool_use_id`, for the span of the call.
@@ -34,17 +36,11 @@ const searchAgents = new Map<string, string>();
 
 let nudgeLimit = DEFAULT_NUDGE_LIMIT;
 
-/** The string field `name` of `e`, or undefined. */
-function fieldOf(e: object, name: string): string | undefined {
-	const value: unknown = Reflect.get(e, name);
-	return typeof value === 'string' ? value : undefined;
-}
-
 /** The agent a tool call belongs to: `agentId` in a subagent, else the main conversation. */
-function agentKey(e: object): string {
-	const id = fieldOf(e, 'agentId');
+export function agentKey(e: object): string {
+	const id = stringArg(e, 'agentId');
 	if (id !== undefined) return id;
-	const callId = fieldOf(e, 'tool_use_id');
+	const callId = stringArg(e, 'tool_use_id');
 	return (callId !== undefined ? searchAgents.get(callId) : undefined) ?? MAIN;
 }
 
@@ -57,11 +53,21 @@ function budgetOf(key: string): AgentBudget {
 	return budget;
 }
 
+/** The turn the agent `key` is in, or undefined before the main conversation's first turn. */
+function turnOf(key: string): string | undefined {
+	return key === MAIN ? mainTurn : key;
+}
+
 /** True when the agent that made the tool call `e` already called code_intel in its current turn. */
 export function usedCodeIntelThisTurn(e: object): boolean {
 	const key = agentKey(e);
-	const turn = currentTurn.get(key);
+	const turn = turnOf(key);
 	return turn !== undefined && budgets.get(key)?.codeIntelTurn === turn;
+}
+
+/** True when the agent that made `e` has a nudge left. Spends nothing. */
+export function hasNudgeLeft(e: object): boolean {
+	return (budgets.get(agentKey(e))?.nudges ?? 0) < nudgeLimit;
 }
 
 /** Spends one nudge from the budget of the agent that made `e`; false, spending nothing, once it is used up. */
@@ -76,17 +82,17 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	const limit = options.nudgeLimit;
 	nudgeLimit = typeof limit === 'number' ? limit : DEFAULT_NUDGE_LIMIT;
 	budgets.clear();
-	currentTurn.clear();
+	mainTurn = undefined;
 	searchAgents.clear();
 
 	on('turn.start', async (_$, e, next) => {
-		currentTurn.set(MAIN, e.turnId);
+		mainTurn = e.turnId;
 		return next(e);
 	});
 
 	on('tool.call', { tool: /code_intel$/ }, async (_$, e, next) => {
 		const key = agentKey(e);
-		const turn = currentTurn.get(key);
+		const turn = turnOf(key);
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
 		return next(e);
 	});

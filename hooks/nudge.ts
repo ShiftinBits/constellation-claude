@@ -1,6 +1,6 @@
 import type { On } from 'claude-code';
-import { spendNudge, usedCodeIntelThisTurn } from './budget';
-import { bashSearchPattern, globHasSymbolStem, isSymbolLike } from './classify';
+import { hasNudgeLeft, spendNudge, usedCodeIntelThisTurn } from './budget';
+import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
 
 /** Added to the model's context when a session or a subagent starts. */
@@ -16,26 +16,6 @@ type WithContext = { additionalContext?: string[] };
 /** `result` with `text` appended to its context, whatever decision it already carries. */
 function withContext<R extends WithContext>(result: R, text: string): R {
 	return { ...result, additionalContext: [...(result.additionalContext ?? []), text] };
-}
-
-/** The string argument `name` of a tool call, or undefined. */
-function argOf(e: object, name: string): string | undefined {
-	const value: unknown = Reflect.get(e, name);
-	return typeof value === 'string' ? value : undefined;
-}
-
-/** True when the tool call searches for something that looks like a symbol. */
-function isSymbolSearch(tool: string, e: object): boolean {
-	switch (tool) {
-		case 'Grep':
-			return isSymbolLike(argOf(e, 'pattern') ?? '');
-		case 'Glob':
-			return globHasSymbolStem(argOf(e, 'pattern') ?? '');
-		case 'Bash':
-			return isSymbolLike(bashSearchPattern(argOf(e, 'command') ?? '') ?? '');
-		default:
-			return false;
-	}
 }
 
 export function registerNudges(on: On): void {
@@ -54,11 +34,10 @@ export function registerNudges(on: On): void {
 	on('classic.PreToolUse', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
 		const r = await next(e);
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
-		const tool = String(e.tool);
-		if (!isSymbolSearch(tool, e)) return r;
-		const searchPath = tool === 'Bash' ? undefined : argOf(e, 'path');
-		if ((await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), searchPath)) === null) return r;
-		if (usedCodeIntelThisTurn(e) || !spendNudge(e)) return r;
+		const { symbolLike, path } = searchTarget(e);
+		if (!symbolLike || usedCodeIntelThisTurn(e) || !hasNudgeLeft(e)) return r;
+		if ((await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path)) === null) return r;
+		if (!spendNudge(e)) return r;
 		return withContext(r, REMINDER_TEXT);
 	});
 }

@@ -22,7 +22,10 @@ describe('symbolOf', () => {
 		['\\bgetUser\\(', 'getUser'],
 		['connection refused', null],
 		['"connection refused"', null],
-		['class', 'class'],
+		['class', null],
+		['import', null],
+		['export', null],
+		['Return', null],
 		['class User Service', null],
 		['TODO', null],
 		['FIXME', null],
@@ -84,6 +87,18 @@ describe('bashSearchPattern', () => {
 		['grep -rn', null],
 		['grep -e', null],
 		["grep 'unterminated Foo", 'unterminated Foo'],
+		['grep -r AuthService .', 'AuthService'],
+		['grep -eAuthService .', 'AuthService'],
+		['rg -t ts AuthService src', 'AuthService'],
+		['rg --type ts AuthService', 'AuthService'],
+		['rg --type=ts AuthService', 'AuthService'],
+		['grep -A 3 AuthService src', 'AuthService'],
+		['rg -C 2 AuthService', 'AuthService'],
+		["rg -g '*.ts' AuthService", 'AuthService'],
+		["grep --include '*.ts' -rn AuthService .", 'AuthService'],
+		['rg -m 1 AuthService', 'AuthService'],
+		['rg -- -dashed src', '-dashed'],
+		['rg -t ts', null],
 	];
 	for (const [command, expected] of rows) {
 		test(`${JSON.stringify(command)} gives ${JSON.stringify(expected)}`, () => {
@@ -106,6 +121,11 @@ describe('globHasSymbolStem', () => {
 		['**/*Service.ts', false],
 		['**/*', false],
 		['src/lib', false],
+		['/Users/me/proj/**/*.ts', false],
+		['C:/Users/Me/proj/**/*.spec.ts', false],
+		['src/Components/*.tsx', false],
+		['/Users/me/proj/**/UserService*', true],
+		['src/Components/Button.tsx', true],
 		['', false],
 	];
 	for (const [glob, expected] of rows) {

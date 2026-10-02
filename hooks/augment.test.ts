@@ -1,6 +1,6 @@
 import type { McpToolResult, On, ToolCallArgs, ToolCallResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { augmentLine, SOFT_DEADLINE_MS } from './augment';
+import { augmentLine, FAILURE_BACKOFF_MS, type LookupApi, lookupCode, lookupSymbol, SOFT_DEADLINE_MS } from './augment';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -23,7 +23,8 @@ const FOUND = {
 	kind: 'class',
 	filePath: 'src/auth/auth.service.ts',
 	line: 12,
-	dependents: 4,
+	usages: 4,
+	definitions: 1,
 };
 
 const LINE = augmentLine(FOUND);
@@ -70,15 +71,15 @@ function world(
 }
 
 describe('search result augment', () => {
-	test('a Bash rg of a symbol gains exactly one line with kind, location and dependents', async ($, on) => {
+	test('a Bash rg of a symbol gains exactly one line with kind, location and usages', async ($, on) => {
 		const { codes } = world(on);
 		const r = await $.tool.call(SEARCH);
 		expect(r).toEqual({ ...BENEATH, context: [LINE] });
 		expect(LINE).toBe(
-			'✦ code_intel: AuthService is a class at src/auth/auth.service.ts:12 (4 dependents). Use code_intel for references, callers, and impact.',
+			'✦ code_intel: AuthService (class) is defined at src/auth/auth.service.ts:12, with 4 usages. Use code_intel for references, callers, and impact.',
 		);
 		expect(codes.length).toBe(1);
-		expect(String(codes[0])).toContain('const NAME = "AuthService";');
+		expect(String(codes[0])).toContain('(api, "AuthService");');
 	});
 
 	test('a Grep of a symbol gains the same line when the build raises Grep', async ($, on) => {
@@ -121,11 +122,48 @@ describe('search result augment', () => {
 		expect(await pending).toEqual(BENEATH);
 	});
 
-	test('a failed lookup does not use up the symbol', async ($, on) => {
+	test('a failed lookup is retried only after the backoff, and does not use up the symbol', async ($, on) => {
 		let fail = true;
-		world(on, { answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }) });
+		const { clock, codes } = world(on, {
+			answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }),
+		});
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		fail = false;
+		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
+		expect(codes.length).toBe(1);
+		await clock.advance(FAILURE_BACKOFF_MS);
+		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
+		expect(codes.length).toBe(2);
+	});
+
+	test('no exact match is remembered, so a repeat search makes no second lookup', async ($, on) => {
+		const { codes } = world(on, { answer: () => envelope({ success: true, result: null }) });
+		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
+		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
+		expect(codes.length).toBe(1);
+	});
+
+	test('two searches for a symbol at once show one line', async ($, on) => {
+		const { codes } = world(on);
+		const [a, b] = await Promise.all([$.tool.call(SEARCH), $.tool.call({ tool: 'Bash', command: 'grep -rn AuthService test' })]);
+		expect([a.context, b.context]).toContainEqual([LINE]);
+		expect([a, b]).toContainEqual(BENEATH);
+		expect(codes.length).toBe(1);
+	});
+
+	test('a subagent gets its own line for a symbol the main conversation already saw', async ($, on) => {
+		const { codes } = world(on);
+		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
+		const sub = { ...SEARCH, agentId: 'agent-1' };
+		expect((await $.tool.call(sub as unknown as ToolCallArgs)).context).toEqual([LINE]);
+		expect(codes.length).toBe(1);
+	});
+
+	test('/clear lets a symbol be shown again', async ($, on) => {
+		world(on);
+		on('classic.SessionStart', () => ({}));
+		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
+		await $.classic.SessionStart({ source: 'clear' });
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 	});
 
@@ -174,15 +212,94 @@ describe('search result augment', () => {
 	});
 
 	test('a denied search is left as it was', async ($, on) => {
-		const { codes } = world(on, { beneath: { deny: 'not allowed' } });
+		world(on, { beneath: { deny: 'not allowed' } });
 		expect(await $.tool.call(SEARCH)).toEqual({ deny: 'not allowed' });
-		expect(codes.length).toBe(0);
 	});
 
 	test('an errored search is left as it was', async ($, on) => {
 		const errored = { ref: 7, result: 'Exit code 2', text: 'Exit code 2', isError: true } as const;
-		const { codes } = world(on, { beneath: errored });
+		world(on, { beneath: errored });
 		expect(await $.tool.call(SEARCH)).toEqual(errored);
-		expect(codes.length).toBe(0);
+	});
+});
+
+describe('augment line', () => {
+	test('one usage is singular', () => {
+		expect(augmentLine({ ...FOUND, usages: 1 })).toContain('with 1 usage.');
+	});
+
+	test('a name several symbols share says the reported one is the most used', () => {
+		expect(augmentLine({ ...FOUND, definitions: 3 })).toContain(
+			'src/auth/auth.service.ts:12, the most used of 3 symbols with that name, with 4 usages.',
+		);
+	});
+});
+
+type Symbol = { name: string; kind: string; filePath: string; line: number; isExported: boolean; usageCount?: number };
+type SearchParams = Parameters<LookupApi['searchSymbols']>[0];
+
+/** Runs the lookup against a graph of `symbols`, searched by substring and in name order like `searchSymbols`. */
+async function runLookup(name: string, symbols: readonly Symbol[]): Promise<{ result: unknown; calls: SearchParams[] }> {
+	const calls: SearchParams[] = [];
+	const api: LookupApi = {
+		searchSymbols: async (params) => {
+			calls.push(params);
+			const matching = symbols
+				.filter((s) => s.name.toLowerCase().includes(params.query.toLowerCase()))
+				.filter((s) => params.isExported === undefined || s.isExported === params.isExported)
+				.sort((a, b) => a.name.localeCompare(b.name))
+				.map((s) => (params.includeUsageCount ? s : { ...s, usageCount: undefined }));
+			return { symbols: matching.slice(0, params.limit) };
+		},
+	};
+	return { result: await lookupSymbol(api, name), calls };
+}
+
+const symbol = (name: string, extra: Partial<Symbol> = {}): Symbol => ({
+	name,
+	kind: 'class',
+	filePath: `src/${name}.ts`,
+	line: 1,
+	isExported: true,
+	usageCount: 0,
+	...extra,
+});
+
+describe('code_intel lookup program', () => {
+	test('finds the exact name far down a page of substring matches', async () => {
+		const noise = Array.from({ length: 80 }, (_, i) => symbol(`AddOrganization${String(i).padStart(2, '0')}`));
+		const { result, calls } = await runLookup('Organization', [...noise, symbol('Organization', { line: 25, usageCount: 85 })]);
+		expect(result).toEqual({ name: 'Organization', kind: 'class', filePath: 'src/Organization.ts', line: 25, usages: 85, definitions: 1 });
+		expect(calls[0]).toEqual({ query: 'Organization', limit: 100, includeUsageCount: true, isExported: true });
+	});
+
+	test('reports the most used of several symbols with the name', async () => {
+		const { result } = await runLookup('User', [
+			symbol('User', { filePath: 'test/fixtures/user.ts', usageCount: 0 }),
+			symbol('User', { filePath: 'src/entities/User.ts', usageCount: 106 }),
+		]);
+		expect(result).toMatchObject({ filePath: 'src/entities/User.ts', usages: 106, definitions: 2 });
+	});
+
+	test('falls back to symbols that are not exported', async () => {
+		const { result, calls } = await runLookup('Logger', [symbol('Logger', { isExported: false, usageCount: 7 })]);
+		expect(result).toMatchObject({ name: 'Logger', usages: 7 });
+		expect(calls.length).toBe(2);
+	});
+
+	test('an unexported symbol nothing uses is not reported', async () => {
+		const { result } = await runLookup('Logger', [symbol('Logger', { isExported: false, usageCount: 0 })]);
+		expect(result).toBe(null);
+	});
+
+	test('a name with no exact match gives null', async () => {
+		const { result } = await runLookup('Auth', [symbol('AuthService'), symbol('authHeader')]);
+		expect(result).toBe(null);
+	});
+
+	test('the program sent to code_intel runs the same function with the quoted name', () => {
+		const code = lookupCode('Auth"Service');
+		expect(code).toStartWith('return await (async function lookupSymbol(api, name)');
+		expect(code).toEndWith(')(api, "Auth\\"Service");');
 	});
 });

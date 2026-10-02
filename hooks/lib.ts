@@ -38,6 +38,12 @@ export function isConfigured(accessKey: string | undefined): boolean {
 	return (accessKey ?? '').startsWith('ak:');
 }
 
+/** The string field `name` of a tool call or event, or undefined. */
+export function stringArg(e: object, name: string): string | undefined {
+	const value: unknown = Reflect.get(e, name);
+	return typeof value === 'string' ? value : undefined;
+}
+
 /** Resolves `path` against `cwd` into an absolute, forward-slash path with no `.` or `..` segments. */
 function absolute(path: string, cwd: string): string {
 	const full = path.replace(/\\/g, '/');
@@ -135,15 +141,4 @@ export async function codeIntel(mcp: McpPort, code: string, { cwd }: { cwd: stri
 		connectedServer = undefined;
 		return failure('MCP_CALL_FAILED', error instanceof Error ? error.message : String(error));
 	}
-}
-
-/**
- * True when a person can see UI: the event names a surface, or the session has
- * one (`surfaces` is `() => $.session.surfaces()`).
- */
-export async function canDraw(
-	e: { surface?: unknown },
-	surfaces: () => Promise<readonly unknown[]>,
-): Promise<boolean> {
-	return e.surface !== undefined || (await surfaces()).length > 0;
 }

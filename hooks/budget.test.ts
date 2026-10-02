@@ -22,10 +22,18 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 	});
 }
 
+/** How many `$.fs.exists` calls the handlers made. */
+let existsCalls = 0;
+
 const $ = {
 	env: { get: async () => KEY },
 	session: { cwd: async () => PROJECT },
-	fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
+	fs: {
+		exists: async (path: string) => {
+			existsCalls += 1;
+			return path === `${PROJECT}/constellation.json`;
+		},
+	},
 };
 
 /**
@@ -188,6 +196,24 @@ describe('nudge budget', () => {
 		await m.turn('t1');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 		expect(await m.bareSearch('call-1')).toEqual(REMINDER);
+	});
+
+	test('a subagent that called code_intel gets no reminder for the rest of its run', async () => {
+		const m = load({ nudgeLimit: 3 });
+		await m.turn('t1');
+		await m.codeIntel('agent-1');
+		expect(await m.search('agent-1')).toBeUndefined();
+		expect(await m.search('agent-2')).toEqual(REMINDER);
+		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	test('a used-up budget skips the walk for constellation.json', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		expect(await m.search()).toEqual(REMINDER);
+		existsCalls = 0;
+		expect(await m.search()).toBeUndefined();
+		expect(existsCalls).toBe(0);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {
