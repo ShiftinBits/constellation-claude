@@ -1,4 +1,5 @@
 import type { On } from 'claude-code';
+import { spendNudge, usedCodeIntelThisTurn } from './budget';
 import { bashSearchPattern, globHasSymbolStem, isSymbolLike } from './classify';
 import { isConfigured, projectRoot } from './lib';
 
@@ -57,6 +58,7 @@ export function registerNudges(on: On): void {
 		if (!isSymbolSearch(tool, e)) return r;
 		const searchPath = tool === 'Bash' ? undefined : argOf(e, 'path');
 		if ((await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), searchPath)) === null) return r;
+		if (usedCodeIntelThisTurn(e) || !spendNudge(e)) return r;
 		return withContext(r, REMINDER_TEXT);
 	});
 }

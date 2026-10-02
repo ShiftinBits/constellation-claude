@@ -7,7 +7,7 @@
 
 ```
 .claude-plugin/
-├── plugin.json              Plugin manifest (name: constellation)
+├── plugin.json              Plugin manifest (name: constellation; userConfig: nudgeLimit)
 └── marketplace.json         Registry listing (category: development)
 
 .mcp.json                    MCP server config → mcp-constellation (stdio)
@@ -34,6 +34,8 @@ hooks/                       In-process hooks module (no settings hooks, no node
 ├── register.ts              Hooks module entry: register(on, options), one call per handler file
 ├── nudge.ts                 code_intel awareness: classic.SessionStart, classic.SubagentStart, classic.PreToolUse
 ├── nudge.test.ts            Tests for nudge.ts (claude plugin test)
+├── budget.ts                Per-session nudge budget: usedCodeIntelThisTurn, spendNudge; turn.start, tool.call, classic.SessionStart
+├── budget.test.ts           Tests for budget.ts (claude plugin test)
 ├── classify.ts              Search classifier: symbolOf, isSymbolLike, bashSearchPattern, globHasSymbolStem
 ├── classify.test.ts         Tests for classify.ts (claude plugin test)
 ├── describe.ts              Search tool description guidance: tool.describe, classic.CwdChanged
@@ -98,6 +100,14 @@ All hooks live in the hooks module and run in-process. `hooks/nudge.ts` exports 
 
 - **`tool.describe`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`, in `hooks/describe.ts`): when the key starts with `ak:` and a `constellation.json` sits in the session cwd or a parent, appends the constant `GUIDANCE` paragraph to the description from `next(e)`, keeping its `isDeferred`. Bash is included because native macOS and Linux builds register no Grep or Glob, so the Bash description is the only search tool description the model sees there. The engine asks once per tool per session and caches the answer, so the text must stay constant.
 - **`classic.CwdChanged`**: recomputes the same gate for `e.new_cwd` and calls `$.ui.invalidate('tool.describe')` only when the result differs from the one the last description was built under (a module variable). Nothing is invalidated per turn.
+
+- **Nudge budget** (`hooks/budget.ts`, `registerBudget(on, options)`): `classic.PreToolUse` spends from it only after every condition above holds, and last: `if (usedCodeIntelThisTurn(e) || !spendNudge(e)) return r`. The session and subagent awareness text and the tool descriptions are never budgeted.
+  - `nudgeLimit` is a `userConfig` option in `plugin.json` (number, default 3, minimum 0). `register(on, options)` passes `options` to `registerBudget`; users set it with `/config` or `claude plugin configure constellation`. In `claude plugin test`, `test(name, { options: { nudgeLimit: 2 } }, ...)` supplies it.
+  - `usedCodeIntelThisTurn(e)` is a read-only predicate: the agent's last `code_intel` call happened in its current turn. `spendNudge(e)` returns false once `nudges >= nudgeLimit`, else counts one and returns true. Each does one job, so a search skipped for the same-turn rule spends nothing.
+  - `turn.start` records `e.turnId` as the current turn. `tool.call` with `{ tool: /code_intel$/ }` stamps the agent's budget with that turn. A `classic.SessionStart` hook with `{ source: ['clear', 'resume', 'fork'] }` clears every budget; `startup` is a fresh process and `compact` keeps the budget. Every hook passes through with `next(e)`. A separate `classic.SessionStart` hook lives in `budget.ts` so `nudge.ts` only consults it; the two have different matchers because validate refuses two hooks on one event without matchers.
+  - Agent key: `'main'` when `e.agentId` is undefined, else `e.agentId`, so each subagent has its own budget (its context starts empty).
+  - Limits of the types, verified against the generated declarations: `turn.start` carries only `text` and `turnId`, no `agentId`, so turns are tracked for `'main'` only. A subagent's `code_intel` call finds no current turn and does not silence its later searches; its per-agent count still applies. The `e` of `classic.PreToolUse` is the bare `ToolCallEnvelope`, which declares no `agentId` (only `tool.call`'s adds it), so `agentKey` reads it through `Reflect.get`; if a build does not stamp it there, subagent searches count against the main budget.
+  - State is module variables (`Map`s), not `$.state`, so a reload of the hooks module resets the budget. That is acceptable: the worst case is a few extra reminders. `registerBudget` also clears the state, which gives each test a fresh budget. The test kit loads the plugin as its own instance, and a handler's added `classic.PreToolUse` context is not surfaced through `$.tool.call`, so `budget.test.ts` raises the registered handlers through a stand-in `on`, plus one loaded-plugin test with `options` for the pass-through hooks.
 
 Each handler returns `{ ...r, additionalContext: [...(r.additionalContext ?? []), TEXT] }`, where `r` is what `next(e)` returned. `additionalContext` is a `string[]`, one entry per hook, and spreading `r` keeps any `allow`, `ask`, or `deny` decision beneath. The text constants (`SESSION_TEXT`, `REMINDER_TEXT`) are exported from `hooks/nudge.ts`; keep them constant (no counts or paths) so the prompt cache stays valid.
 

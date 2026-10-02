@@ -1,5 +1,6 @@
 import type { On } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
+import { registerBudget } from './budget';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 
 const KEY = 'ak:test-key';
@@ -19,12 +20,16 @@ type Handler = (
 const PROJECT = '/work/app';
 const OUTSIDE = '/elsewhere';
 
-/** The PreToolUse handler the module registers, called directly with a constructed envelope. */
+/**
+ * The PreToolUse handler the module registers, called directly with a constructed
+ * envelope. Registering the budget starts every call with a full one.
+ */
 function preToolUse(): Handler {
 	let handler: Handler | undefined;
 	const capture = (pattern: string, ...rest: unknown[]) => {
 		if (pattern === 'classic.PreToolUse') handler = rest[rest.length - 1] as Handler;
 	};
+	registerBudget(capture as unknown as On, {});
 	registerNudges(capture as unknown as On);
 	if (!handler) throw new Error('no classic.PreToolUse handler registered');
 	return handler;

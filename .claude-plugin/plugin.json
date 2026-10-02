@@ -21,5 +21,14 @@
 		"mcp",
 		"constellation"
 	],
-	"icon": "./assets/logo.png"
+	"icon": "./assets/logo.png",
+	"userConfig": {
+		"nudgeLimit": {
+			"type": "number",
+			"title": "Search reminder limit",
+			"description": "How many times per session (and per subagent) Constellation reminds Claude to use code_intel before a symbol search with Grep, Glob or the shell.",
+			"default": 3,
+			"min": 0
+		}
+	}
 }
