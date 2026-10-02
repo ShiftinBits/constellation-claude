@@ -21,9 +21,9 @@ type AgentBudget = {
 const budgets = new Map<string, AgentBudget>();
 
 /**
- * The main conversation's current turn, from `turn.start`. A subagent's whole
- * run is one turn (its loop's `turn.complete` closes the run), so its turn is
- * its `agentId`.
+ * The main conversation's current turn, from `turn.start`. A subagent's run is
+ * one turn (its loop's `turn.complete` closes the run, and `forgetAgentBudget`
+ * then drops its state), so its turn is its `agentId`.
  */
 let mainTurn: string | undefined;
 
@@ -106,9 +106,18 @@ export function registerBudget(on: On, options: PluginOptions): void {
 			searchAgents.delete(e.tool_use_id);
 		}
 	});
+}
 
-	on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async (_$, e, next) => {
-		budgets.clear();
-		return next(e);
-	});
+/** Starts every budget over, for a new conversation (`/clear`, `/resume`, `/branch`). */
+export function resetBudgets(): void {
+	budgets.clear();
+}
+
+/**
+ * Drops the budget of the subagent `agentId` when its run ends. A subagent
+ * continued later (SendMessage) keeps its id but starts a new run, so it gets a
+ * fresh budget and its earlier code_intel call no longer counts as this turn's.
+ */
+export function forgetAgentBudget(agentId: string): void {
+	budgets.delete(agentId);
 }

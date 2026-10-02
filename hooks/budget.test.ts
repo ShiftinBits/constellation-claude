@@ -2,6 +2,7 @@ import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -49,6 +50,7 @@ function load(options: PluginOptions) {
 	};
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
+	registerSession(capture as unknown as On);
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -73,6 +75,7 @@ function load(options: PluginOptions) {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
 		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
 		 * PreToolUse event runs beneath the call's tool.call, which alone carries `agentId`.
@@ -205,6 +208,15 @@ describe('nudge budget', () => {
 		expect(await m.search('agent-1')).toBeUndefined();
 		expect(await m.search('agent-2')).toEqual(REMINDER);
 		expect(await m.search()).toEqual(REMINDER);
+	});
+
+	test('a subagent continued after its run ended gets a fresh budget and turn', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		await m.codeIntel('agent-1');
+		expect(await m.search('agent-1')).toBeUndefined();
+		await m.runEnds('agent-1');
+		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 
 	test('a used-up budget skips the walk for constellation.json', async () => {

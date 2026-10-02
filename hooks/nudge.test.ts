@@ -164,6 +164,21 @@ describe('search nudge', () => {
 		expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
 	});
 
+	test('a shell search of a path inside the project nudges even when the working directory is outside it', async () => {
+		const e = { tool: 'Bash', command: `grep -rn AuthService ${PROJECT}/src` };
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+	});
+
+	test('a cd into the project before a shell search nudges', async () => {
+		const e = { tool: 'Bash', command: `cd ${PROJECT} && rg AuthService src` };
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+	});
+
+	test('a shell search of a path outside the project adds nothing even when the working directory is inside it', async () => {
+		const e = { tool: 'Bash', command: `rg AuthService ${OUTSIDE}/src` };
+		expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
+	});
+
 	test('keeps a decision and the context the chain beneath produced', async () => {
 		const r = await nudgesFor({ tool: 'Grep', pattern: 'AuthService' }, KEY, { deny: 'no', additionalContext: ['earlier'] });
 		expect(r).toEqual({ deny: 'no', additionalContext: ['earlier', REMINDER_TEXT] });

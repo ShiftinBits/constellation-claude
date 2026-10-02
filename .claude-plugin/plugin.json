@@ -33,7 +33,7 @@
 		"augmentGrep": {
 			"type": "boolean",
 			"title": "Search result hints",
-			"description": "Add one code_intel line (kind, location and dependents) to the result of a symbol search with Grep or grep/rg in the shell, once per symbol.",
+			"description": "Add one code_intel line (the symbol's kind, location and usage count) to the result of a symbol search with Grep or grep/rg in the shell, once per symbol.",
 			"default": true
 		}
 	}

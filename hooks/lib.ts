@@ -26,9 +26,6 @@ export type CodeIntelEnvelope = {
 const SERVER_KEY = 'constellation';
 const PROJECT_FILE = 'constellation.json';
 
-/** The name `$.mcp.call` takes for the plugin's server, once connected. */
-let connectedServer: string | undefined;
-
 /**
  * True when the access key starts with `ak:`, the same gate the settings hooks
  * used. The handler reads it, so validate sees the literal name:
@@ -122,23 +119,26 @@ function parseEnvelope(text: string | undefined): CodeIntelEnvelope {
 
 /**
  * Runs `code` through the plugin's `code_intel` MCP tool in the project at `cwd`.
- * Connects once and reuses the server name. Never throws: every failure is an
+ * Connects on every call: `$.mcp.connect` answers at once for a connected
+ * server and gives the name it runs under now, so a restarted or renamed server
+ * is picked up without a cache to go stale. Never throws: every failure is an
  * envelope with `success: false`.
  */
 export async function codeIntel(mcp: McpPort, code: string, { cwd }: { cwd: string }): Promise<CodeIntelEnvelope> {
 	try {
-		if (connectedServer === undefined) {
-			const connection = await mcp.connect(SERVER_KEY);
-			if (!connection.isConnected) {
-				return failure('MCP_UNAVAILABLE', `${connection.reason}: ${connection.message}`);
-			}
-			connectedServer = connection.server;
+		const connection = await mcp.connect(SERVER_KEY);
+		if (!connection.isConnected) {
+			return failure('MCP_UNAVAILABLE', `${connection.reason}: ${connection.message}`);
 		}
-		const response = await mcp.call(connectedServer, 'code_intel', { code, cwd });
+		const response = await mcp.call(connection.server, 'code_intel', { code, cwd });
 		const text = response.content.find((block) => block.type === 'text')?.text;
-		return parseEnvelope(text);
+		const envelope = parseEnvelope(text);
+		if (!response.isError) return envelope;
+		// An error result may still carry code_intel's own envelope (an error code
+		// and guidance); anything else, such as a host message, is MCP_TOOL_ERROR.
+		if (envelope.error !== undefined && envelope.error.code !== 'INVALID_RESPONSE') return { ...envelope, success: false };
+		return failure('MCP_TOOL_ERROR', text ?? 'code_intel returned an error');
 	} catch (error) {
-		connectedServer = undefined;
 		return failure('MCP_CALL_FAILED', error instanceof Error ? error.message : String(error));
 	}
 }

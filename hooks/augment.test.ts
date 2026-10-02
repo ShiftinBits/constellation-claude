@@ -159,6 +159,40 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(1);
 	});
 
+	test('a failure from before /clear never evicts a lookup made after it', async ($, on) => {
+		let fail = true;
+		const { clock, codes } = world(on, {
+			answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }),
+		});
+		on('classic.SessionStart', () => ({}));
+		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
+		await $.classic.SessionStart({ source: 'clear' });
+		fail = false;
+		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
+		await clock.advance(FAILURE_BACKOFF_MS);
+		const sub = { ...SEARCH, agentId: 'agent-1' };
+		expect((await $.tool.call(sub as unknown as ToolCallArgs)).context).toEqual([LINE]);
+		expect(codes.length).toBe(2);
+	});
+
+	test('a subagent continued after its run ended is shown the line again', async ($, on) => {
+		const { codes } = world(on);
+		on('turn.complete', () => ({ text: '' }));
+		const sub = { ...SEARCH, agentId: 'agent-1' } as unknown as ToolCallArgs;
+		expect((await $.tool.call(sub)).context).toEqual([LINE]);
+		expect(await $.tool.call(sub)).toEqual(BENEATH);
+		await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'r1', agentId: 'agent-1', reason: 'end' } as never);
+		expect((await $.tool.call(sub)).context).toEqual([LINE]);
+		expect(codes.length).toBe(1);
+	});
+
+	test('a shell search of another directory uses the project there', async ($, on) => {
+		const { codes } = world(on, { cwd: '/elsewhere' });
+		const r = await $.tool.call({ tool: 'Bash', command: `cd ${PROJECT} && rg AuthService src` });
+		expect(r.context).toEqual([LINE]);
+		expect(codes.length).toBe(1);
+	});
+
 	test('/clear lets a symbol be shown again', async ($, on) => {
 		world(on);
 		on('classic.SessionStart', () => ({}));

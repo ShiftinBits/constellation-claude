@@ -1,4 +1,5 @@
 {
 	"description": "Constellation code intelligence hooks, running in-process, add code_intel awareness to sessions, subagents, and search tool calls",
+	"hooks": {},
 	"modules": ["./register.ts"]
 }

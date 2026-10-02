@@ -34,23 +34,8 @@ function mcpHost(
 	return { host, connects, calls };
 }
 
-/** Forgets the cached server by driving one call that throws. */
-async function forgetServer(): Promise<void> {
-	await codeIntel(
-		{
-			connect: async () => CONNECTED,
-			call: async () => {
-				throw new Error('reset');
-			},
-		},
-		'',
-		{ cwd: '' },
-	);
-}
-
 describe('codeIntel', () => {
 	test('reports MCP_UNAVAILABLE with the connect reason when the server is not connected', async () => {
-		await forgetServer();
 		const { host, calls } = mcpHost({ isConnected: false, reason: 'auth', message: 'needs sign-in' }, () => text('{}'));
 		const envelope = await codeIntel(host, 'return 1', { cwd: '/p' });
 		expect(envelope.success).toBe(false);
@@ -60,7 +45,6 @@ describe('codeIntel', () => {
 	});
 
 	test('parses a success envelope and calls code_intel with code and cwd', async () => {
-		await forgetServer();
 		const body = JSON.stringify({
 			success: true,
 			result: { pong: true },
@@ -88,17 +72,37 @@ describe('codeIntel', () => {
 		]);
 	});
 
-	test('connects once and reuses the server name', async () => {
-		await forgetServer();
-		const { host, connects, calls } = mcpHost(CONNECTED, () => text('{"success":true}'));
+	test('connects on every call and calls the name the server runs under now', async () => {
+		let server = 'plugin:constellation:constellation';
+		const calls: string[] = [];
+		const host: McpPort = {
+			connect: async () => ({ isConnected: true, server }),
+			call: async (name) => {
+				calls.push(name);
+				return text('{"success":true}');
+			},
+		};
 		await codeIntel(host, 'a', { cwd: '/p' });
+		server = 'constellation';
 		await codeIntel(host, 'b', { cwd: '/p' });
-		expect(connects.length).toBe(1);
-		expect(calls.length).toBe(2);
+		expect(calls).toEqual(['plugin:constellation:constellation', 'constellation']);
+	});
+
+	test('an error result that is not an envelope becomes MCP_TOOL_ERROR with its text', async () => {
+		const { host } = mcpHost(CONNECTED, () => ({ content: [{ type: 'text', text: 'server restarting' }], isError: true }));
+		const envelope = await codeIntel(host, 'x', { cwd: '/p' });
+		expect(envelope).toEqual({ success: false, error: { code: 'MCP_TOOL_ERROR', message: 'server restarting' } });
+	});
+
+	test("an error result carrying code_intel's envelope keeps its code and is never a success", async () => {
+		const body = JSON.stringify({ success: true, error: { code: 'AUTH_ERROR', message: 'bad key' } });
+		const { host } = mcpHost(CONNECTED, () => ({ content: [{ type: 'text', text: body }], isError: true }));
+		const envelope = await codeIntel(host, 'x', { cwd: '/p' });
+		expect(envelope.success).toBe(false);
+		expect(envelope.error?.code).toBe('AUTH_ERROR');
 	});
 
 	test('parses an error envelope with its code, message and guidance', async () => {
-		await forgetServer();
 		const body = JSON.stringify({
 			success: false,
 			error: { code: 'PROJECT_NOT_INDEXED', message: 'not indexed', guidance: ['run index', 7] },
@@ -112,7 +116,6 @@ describe('codeIntel', () => {
 	});
 
 	test('returns INVALID_RESPONSE for text that is not JSON, not an envelope, or missing', async () => {
-		await forgetServer();
 		const bodies = ['not json', '[1]', '{"result":1}'];
 		for (const body of bodies) {
 			const { host } = mcpHost(CONNECTED, () => text(body));
@@ -125,8 +128,7 @@ describe('codeIntel', () => {
 		expect(envelope.error?.code).toBe('INVALID_RESPONSE');
 	});
 
-	test('never throws: a failing call becomes MCP_CALL_FAILED and the next call reconnects', async () => {
-		await forgetServer();
+	test('never throws: a failing call becomes MCP_CALL_FAILED and the next call recovers', async () => {
 		const connects: string[] = [];
 		let fail = true;
 		const host: McpPort = {

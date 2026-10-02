@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { bashSearchPattern, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
+import { bashSearch, bashSearchPattern, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
 
 describe('symbolOf', () => {
 	const rows: ReadonlyArray<readonly [string, string | null]> = [
@@ -25,7 +25,9 @@ describe('symbolOf', () => {
 		['class', null],
 		['import', null],
 		['export', null],
-		['Return', null],
+		['Package', 'Package'],
+		['Type', 'Type'],
+		['Default', 'Default'],
 		['class User Service', null],
 		['TODO', null],
 		['FIXME', null],
@@ -99,6 +101,12 @@ describe('bashSearchPattern', () => {
 		['rg -m 1 AuthService', 'AuthService'],
 		['rg -- -dashed src', '-dashed'],
 		['rg -t ts', null],
+		['cd /repo/core && grep -rn GraphQueryService libs', 'GraphQueryService'],
+		['cd /repo/core; rg Foo', 'Foo'],
+		['cd /repo/core || rg Foo', null],
+		['git -C /repo/core grep Foo', 'Foo'],
+		['LC_ALL=C grep -rn Foo .', 'Foo'],
+		['FOO=1 BAR=2 rg Foo', 'Foo'],
 	];
 	for (const [command, expected] of rows) {
 		test(`${JSON.stringify(command)} gives ${JSON.stringify(expected)}`, () => {
@@ -131,6 +139,27 @@ describe('globHasSymbolStem', () => {
 	for (const [glob, expected] of rows) {
 		test(`${JSON.stringify(glob)} gives ${expected}`, () => {
 			expect(globHasSymbolStem(glob)).toBe(expected);
+		});
+	}
+});
+
+describe('bashSearch path', () => {
+	const rows: ReadonlyArray<readonly [string, string | undefined]> = [
+		['rg Foo', undefined],
+		['rg Foo src', 'src'],
+		['rg -n SearchSymbolsParams ../constellation-cli/src', '../constellation-cli/src'],
+		['grep -rn AuthService /abs/core/src', '/abs/core/src'],
+		['rg -e Foo lib test', 'lib'],
+		['rg -t ts Foo -- src', 'src'],
+		['cd /repo/core && grep -rn Foo libs', '/repo/core/libs'],
+		['cd /repo/core && rg Foo', '/repo/core'],
+		['cd sub && rg Foo /abs/x', '/abs/x'],
+		['git -C /repo/core grep Foo', '/repo/core'],
+		['git -C core grep Foo lib', 'core/lib'],
+	];
+	for (const [command, expected] of rows) {
+		test(`${JSON.stringify(command)} searches ${JSON.stringify(expected)}`, () => {
+			expect(bashSearch(command)?.path).toBe(expected);
 		});
 	}
 });

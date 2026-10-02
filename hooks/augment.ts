@@ -102,16 +102,20 @@ function lookup($: EngineInterface, root: string, name: string): Promise<Found |
 	const key = `${root}\0${name}`;
 	let pending = lookups.get(key);
 	if (pending === undefined) {
-		pending = codeIntel(
+		const started: Promise<Found | null | undefined> = codeIntel(
 			{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 			lookupCode(name),
 			{ cwd: root },
 		).then((envelope) => {
 			if (envelope.success) return foundOf(envelope.result);
-			$.clock.after(FAILURE_BACKOFF_MS, () => lookups.delete(key));
+			// Only this failure is dropped: after a reset a newer lookup may hold the key.
+			$.clock.after(FAILURE_BACKOFF_MS, () => {
+				if (lookups.get(key) === started) lookups.delete(key);
+			});
 			return undefined;
 		});
-		lookups.set(key, pending);
+		lookups.set(key, started);
+		pending = started;
 	}
 	return pending;
 }
@@ -162,10 +166,16 @@ export function registerAugment(on: On, options: PluginOptions): void {
 		}
 		return { ...r, context: [...(r.context ?? []), augmentLine(found)] };
 	});
+}
 
-	on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async (_$, e, next) => {
-		lookups.clear();
-		shown.clear();
-		return next(e);
-	});
+/** Forgets every lookup and shown line, for a new conversation (`/clear`, `/resume`, `/branch`). */
+export function resetAugment(): void {
+	lookups.clear();
+	shown.clear();
+}
+
+/** Forgets the lines shown to the subagent `agentId` when its run ends; lookups stay shared. */
+export function forgetAgentLines(agentId: string): void {
+	const prefix = `${agentId}\0`;
+	for (const key of shown) if (key.startsWith(prefix)) shown.delete(key);
 }
