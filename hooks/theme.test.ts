@@ -251,10 +251,10 @@ describe('banner', () => {
 	});
 
 	const BOX = [
-		'╭───────────────────────────────╮',
-		'│ >_ CONSTELLATION://CODE_INTEL │',
-		'│           constellationdev.io │',
-		'╰───────────────────────────────╯',
+		'╭─────────────────────╮',
+		'│ >_CONSTELLATION://  │',
+		'│ constellationdev.io │',
+		'╰─────────────────────╯',
 	];
 	const cases: [string, number, boolean, number | string[]][] = [
 		['the full banner at its width', BANNER_WIDTH, true, 6],
@@ -276,7 +276,19 @@ describe('banner', () => {
 		const ui = await draw($, on, 'terminal', (el) => header(el, BOX_WIDTH, true, 'brand'));
 		const runs = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && typeof t.children[0] === 'string');
 		expect(runs[0]?.props['color']).toBe(palette.galactic);
-		// Runs start every three columns, so the sixth starts at column 15 of 33.
+		// Runs start every three columns, so the sixth starts at column 15 of 23.
 		expect(runs[5]?.props['color']).toBe(gradientAt(15 / (BOX_WIDTH - 1), 'brand'));
+	});
+
+	test('the boxed header draws the name bold and nothing else on its line', async ($, on) => {
+		const ui = await draw($, on, 'terminal', (el) => header(el, BOX_WIDTH, true, 'brand'));
+		const line = (await ui.findAll({ type: 'Text' })).find((t) => t.props['wrap'] === 'truncate' && t.text.includes('>_'));
+		type Run = { props: Record<string, unknown>; children: unknown[] };
+		const isRun = (c: unknown): c is Run => typeof c === 'object' && c !== null && 'props' in c && 'children' in c;
+		const runs = ((line?.children ?? []) as unknown[]).filter(isRun);
+		const textOf = (rs: Run[]) => rs.map((r) => r.children.join('')).join('');
+		expect(textOf(runs.filter((r) => r.props['bold'] === true))).toBe('>_CONSTELLATION://');
+		expect(textOf(runs.filter((r) => r.props['bold'] !== true))).toBe('│   │');
+		expect(runs.every((r) => typeof r.props['color'] === 'string')).toBe(true);
 	});
 });

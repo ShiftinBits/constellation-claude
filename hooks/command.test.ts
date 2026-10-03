@@ -693,13 +693,13 @@ describe('the pane', () => {
 		await wide.unmount();
 		const medium = await mountPane($, 'terminal', 60);
 		await settle();
-		expect(await reads(medium, />_ CONSTELLATION:\/\/CODE_INTEL/)).toBe(true);
+		expect(await reads(medium, /│ constellationdev\.io │/)).toBe(true);
 		expect(await reads(medium, /CONSTELLATIONDEV\.IO/)).toBe(false);
 		await medium.unmount();
-		const narrow = await mountPane($, 'terminal', 30);
+		const narrow = await mountPane($, 'terminal', 20);
 		await settle();
 		expect(await reads(narrow, />_CONSTELLATION:\/\/$/)).toBe(true);
-		expect(await reads(narrow, /CODE_INTEL/)).toBe(false);
+		expect(await reads(narrow, /constellationdev\.io/)).toBe(false);
 	});
 
 	test('the picker names its keys and hides the tab keys', async ($, on) => {

@@ -281,14 +281,27 @@ export const BANNER_WIDTH = 72;
 /** Characters per colored run: the gradient steps every few columns, not every one, to keep the tree small. */
 const RUN = 3;
 
-/** One banner line, colored run by run along the gradient by column across `width`. */
-function gradientLine(el: ElementTable, text: string, width: number, to: Scheme): RenderElement {
+/**
+ * One banner line, colored run by run along the gradient by column across
+ * `width`. The first occurrence of `bold` in the line is drawn bold, its runs
+ * cut at its edges so the bold stops exactly there.
+ */
+function gradientLine(el: ElementTable, text: string, width: number, to: Scheme, bold?: string): RenderElement {
 	const chars = [...text];
+	const at = bold === undefined ? -1 : text.indexOf(bold);
+	const from = at < 0 ? -1 : [...text.slice(0, at)].length;
+	const until = from < 0 ? -1 : from + [...(bold ?? '')].length;
+	const cuts = from < 0 ? [0, chars.length] : [0, from, until, chars.length];
 	const runs: RenderElement[] = [];
-	for (let i = 0; i < chars.length; i += RUN) {
-		const color = gradientAt(i / (width - 1), to);
-		const chunk = chars.slice(i, i + RUN).join('');
-		runs.push(el.Text(color === undefined ? { children: chunk } : { color, children: chunk }));
+	for (let k = 0; k + 1 < cuts.length; k++) {
+		const start = cuts[k] ?? 0;
+		const end = cuts[k + 1] ?? 0;
+		const strong = start === from;
+		for (let i = start; i < end; i += RUN) {
+			const color = gradientAt(i / (width - 1), to);
+			const chunk = chars.slice(i, Math.min(i + RUN, end)).join('');
+			runs.push(el.Text({ ...(color === undefined ? {} : { color }), ...(strong ? { bold: true } : {}), children: chunk }));
+		}
 	}
 	return el.Text({ wrap: 'truncate', children: runs });
 }
@@ -302,20 +315,23 @@ export function banner(el: ElementTable, to: Scheme): RenderElement {
 	return el.Box({ flexDirection: 'column', children: BANNER_ART.map((line) => gradientLine(el, line, BANNER_WIDTH, to)) });
 }
 
-/** A smaller boxed header for a site too narrow for the banner, 33 columns wide. */
+/** The name the boxed and one-line headers draw in bold. */
+const PROMPT = '>_CONSTELLATION://';
+
+/** A smaller boxed header for a site too narrow for the banner, 23 columns wide. */
 const BOX_ART = [
-	'╭───────────────────────────────╮',
-	'│ >_ CONSTELLATION://CODE_INTEL │',
-	'│           constellationdev.io │',
-	'╰───────────────────────────────╯',
+	'╭─────────────────────╮',
+	`│ ${PROMPT}  │`,
+	'│ constellationdev.io │',
+	'╰─────────────────────╯',
 ] as const;
 
 /** The columns `boxBanner` needs. */
-export const BOX_WIDTH = 33;
+export const BOX_WIDTH = 23;
 
-/** The boxed header in the scheme's colors, the gradient running across its own width. */
+/** The boxed header in the scheme's colors, the gradient running across its own width and the name in bold. */
 export function boxBanner(el: ElementTable, to: Scheme): RenderElement {
-	return el.Box({ flexDirection: 'column', children: BOX_ART.map((line) => gradientLine(el, line, BOX_WIDTH, to)) });
+	return el.Box({ flexDirection: 'column', children: BOX_ART.map((line) => gradientLine(el, line, BOX_WIDTH, to, PROMPT)) });
 }
 
 /**
@@ -333,7 +349,7 @@ export function header(el: ElementTable, columns: number, grid: boolean, to: Sch
 
 /** The header for a narrow site or the Desktop app: `>_CONSTELLATION://` in bold along the gradient. */
 export function compactBanner(el: ElementTable, to: Scheme): RenderElement {
-	const chars = [...'>_CONSTELLATION://'];
+	const chars = [...PROMPT];
 	const runs = chars.map((ch, i) => {
 		const color = gradientAt(i / (chars.length - 1), to);
 		return el.Text(color === undefined ? { children: ch } : { color, children: ch });
