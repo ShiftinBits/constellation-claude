@@ -97,6 +97,7 @@ A partial Grep-based assessment is always better than skipping the analysis.
 
 ## Related
 
+- The plugin's `impactGate` option (off by default) checks a file's impact automatically before Claude edits it; set it with `/config`
 - `/constellation:impact <symbol> [file]` — one-shot slash command equivalent
 - `/constellation:deps <file>` — dependency-only view
 - `/constellation:unused` — proactive dead-code scan
