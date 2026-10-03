@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import type { ElementTable, On, RenderElement } from 'claude-code';
-import { MARK, badge, buttonRow, forTheme, kind, paint, palette, rgb, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, kind, paint, palette, rgb, risk, scheme, status } from './theme';
 import type { Tone } from './theme';
 
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -213,5 +213,36 @@ describe('rgb and MARK', () => {
 
 	test('MARK is the single brand mark', () => {
 		expect(MARK).toBe('✦');
+	});
+});
+
+describe('banner', () => {
+	test('the gradient runs galactic to sky blue and back, like the CLI', () => {
+		expect(gradientAt(0, 'brand')).toBe(palette.galactic);
+		// The CLI's lightest stop, RGB 130, 200, 250.
+		expect(gradientAt(0.5, 'brand')).toBe(`#${[130, 200, 250].map((v) => v.toString(16).toUpperCase()).join('')}`);
+		expect(gradientAt(1, 'brand')).toBe(palette.galactic);
+	});
+
+	test('a light theme keeps to the darker stops, and theme and none follow the scheme', () => {
+		expect(gradientAt(0.5, 'brand-light')).toBe(palette.nebula);
+		expect(gradientAt(0.5, 'theme')).toBe('suggestion');
+		expect(gradientAt(0.5, 'none')).toBeUndefined();
+	});
+
+	test('every line of the full banner is the CLI width and the tag is one bold Text', async ($, on) => {
+		const ui = await draw($, on, 'terminal', (el) => banner(el, 'core › status', 'brand'));
+		const lines = (await ui.findAll({ type: 'Text' })).filter((t) => t.props['wrap'] === 'truncate');
+		expect(lines).toHaveLength(8);
+		for (const line of lines.slice(0, 6)) expect([...line.text].length).toBe(BANNER_WIDTH);
+		expect(lines[6]?.text).toBe('│ core › status │');
+		const tag = (await ui.findAll({ type: 'Text' })).find((t) => t.children.length === 1 && t.children[0] === 'core › status');
+		expect(tag?.props['bold']).toBe(true);
+	});
+
+	test('the compact banner draws the mark and the tag', async ($, on) => {
+		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'core › status', 'none'));
+		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: 'core › status' })).toBeDefined();
 	});
 });

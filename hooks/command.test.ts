@@ -9,6 +9,7 @@ const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const INDEXED_AT = '2026-01-01T00:00:00.000Z';
 const SURFACES = ['terminal', 'desktop'] as const;
+const TAB_HINT_STATUS = 'Whether Constellation is reachable and your access key is accepted.';
 
 const PING = { pong: true };
 const CAPS = {
@@ -126,14 +127,19 @@ async function run($: Engine, args = '') {
 }
 
 /** Mounts the pane the command opened, as a surface drawing it. */
-async function mountPane($: Engine, surface: (typeof SURFACES)[number]) {
+async function mountPane($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 100) {
 	return $.ui.mount({
 		plugin: 'constellation',
 		surface,
 		component: 'Pane',
 		requestId: 'constellation',
-		props: { title: 'Constellation', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+		props: { title: 'Constellation', isFocused: true, bodyColumns, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
 	});
+}
+
+/** The Text whose only child is exactly `text` (`find` matches the enclosing line too). */
+async function exact(ui: Awaited<ReturnType<typeof mountPane>>, text: string) {
+	return (await ui.findAll({ type: 'Text' })).find((t) => t.children.length === 1 && t.children[0] === text);
 }
 
 /** Lets the query a drawing started settle and the redraw it asked for run. */
@@ -166,7 +172,7 @@ describe('summarize', () => {
 
 	test('status reports connection and auth', () => {
 		const s = summarize('status', ok(PING), { project: 'app' });
-		expect(s.lines).toEqual(['connection: ok', 'auth: ok', 'project app']);
+		expect(s.lines).toEqual(['Connection: ok', 'Auth: ok', 'Project: app']);
 		expect(s.error).toBeUndefined();
 	});
 
@@ -183,21 +189,21 @@ describe('summarize', () => {
 	});
 
 	test('status without a pong is unknown', () => {
-		expect(summarize('status', ok({})).lines).toEqual(['connection: unknown', 'auth: unknown']);
+		expect(summarize('status', ok({})).lines).toEqual(['Connection: unknown', 'Auth: unknown']);
 	});
 
 	test('diagnose adds the capabilities', () => {
 		const lines = summarize('diagnose', ok({ ping: PING, caps: CAPS })).lines;
-		expect(lines).toContain('index: ok');
-		expect(lines).toContain('languages typescript');
-		expect(lines).toContain('120 symbols');
-		expect(lines).toContain('14 files');
-		expect(lines).toContain('branch main');
+		expect(lines).toContain('Index: ok');
+		expect(lines).toContain('Languages: typescript');
+		expect(lines).toContain('Symbols: 120');
+		expect(lines).toContain('Files: 14');
+		expect(lines).toContain('Branch: main');
 	});
 
 	test('diagnose reads an unindexed project as stale', () => {
 		const lines = summarize('diagnose', ok({ ping: PING, caps: { isIndexed: false } })).lines;
-		expect(lines).toContain('index (not indexed): stale');
+		expect(lines).toContain('Index: stale (not indexed)');
 	});
 
 	test('deps lists file rows and dims modules', () => {
@@ -265,8 +271,8 @@ describe('command.run without a pane', () => {
 	test('status text names the connection', async ($, on) => {
 		world(on, { surfaces: ['vscode'] });
 		const r = await run($);
-		expect(r.text).toContain('connection: ok');
-		expect(r.text).toContain('project app');
+		expect(r.text).toContain('Connection: ok');
+		expect(r.text).toContain('Project: app');
 	});
 
 	test('an error answers with its code and guidance', async ($, on) => {
@@ -305,11 +311,15 @@ describe('the pane', () => {
 			await run($);
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Text', text: MARK })).toMatchObject({ props: { color: palette.nebula } });
-			expect(await ui.find({ type: 'Text', text: 'Constellation' })).toMatchObject({ props: { bold: true } });
+			// The terminal draws the CLI banner, starting in galactic; Desktop the compact one.
+			const first = surface === 'terminal' ? '╭──' : MARK;
+			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
+			expect((await exact(ui, 'app › status'))?.props['bold']).toBe(true);
+			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /1-4 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /✓ ok/ })).toBeDefined();
-			expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 		});
 
 		test(`the diagnose tab draws the capabilities on ${surface}`, async ($, on) => {
@@ -317,8 +327,8 @@ describe('the pane', () => {
 			await run($, 'diagnose');
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Text', text: /120 symbols/ })).toBeDefined();
-			expect(await ui.find({ type: 'Text', text: /branch main/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: '120' })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: 'main' })).toBeDefined();
 		});
 
 		test(`the deps tab draws file rows with the path field on ${surface}`, async ($, on) => {
@@ -362,11 +372,11 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		expect(await ui.find({ type: 'Text', text: /◐ pending/ })).toBeDefined();
-		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeUndefined();
 		release(success(PING));
 		await settle();
 		expect(await ui.find({ type: 'Text', text: /◐ pending/ })).toBeUndefined();
-		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
 	/** The first query waits on a gate; later ones answer at once. Returns the gate's release. */
@@ -391,13 +401,13 @@ describe('the pane', () => {
 		release();
 		await settle();
 		expect(await ui.find({ type: 'Text', text: /STALE_CODE/ })).toBeUndefined();
-		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 		await ui.press({ key: 'tab-unused' });
 		await settle();
 		await ui.press({ key: 'tab-status' });
 		await settle();
 		expect(codes).toHaveLength(3);
-		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
 	test('an answer that lands after the deps direction toggled is discarded', async ($, on) => {
@@ -430,7 +440,7 @@ describe('the pane', () => {
 		const again = await mountPane($, 'terminal');
 		await settle();
 		expect(codes).toHaveLength(2);
-		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await again.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
 	test('a failing MCP call draws an error badge', async ($, on) => {
@@ -507,7 +517,7 @@ describe('the pane', () => {
 		await ui.press({ key: 'tab-diagnose' });
 		await settle();
 		expect(await labels()).toContain('▸ Diagnose');
-		expect(await ui.find({ type: 'Text', text: /120 symbols/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: '120' })).toBeDefined();
 		await ui.press({ key: 'tab-deps' });
 		expect(await ui.find({ type: 'Input', key: 'deps-path' })).toBeDefined();
 		await ui.press({ key: 'tab-unused' });
@@ -605,7 +615,7 @@ describe('the pane', () => {
 		await first.press({ key: 'project:/work/app/web' });
 		await settle();
 		expect(cwds.at(-1)).toBe('/work/app/web');
-		expect(await first.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await first.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 		expect(await first.find({ key: 'tab-status' })).toBeDefined();
 		await first.press({ key: 'close' });
 		await first.unmount();
@@ -615,7 +625,7 @@ describe('the pane', () => {
 		const again = await mountPane($, 'terminal');
 		await settle();
 		expect(cwds.at(-1)).toBe('/work/app/web');
-		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await again.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
 	const WORKSPACE = (code: string, cwd: string): McpToolResult => {
@@ -650,7 +660,7 @@ describe('the pane', () => {
 		await ui.press({ key: 'project:/work/app/core' });
 		await settle();
 		expect(store.get('project:/work/app')).toBe('/work/app/core');
-		expect(await ui.find({ type: 'Text', text: 'core' })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: 'core › status' })).toBeDefined();
 		expect(await ui.find({ key: 'switch-project' })).toBeDefined();
 
 		await ui.press({ key: 'switch-project' });
@@ -666,7 +676,26 @@ describe('the pane', () => {
 		const ui = await mountPane($, 'terminal');
 		await settle();
 		expect(cwds[0]).toBe('/work/app/web');
-		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
+	});
+
+	test('a pane narrower than the banner draws the compact one', async ($, on) => {
+		world(on);
+		await run($);
+		const ui = await mountPane($, 'terminal', 60);
+		await settle();
+		expect(await exact(ui, '╭──')).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
+	});
+
+	test('the picker names its keys and hides the tab keys', async ($, on) => {
+		world(on, { answer: WORKSPACE });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await exact(ui, 'choose a project')).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /1-9 open a project/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /switch tabs/ })).toBeUndefined();
 	});
 
 	test('a project of its own shows no switch control', async ($, on) => {
@@ -674,7 +703,7 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect(await ui.find({ type: 'Text', text: 'app' })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: 'app › status' })).toBeDefined();
 		expect(await ui.find({ key: 'switch-project' })).toBeUndefined();
 	});
 
@@ -698,13 +727,14 @@ describe('the pane', () => {
 		await settle();
 		expect(codes).toHaveLength(2);
 		expect(codes[1]).toBe('return await api.ping()');
-		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await again.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
 	const okColor = async (ui: Awaited<ReturnType<typeof mountPane>>) =>
 		(await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✓ ok'))?.props['color'];
+	/** The color of the banner's first run, at the gradient's left edge. */
 	const markColor = async (ui: Awaited<ReturnType<typeof mountPane>>) =>
-		(await ui.findAll({ type: 'Text' })).find((t) => t.children.includes(MARK))?.props['color'];
+		(await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('╭──'))?.props['color'];
 
 	test('a light theme swaps the green for the theme success color and keeps the brand blue', async ($, on) => {
 		world(on, { theme: 'light' });
@@ -712,7 +742,7 @@ describe('the pane', () => {
 		const ui = await mountPane($, 'terminal');
 		await settle();
 		expect(await okColor(ui)).toBe('success');
-		expect(await markColor(ui)).toBe(palette.nebula);
+		expect(await markColor(ui)).toBe(palette.galactic);
 	});
 
 	test('an ANSI or color-blind theme draws with the theme colors only', async ($, on) => {

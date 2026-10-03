@@ -1,7 +1,7 @@
 import type { EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
-import { MARK, badge, buttonRow, forTheme, kind, paint, palette, scheme, status } from './theme';
+import { BANNER_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, kind, paint, palette, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -25,12 +25,25 @@ const TAB_LABEL: Readonly<Record<Tab, string>> = {
 	unused: 'Unused',
 };
 
+/** One line under the tab row saying what the tab shows. */
+const TAB_HINT: Readonly<Record<Tab, string>> = {
+	status: 'Whether Constellation is reachable and your access key is accepted.',
+	diagnose: 'What the Constellation index holds for this project.',
+	deps: 'What a file imports, or what imports it.',
+	unused: 'Exports nothing imports. Verify each one before deleting it.',
+};
+
+/** The column a labeled row's value starts in. */
+const LABEL_WIDTH = 13;
+
 /** Rows a tab draws before it ends with a "+N more" line, and lines the text fallback keeps. */
 const MAX_ROWS = 15;
 const MAX_TEXT_LINES = 6;
 
-/** One thing a tab shows: a line of text, optionally led by a status or kind badge. */
+/** One thing a tab shows: a line of text, optionally led by a status or kind badge, or a labeled value. */
 export type Item = {
+	/** The name of a fact (`Connection`, `Symbols`): drawn dim in a fixed column, with the value after it. */
+	label?: string;
 	badge?: { kind: 'status' | 'kind'; value: string };
 	text: string;
 	/** A file the person can pick: drawn as a pressable row. */
@@ -86,7 +99,17 @@ function count(value: unknown): number | undefined {
 	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+/** Thousands separators for a count, as `3,079`. */
+function grouped(n: number): string {
+	return n.toLocaleString('en-US');
+}
+
 function lineOf(item: Item): string {
+	if (item.label !== undefined) {
+		const word = item.badge === undefined ? undefined : (item.badge.kind === 'status' ? status(item.badge.value) : kind(item.badge.value)).word;
+		const value = word !== undefined && item.text !== '' ? `${word} (${item.text})` : (word ?? item.text);
+		return `${item.label}: ${value}`;
+	}
 	if (item.badge?.kind === 'status') return `${item.text}: ${status(item.badge.value).word}`;
 	if (item.badge?.kind === 'kind') return `  ${item.text} (${kind(item.badge.value).word})`;
 	return item.text;
@@ -122,13 +145,13 @@ function capped(items: Item[]): Item[] {
 function connection(result: unknown): Item[] {
 	const pong = isRecord(result) && result['pong'] === true;
 	return [
-		{ badge: { kind: 'status', value: pong ? 'healthy' : 'unknown' }, text: 'connection' },
-		{ badge: { kind: 'status', value: pong ? 'healthy' : 'unknown' }, text: 'auth' },
+		{ label: 'Connection', badge: { kind: 'status', value: pong ? 'healthy' : 'unknown' }, text: '' },
+		{ label: 'Auth', badge: { kind: 'status', value: pong ? 'healthy' : 'unknown' }, text: '' },
 	];
 }
 
 function statusItems(result: unknown, project: string | undefined): Item[] {
-	return [...connection(result), ...(project === undefined ? [] : [{ text: `project ${project}` }])];
+	return [...connection(result), ...(project === undefined ? [] : [{ label: 'Project', text: project }])];
 }
 
 function diagnoseItems(result: unknown): Item[] {
@@ -137,19 +160,20 @@ function diagnoseItems(result: unknown): Item[] {
 	const indexed = caps['isIndexed'];
 	const items = connection(ping);
 	items.push({
+		label: 'Index',
 		badge: { kind: 'status', value: indexed === true ? 'indexed' : indexed === false ? 'stale' : 'unknown' },
-		text: indexed === false ? 'index (not indexed)' : 'index',
+		text: indexed === false ? 'not indexed' : '',
 	});
 	const languages = caps['languages'] ?? caps['supportedLanguages'];
 	if (Array.isArray(languages) && languages.length > 0) {
-		items.push({ text: `languages ${languages.filter((l) => typeof l === 'string').join(', ')}` });
+		items.push({ label: 'Languages', text: languages.filter((l) => typeof l === 'string').join(', ') });
 	}
 	const symbols = count(caps['symbolCount']);
-	if (symbols !== undefined) items.push({ text: `${symbols} symbols` });
+	if (symbols !== undefined) items.push({ label: 'Symbols', text: grouped(symbols) });
 	const files = count(caps['fileCount']);
-	if (files !== undefined) items.push({ text: `${files} files` });
+	if (files !== undefined) items.push({ label: 'Files', text: grouped(files) });
 	const branch = text(caps['indexedBranch']);
-	if (branch !== undefined) items.push({ text: `branch ${branch}` });
+	if (branch !== undefined) items.push({ label: 'Branch', text: branch });
 	return items;
 }
 
@@ -183,7 +207,7 @@ function unusedItems(result: unknown): Item[] {
 	}
 	const summary = isRecord(result['summary']) ? result['summary'] : {};
 	const total = count(summary['totalOrphanedSymbols']) ?? symbols.length;
-	const items: Item[] = [{ text: `${total} unused symbols`, heading: true }];
+	const items: Item[] = [{ text: `${grouped(total)} unused symbols`, heading: true }];
 	for (const [file, group] of byFile) {
 		items.push({ text: file, dim: true });
 		for (const symbol of group) {
@@ -508,6 +532,18 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					);
 				} else if (path !== undefined) {
 					body.push(el.Button({ key: `dep:${path}`, label: path, plain: true, onPress: () => showDeps(path) }));
+				} else if (item.label !== undefined) {
+					const tone =
+						item.badge === undefined ? undefined : forTheme(item.badge.kind === 'status' ? status(item.badge.value) : kind(item.badge.value), tint);
+					body.push(
+						el.Box({
+							flexDirection: 'row',
+							children: [
+								el.Text({ dimColor: true, children: item.label.padEnd(LABEL_WIDTH) }),
+								tone === undefined ? el.Text({ children: item.text }) : badge(el, item.text, tone),
+							],
+						}),
+					);
 				} else if (item.badge?.kind === 'status') {
 					body.push(badge(el, item.text, forTheme(status(item.badge.value), tint)));
 				} else if (item.badge?.kind === 'kind') {
@@ -554,40 +590,63 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}),
 		);
 
+		// The full CLI banner needs its 84 columns and a monospace grid, so the
+		// Desktop app and a narrow pane get the compact one.
+		const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns - 2 : 0;
+		const tag = picking ? 'choose a project' : `${project ?? 'constellation'} › ${selected}`;
+		const head = e.surface === 'terminal' && columns >= BANNER_WIDTH ? banner(el, tag, tint) : compactBanner(el, tag, tint);
+		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
+		const keys = picking
+			? '1-9 open a project · enter opens the selected one · esc close'
+			: `1-4 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
+
 		return el.Box({
 			flexDirection: 'column',
 			padding: 1,
 			gap: 1,
 			children: [
+				head,
+				...(meta === undefined && !canSwitch
+					? []
+					: [
+							el.Box({
+								flexDirection: 'row',
+								columnGap: 1,
+								children: [
+									...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
+									...(meta !== undefined && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),
+									...(canSwitch
+										? [el.Button({ key: 'switch-project', label: 'switch project', hotkey: 'p', plain: true, onPress: switchProject })]
+										: []),
+								],
+							}),
+						]),
+				...(picking
+					? []
+					: [
+							el.Box({
+								flexDirection: 'column',
+								children: [el.Box({ flexDirection: 'row', columnGap: 2, children: tabs }), rule, el.Text({ dimColor: true, children: TAB_HINT[selected] })],
+							}),
+						]),
+				el.Box({ flexDirection: 'column', children: body }),
 				el.Box({
-					flexDirection: 'row',
-					columnGap: 1,
+					flexDirection: 'column',
 					children: [
-						el.Text(accent === undefined ? { children: MARK } : { color: accent, children: MARK }),
-						el.Text({ bold: true, children: 'Constellation' }),
-						...(project === undefined ? [] : [el.Text({ children: project })]),
-						...(canSwitch
-							? [
-									el.Text({ dimColor: true, children: '·' }),
-									el.Button({ key: 'switch-project', label: 'switch project', hotkey: 'p', plain: true, onPress: switchProject }),
-								]
-							: []),
+						picking
+							? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(close)] })
+							: buttonRow(el, close, {
+									key: 'refresh',
+									label: 'Refresh',
+									hotkey: 'r',
+									onPress: () => {
+										drop(selected);
+										redraw();
+									},
+								}),
+						el.Text({ dimColor: true, children: keys }),
 					],
 				}),
-				...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
-				...(picking ? [] : [el.Box({ flexDirection: 'row', columnGap: 2, children: tabs })]),
-				el.Box({ flexDirection: 'column', children: body }),
-				picking
-					? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(close)] })
-					: buttonRow(el, close, {
-							key: 'refresh',
-							label: 'Refresh',
-							hotkey: 'r',
-							onPress: () => {
-								drop(selected);
-								redraw();
-							},
-						}),
 			],
 		});
 	});
