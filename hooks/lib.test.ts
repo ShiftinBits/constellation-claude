@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
+import { canDraw, codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -115,6 +115,16 @@ describe('codeIntel', () => {
 		});
 	});
 
+	test('keeps the candidate project roots of a CWD_NOT_INDEXED error', async () => {
+		const body = JSON.stringify({
+			success: false,
+			error: { code: 'CWD_NOT_INDEXED', message: 'no project', context: { gitRoot: '/w', candidates: ['/w/a', 3, '/w/b'] } },
+		});
+		const { host } = mcpHost(CONNECTED, () => text(body));
+		const envelope = await codeIntel(host, 'x', { cwd: '/w' });
+		expect(envelope.error?.candidates).toEqual(['/w/a', '/w/b']);
+	});
+
 	test('returns INVALID_RESPONSE for text that is not JSON, not an envelope, or missing', async () => {
 		const bodies = ['not json', '[1]', '{"result":1}'];
 		for (const body of bodies) {
@@ -206,5 +216,31 @@ describe('projectRoot', () => {
 	test('returns null when no ancestor has one', async () => {
 		const exists = existsIn(['/other/constellation.json']);
 		expect(await projectRoot('/work', exists, '/repo/src/file.ts')).toBeNull();
+	});
+});
+
+describe('canDraw', () => {
+	test('is true for a terminal', () => {
+		expect(canDraw(['terminal'])).toBe(true);
+	});
+
+	test('is true for the desktop app', () => {
+		expect(canDraw(['desktop'])).toBe(true);
+	});
+
+	test('is false for vscode alone', () => {
+		expect(canDraw(['vscode'])).toBe(false);
+	});
+
+	test('is false for mobile alone', () => {
+		expect(canDraw(['mobile'])).toBe(false);
+	});
+
+	test('is false for no surfaces', () => {
+		expect(canDraw([])).toBe(false);
+	});
+
+	test('is true when any surface can draw', () => {
+		expect(canDraw(['vscode', 'terminal'])).toBe(true);
 	});
 });

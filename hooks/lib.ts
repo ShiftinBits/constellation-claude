@@ -1,4 +1,4 @@
-import type { EngineInterface } from 'claude-code';
+import type { EngineInterface, RenderSurface } from 'claude-code';
 
 /**
  * The MCP calls `codeIntel` makes. `claude plugin validate` follows `$` only
@@ -12,6 +12,10 @@ export type CodeIntelError = {
 	code: string;
 	message?: string;
 	guidance?: readonly string[];
+	/** Project roots code_intel found under the git root, sent with `CWD_NOT_INDEXED`. */
+	candidates?: readonly string[];
+	/** A documentation link the server sends with the error. */
+	docs?: string;
 };
 
 export type CodeIntelEnvelope = {
@@ -33,6 +37,16 @@ const PROJECT_FILE = 'constellation.json';
  */
 export function isConfigured(accessKey: string | undefined): boolean {
 	return (accessKey ?? '').startsWith('ak:');
+}
+
+/**
+ * True when the session can draw a pane: a `terminal` or `desktop` surface is
+ * present. `CommandRunInput` has no surface field, so the handler passes
+ * `await $.session.surfaces()`, which validate sees as a literal call. Later
+ * pane stories reuse this check.
+ */
+export function canDraw(surfaces: readonly RenderSurface[]): boolean {
+	return surfaces.includes('terminal') || surfaces.includes('desktop');
 }
 
 /** The string field `name` of a tool call or event, or undefined. */
@@ -91,6 +105,11 @@ function parseError(value: unknown): CodeIntelError | undefined {
 	if (typeof value.message === 'string') error.message = value.message;
 	if (Array.isArray(value.guidance)) {
 		error.guidance = value.guidance.filter((g): g is string => typeof g === 'string');
+	}
+	if (typeof value.docs === 'string' && value.docs !== '') error.docs = value.docs;
+	const candidates = isRecord(value.context) ? value.context.candidates : undefined;
+	if (Array.isArray(candidates)) {
+		error.candidates = candidates.filter((c): c is string => typeof c === 'string');
 	}
 	return error;
 }
