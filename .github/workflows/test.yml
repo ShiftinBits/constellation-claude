@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   test:
-    name: Validate, test and type-check
+    name: Build, test and validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -40,20 +40,12 @@ jobs:
           npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
 
-      - name: Validate the marketplace manifest
-        run: claude plugin validate --strict .
-
-      - name: Validate the plugin manifest and hooks module
-        run: claude plugin validate --strict .claude-plugin/plugin.json
-
-      - name: Run the mod tests
-        run: claude plugin test .
-
-      # Loading the plugin with --plugin-dir writes the engine's type
-      # declarations (.claude-plugin/types/) and the root tsconfig.json that
-      # tsc needs. /constellation is a mod command, so it runs with no model
-      # call and no sign-in; it also checks that the hooks module loads.
-      - name: Load the plugin and run /constellation
+      # Build. The plugin has no compile step: loading it with --plugin-dir
+      # writes the engine's type declarations (.claude-plugin/types/) and the
+      # root tsconfig.json, both git-ignored, that tsc needs. /constellation is
+      # a mod command, so it runs with no model call and no sign-in, and it
+      # checks that the hooks module loads.
+      - name: "Build: load the plugin and run /constellation"
         run: |
           out="$(claude -p "/constellation status" --plugin-dir .)"
           echo "$out"
@@ -61,10 +53,22 @@ jobs:
           test -f .claude-plugin/types/claude-code/index.d.ts
           test -f tsconfig.json
 
-      - name: Type-check
+      - name: "Build: type-check"
         run: npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p .
 
-      - name: No color literals outside hooks/theme.ts
+      - name: "Test: run the mod tests"
+        run: claude plugin test .
+
+      # Validate. The repository is a marketplace and a plugin, and validate
+      # reads one manifest per run: the root resolves to the marketplace
+      # manifest, and the plugin manifest run also checks the hooks module.
+      - name: "Validate: marketplace manifest (strict)"
+        run: claude plugin validate --strict .
+
+      - name: "Validate: plugin manifest and hooks module (strict)"
+        run: claude plugin validate --strict .claude-plugin/plugin.json
+
+      - name: "Validate: no color literals outside hooks/theme.ts"
         run: |
           if grep -rnE '#[0-9A-Fa-f]{6}|0x[0-9A-Fa-f]{6}' hooks/ | grep -v '^hooks/theme\.ts:'; then
             echo "::error::Color literals belong in hooks/theme.ts only"
