@@ -190,7 +190,9 @@ describe('summarize', () => {
 		]);
 		expect(s.items.find((i) => i.text === 're-invoke code_intel')).toBeUndefined();
 		expect(s.items.find((i) => i.badge !== undefined)).toBeUndefined();
-		expect(s.lines).toContain('re-invoke code_intel');
+		// The text reply lists the projects and drops the guidance written for an agent.
+		expect(s.lines).toContain('  core  /w/core');
+		expect(s.lines.join('\n')).not.toContain('code_intel');
 	});
 
 	test('status without a pong is unknown', () => {
@@ -253,9 +255,8 @@ describe('summarize', () => {
 
 	test('an error is the code, the message and the guidance', () => {
 		const s = summarize('status', { success: false, error: { code: 'AUTH_ERROR', message: 'Bad key', guidance: ['Run constellation auth'] } });
-		expect(s.lines).toEqual(['AUTH_ERROR: Bad key', 'Run constellation auth']);
-		expect(s.items[0]).toMatchObject({ badge: { kind: 'status', value: 'error' } });
-		expect(s.items[1]).toMatchObject({ dim: true });
+		expect(s.lines).toEqual(["✗ Your access key wasn't accepted", '  Bad key', '', '  Next steps', '  1. constellation auth', '', '  Code   AUTH_ERROR']);
+		expect(s.explanation).toMatchObject({ title: "Your access key wasn't accepted", steps: ['constellation auth'], code: 'AUTH_ERROR' });
 		expect(s.error?.code).toBe('AUTH_ERROR');
 	});
 });
@@ -284,8 +285,9 @@ describe('command.run without a pane', () => {
 	test('an error answers with its code and guidance', async ($, on) => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($);
-		expect(r.text).toContain('AUTH_ERROR: Bad key');
-		expect(r.text).toContain('Run constellation auth');
+		expect(r.text?.split('\n').slice(0, 2)).toEqual(['>_CONSTELLATION:// status', "✗ Your access key wasn't accepted"]);
+		expect(r.text).toContain('  1. constellation auth');
+		expect(r.text).toContain('  Code   AUTH_ERROR');
 	});
 
 	test('deps needs a file', async ($, on) => {
@@ -364,8 +366,11 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect(await ui.find({ type: 'Text', text: /✗ error PROJECT_NOT_INDEXED/ })).toBeDefined();
-		expect(await ui.find({ type: 'Text', text: 'Run constellation index' })).toMatchObject({ props: { dimColor: true } });
+		expect(await ui.find({ type: 'Text', text: '✗ error' })).toBeDefined();
+		expect((await exact(ui, "This project hasn't been indexed yet"))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'Not indexed'))?.props['dimColor']).toBe(true);
+		expect((await exact(ui, 'constellation index'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'PROJECT_NOT_INDEXED'))?.props['dimColor']).toBe(true);
 		expect(await ui.find({ type: 'Button', key: 'dep:x' })).toBeUndefined();
 	});
 
@@ -458,8 +463,9 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect(await ui.find({ type: 'Text', text: /✗ error MCP_CALL_FAILED/ })).toBeDefined();
+		expect(await exact(ui, 'The call to the Constellation MCP server failed')).toBeDefined();
 		expect(await ui.find({ type: 'Text', text: /no implementation for mcp\.call/ })).toBeDefined();
+		expect(await exact(ui, 'MCP_CALL_FAILED')).toBeDefined();
 	});
 
 	test('a drawing that cannot read the working directory draws an error badge', async ($, on) => {
@@ -472,8 +478,8 @@ describe('the pane', () => {
 		armed.cwd = true;
 		const again = await mountPane($, 'terminal');
 		await settle();
-		expect(await again.find({ type: 'Text', text: /✗ error MCP_CALL_FAILED/ })).toBeDefined();
-		expect(await again.find({ type: 'Text', text: /MCP_CALL_FAILED: no implementation for session\.cwd/ })).toBeDefined();
+		expect(await exact(again, 'The call to the Constellation MCP server failed')).toBeDefined();
+		expect(await again.find({ type: 'Text', text: /no implementation for session\.cwd/ })).toBeDefined();
 	});
 
 	test('an unreadable theme falls back to the dark colors', async ($, on) => {

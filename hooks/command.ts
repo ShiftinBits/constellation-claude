@@ -1,6 +1,8 @@
-import type { EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
+import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
+import { explain, explainLines } from './explain';
+import type { Explanation } from './explain';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
@@ -61,6 +63,8 @@ export type Summary = {
 	lines: string[];
 	items: Item[];
 	error?: CodeIntelError;
+	/** The error laid out for a person, which the pane and the text reply draw in place of `items`. */
+	explanation?: Explanation;
 };
 
 export type SummaryOptions = {
@@ -120,12 +124,10 @@ function fromItems(items: Item[]): Summary {
 }
 
 function failure(error: CodeIntelError): Summary {
-	const message = error.message ?? 'The request failed';
-	const guidance = error.guidance ?? [];
+	const explanation = explain(error);
 	const candidates = error.candidates ?? [];
 	// With project roots to offer (the working directory sits above several
-	// projects), the pane asks for one: no error badge, and none of the
-	// guidance written for an agent (re-invoke code_intel with a cwd).
+	// projects), the pane asks for one instead of drawing the error.
 	const items: Item[] =
 		candidates.length > 0
 			? [
@@ -133,8 +135,8 @@ function failure(error: CodeIntelError): Summary {
 					{ text: 'This folder holds several Constellation projects.', dim: true },
 					...candidates.map((c): Item => ({ text: projectName(c) ?? c, project: c })),
 				]
-			: [{ badge: { kind: 'status', value: 'error' }, text: `${error.code}: ${message}` }, ...guidance.map((g): Item => ({ text: g, dim: true }))];
-	return { lines: [`${error.code}: ${message}`, ...guidance], items, error };
+			: [];
+	return { lines: explainLines(explanation), items, error, explanation };
 }
 
 function capped(items: Item[]): Item[] {
@@ -366,6 +368,55 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	$.ui.invalidate('ui.render');
 }
 
+/**
+ * An error in the pane: the error badge and the headline in bold, then,
+ * indented under it, the detail and notes dim, the numbered steps with each
+ * command bold, and the docs link and the code last.
+ */
+function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderElement {
+	const row = (label: string, value: RenderElement) =>
+		el.Box({ flexDirection: 'row', children: [el.Text({ dimColor: true, children: label.padEnd(7) }), value] });
+	const under: RenderElement[] = [];
+	if (ex.detail !== undefined || ex.notes.length > 0) {
+		under.push(
+			el.Box({
+				flexDirection: 'column',
+				children: [ex.detail, ...ex.notes].filter((t): t is string => t !== undefined).map((t) => el.Text({ dimColor: true, children: t })),
+			}),
+		);
+	}
+	if (ex.steps.length > 0) {
+		under.push(
+			el.Box({
+				flexDirection: 'column',
+				children: [
+					el.Text({ bold: true, children: 'Next steps' }),
+					...ex.steps.map((step, i) =>
+						el.Box({ flexDirection: 'row', columnGap: 1, children: [el.Text({ dimColor: true, children: `${i + 1}.` }), el.Text({ bold: true, children: step })] }),
+					),
+				],
+			}),
+		);
+	}
+	under.push(
+		el.Box({
+			flexDirection: 'column',
+			children: [
+				...(ex.docs === undefined ? [] : [row('Docs', el.Link({ href: ex.docs, label: ex.docs }))]),
+				row('Code', el.Text({ dimColor: true, children: ex.code })),
+			],
+		}),
+	);
+	return el.Box({
+		flexDirection: 'column',
+		gap: 1,
+		children: [
+			el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', forTheme(status('error'), tint)), el.Text({ bold: true, children: ex.title })] }),
+			el.Box({ flexDirection: 'column', gap: 1, paddingLeft: 2, children: under }),
+		],
+	});
+}
+
 /** Reads one project's capabilities for the picker; a result that lands after the pane closed is dropped. */
 async function runDetail($: EngineInterface, root: string): Promise<void> {
 	detailsPending.add(root);
@@ -420,6 +471,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			);
 			const summary = summarize(tab, envelope, { path, project: projectName(dir) });
 			const meta = metadata(envelope);
+			if (summary.explanation !== undefined) return { text: [`${PROMPT} ${tab}`, ...summary.lines].join('\n') };
 			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
 			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
@@ -502,7 +554,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				}),
 			);
 		}
-		if (summary !== undefined) {
+		if (summary?.explanation !== undefined && !summary.items.some((i) => i.project !== undefined)) {
+			body.push(errorView(el, summary.explanation, tint));
+		} else if (summary !== undefined) {
 			let row = 0;
 			for (const item of summary.items) {
 				const path = item.path;

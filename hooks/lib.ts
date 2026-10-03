@@ -14,6 +14,8 @@ export type CodeIntelError = {
 	guidance?: readonly string[];
 	/** Project roots code_intel found under the git root, sent with `CWD_NOT_INDEXED`. */
 	candidates?: readonly string[];
+	/** A documentation link the server sends with the error. */
+	docs?: string;
 };
 
 export type CodeIntelEnvelope = {
@@ -104,6 +106,7 @@ function parseError(value: unknown): CodeIntelError | undefined {
 	if (Array.isArray(value.guidance)) {
 		error.guidance = value.guidance.filter((g): g is string => typeof g === 'string');
 	}
+	if (typeof value.docs === 'string' && value.docs !== '') error.docs = value.docs;
 	const candidates = isRecord(value.context) ? value.context.candidates : undefined;
 	if (Array.isArray(candidates)) {
 		error.candidates = candidates.filter((c): c is string => typeof c === 'string');
