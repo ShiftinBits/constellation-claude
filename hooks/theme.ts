@@ -331,9 +331,9 @@ export function header(el: ElementTable, columns: number, grid: boolean, to: Sch
 	return compactBanner(el, to);
 }
 
-/** The banner for a narrow site or the Desktop app: the mark and name along the gradient. */
+/** The header for a narrow site or the Desktop app: `>_CONSTELLATION://` in bold along the gradient. */
 export function compactBanner(el: ElementTable, to: Scheme): RenderElement {
-	const chars = [...`${MARK} C O N S T E L L A T I O N`];
+	const chars = [...'>_CONSTELLATION://'];
 	const runs = chars.map((ch, i) => {
 		const color = gradientAt(i / (chars.length - 1), to);
 		return el.Text(color === undefined ? { children: ch } : { color, children: ch });

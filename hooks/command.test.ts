@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { COMMAND, parseArgs, summarize } from './command';
 import type { Tab } from './command';
-import { MARK, palette } from './theme';
+import { palette } from './theme';
 
 const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -317,7 +317,7 @@ describe('the pane', () => {
 			const ui = await mountPane($, surface);
 			await settle();
 			// The terminal draws the CLI banner, starting in galactic; Desktop the compact one.
-			const first = surface === 'terminal' ? '╭──' : MARK;
+			const first = surface === 'terminal' ? '╭──' : '>';
 			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
 			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
@@ -698,7 +698,7 @@ describe('the pane', () => {
 		await medium.unmount();
 		const narrow = await mountPane($, 'terminal', 30);
 		await settle();
-		expect(await reads(narrow, /✦ C O N S T E L L A T I O N/)).toBe(true);
+		expect(await reads(narrow, />_CONSTELLATION:\/\/$/)).toBe(true);
 		expect(await reads(narrow, /CODE_INTEL/)).toBe(false);
 	});
 

@@ -239,9 +239,15 @@ describe('banner', () => {
 		expect(lines[5]?.text.startsWith('╰')).toBe(true);
 	});
 
-	test('the compact banner draws the mark and the name', async ($, on) => {
-		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'none'));
-		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
+	test('the compact header is >_CONSTELLATION:// in bold along the gradient', async ($, on) => {
+		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'brand'));
+		const line = await ui.find({ type: 'Text', text: '>_CONSTELLATION://' });
+		expect(line?.props['bold']).toBe(true);
+		const runs = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && typeof t.children[0] === 'string');
+		expect(runs.map((r) => r.children[0]).join('')).toBe('>_CONSTELLATION://');
+		expect(runs[0]?.props['color']).toBe(palette.galactic);
+		expect(runs.at(-1)?.props['color']).toBe(palette.galactic);
+		expect(runs[9]?.props['color']).not.toBe(palette.galactic);
 	});
 
 	const BOX = [
