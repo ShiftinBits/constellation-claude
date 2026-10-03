@@ -1,6 +1,8 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
+import type { McpPort } from './lib';
+import { fileRisk } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerSession } from './session';
 
@@ -226,6 +228,24 @@ describe('nudge budget', () => {
 		existsCalls = 0;
 		expect(await m.search()).toBeUndefined();
 		expect(existsCalls).toBe(0);
+	});
+
+	test('a SessionStart clear empties the risk cache', async () => {
+		let calls = 0;
+		const mcp: McpPort = {
+			connect: async () => ({ isConnected: true, server: 's' }),
+			call: async () => {
+				calls += 1;
+				return { content: [{ type: 'text', text: JSON.stringify({ success: true, result: { dependents: [], exported: [] } }) }], isError: false };
+			},
+		};
+		const m = load({});
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		expect(calls).toBe(1);
+		await m.sessionStart('clear');
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		expect(calls).toBe(2);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

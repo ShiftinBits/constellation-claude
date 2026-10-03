@@ -46,6 +46,28 @@
 				"none"
 			],
 			"default": "brand"
+		},
+		"impactGate": {
+			"type": "string",
+			"title": "Impact gate",
+			"description": "What happens before Claude edits a high-impact file. off does nothing; dialog asks you before an auto-approved edit to a high-impact file; native sends that edit to Claude Code's own permission prompt; require-analysis refuses Claude's first edit to such a file until it checks the impact (works headless and in CI).",
+			"options": [
+				"off",
+				"dialog",
+				"native",
+				"require-analysis"
+			],
+			"default": "off"
+		},
+		"impactThreshold": {
+			"type": "string",
+			"title": "Impact gate threshold",
+			"description": "The lowest impact level the gate acts on: high, or only critical.",
+			"options": [
+				"high",
+				"critical"
+			],
+			"default": "high"
 		}
 	}
 }
