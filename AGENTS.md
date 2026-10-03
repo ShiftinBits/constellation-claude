@@ -44,7 +44,9 @@ hooks/                       In-process hooks module (no settings hooks, no node
 ├── augment.test.ts          Tests for augment.ts (claude plugin test)
 ├── session.ts               Session lifecycle: one classic.SessionStart reset (clear, resume, fork) and turn.complete pruning of subagent state
 ├── lib.ts                   Shared helpers: isConfigured, projectRoot, codeIntel, stringArg
-└── lib.test.ts              Tests for lib.ts (claude plugin test)
+├── lib.test.ts              Tests for lib.ts (claude plugin test)
+├── theme.ts                 Brand theme leaf module: palette, rgb, MARK, Tone, status, risk, kind, forTheme, badge, buttonRow
+└── theme.test.ts            Tests for theme.ts (claude plugin test)
 
 output-styles/
 └── code-intelligence.md     "Code Intelligence" output style (opt-in via /config)
@@ -122,6 +124,20 @@ All hooks live in the hooks module and run in-process. `hooks/nudge.ts` exports 
   - Dedupe: a module `Set` of agent key, project root and name. The hook claims its entry before it awaits, so two parallel searches show one line, and releases it when no line is shown. `resetAugment()` (from `session.ts` on `clear`, `resume` and `fork`) clears it and the lookups, and `forgetAgentLines(agentId)` drops a subagent's entries when its run ends. A failure's backoff timer deletes its key only if the map still holds that same promise, so a timer from before a reset never evicts a newer lookup. `registerAugment` clears both, so each load (and each loaded-plugin test) starts empty.
   - Budget: `usedCodeIntelThisTurn(e)` is the only budget check, read-only. The augment never calls `spendNudge` and is not limited by `nudgeLimit`; its own once-per-symbol rule bounds it. `tool.call` fires for every loop, so subagent searches are augmented too.
   - `augmentGrep` is a `userConfig` boolean (default true). `registerAugment` registers nothing when it is `false`; an unset value (a build that does not fill defaults) counts as on, as an unset `nudgeLimit` falls back to its default.
+
+- **Brand theme** (`hooks/theme.ts`, a leaf module that imports only types from `claude-code` and never uses `$`): the only file allowed to hold color literals. Helpers take values or an element table (`$.ui.resolve(e)`), never `$`. Exports `palette` (hex strings), `rgb` (the five accents as integers for Raster cells), `MARK` (`✦`), `Tone`, `status`, `risk`, `kind`, `forTheme`, `badge` and `buttonRow`. Unknown input to `status`, `risk` and `kind` (callers pass strings from API data) falls back to a dim tone.
+  - Terminal rules: no background colors and no muted-white text; primary text omits `color` and secondary text uses `dimColor`; never color alone, so every colored badge carries a word and a glyph; one `MARK` per tree; buttons are ordered cancel left, affirmative right, in a row with `justifyContent: 'flex-end'` and `columnGap: 2`, with no color props; padding and gap are 1; redraw only on state change and keep decorative motion at 2 fps or less. The last six palette entries (mutedSilver, terminalGray, mutedWhite, deepSpace, charcoal, dimOutline) are for Desktop Svg only.
+  - `forTheme(tone, light)` is the one light-theme fallback: on light, a solar or cosmic color is dropped and the tone is made bold (the engine types do not confirm a `success` theme key), and every other tone is unchanged. Callers pass the boolean; `theme.ts` never reads the theme.
+  - `kind()` follows the brand reference (function and method nebula, class galactic, variable cosmic, import solar, error stellar) and adds these extensions:
+
+    | Kind | Color | Source |
+    |------|-------|--------|
+    | interface, type | galactic | agrees with constellation-web graphTheme |
+    | module | nebula | constellation-web graphTheme |
+    | enum | galactic | extension |
+    | property, constant | cosmic | extension |
+
+  - constellation-web `graphTheme` swaps the variable and import colors relative to the brand reference; `theme.ts` follows the brand reference.
 
 Each `classic.*` handler returns `{ ...r, additionalContext: [...(r.additionalContext ?? []), TEXT] }`, where `r` is what `next(e)` returned. `additionalContext` is a `string[]`, one entry per hook, and spreading `r` keeps any `allow`, `ask`, or `deny` decision beneath. The text constants (`SESSION_TEXT`, `REMINDER_TEXT`) are exported from `hooks/nudge.ts`; keep them constant (no counts or paths) so the prompt cache stays valid.
 
