@@ -1,4 +1,4 @@
-import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCheckResult } from 'claude-code';
+import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCallArgs, ToolCheckResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { forgetAgentImpact, headline, registerImpactGate } from './impact';
 import { type FileRisk, noteCodeIntel, resetRiskCache } from './risk';
@@ -456,5 +456,32 @@ describe('impact gate as a loaded plugin', () => {
 		});
 		expect(await $.tool.check({ tool: 'Edit', input: { file_path: FILE } })).toEqual({ decision: 'allow' });
 		expect(raised).toEqual([]);
+	});
+
+	/** Answers the gate's reads as an indexed project where `FILE` has 25 dependents; the Edit itself runs. */
+	function world(on: On) {
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		on('session.cwd', () => ({ value: PROJECT }));
+		on('fs.exists', (_$, e) => ({ value: e.path === `${PROJECT}/constellation.json` || e.path === FILE }));
+		on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:constellation:constellation' } }));
+		on('mcp.call', () => {
+			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), exported: ['Core'] };
+			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result }) }], isError: false } };
+		});
+		on('tool.call', () => ({ result: 'ran' }));
+	}
+
+	const EDIT = { tool: 'Edit', file_path: FILE, tool_use_id: 'u1' } as unknown as ToolCallArgs;
+
+	test('impactGate require-analysis refuses the first edit to a high-risk file and lets the retry run', { options: { impactGate: 'require-analysis' } }, async ($, on) => {
+		world(on);
+		const first = await $.tool.call(EDIT);
+		expect('deny' in first ? first.deny : undefined).toContain('25 dependents');
+		expect(await $.tool.call(EDIT)).toEqual({ result: 'ran' });
+	});
+
+	test('impactGate unset lets an edit to a high-risk file run', async ($, on) => {
+		world(on);
+		expect(await $.tool.call(EDIT)).toEqual({ result: 'ran' });
 	});
 });

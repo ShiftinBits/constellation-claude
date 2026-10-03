@@ -2,7 +2,7 @@ import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
 import type { McpPort } from './lib';
-import { fileRisk } from './risk';
+import { fileRisk, hasEvidence, resetRiskCache } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerSession } from './session';
 
@@ -10,7 +10,7 @@ const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
-type Answer = { additionalContext?: string[]; deny?: string };
+type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string };
 type Next = (e: object) => Promise<Answer>;
 type Handler = ($: object, e: object, next: Next) => Promise<Answer>;
 type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
@@ -44,6 +44,7 @@ const $ = {
  * directly: the test kit does not surface a PreToolUse handler's added context.
  */
 function load(options: PluginOptions) {
+	resetRiskCache();
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -76,6 +77,9 @@ function load(options: PluginOptions) {
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
+		/** A code_intel call running `code` for `agentId`, over a bottom that answers `answer`. */
+		program: (agentId: string, code: string, answer: Answer) =>
+			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
@@ -246,6 +250,21 @@ describe('nudge budget', () => {
 		await m.sessionStart('clear');
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		expect(calls).toBe(2);
+	});
+
+	test('a code_intel call records its code and result text as evidence for its agent only', async () => {
+		const m = load({});
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' });
+		expect(hasEvidence('agent-1', ['src/core.ts'])).toBe(true);
+		expect(hasEvidence('agent-1', ['Core'])).toBe(true);
+		expect(hasEvidence('agent-2', ['src/core.ts'])).toBe(false);
+		expect(hasEvidence('main', ['src/core.ts'])).toBe(false);
+	});
+
+	test('a denied code_intel call records no evidence', async () => {
+		const m = load({});
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { deny: 'x' });
+		expect(hasEvidence('agent-1', ['src/core.ts'])).toBe(false);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {
