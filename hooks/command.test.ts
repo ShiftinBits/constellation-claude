@@ -142,6 +142,11 @@ async function exact(ui: Awaited<ReturnType<typeof mountPane>>, text: string) {
 	return (await ui.findAll({ type: 'Text' })).find((t) => t.children.length === 1 && t.children[0] === text);
 }
 
+/** Whether any Text in the drawing reads `pattern`. */
+async function reads(ui: Awaited<ReturnType<typeof mountPane>>, pattern: RegExp) {
+	return (await ui.find({ type: 'Text', text: pattern })) !== undefined;
+}
+
 /** Lets the query a drawing started settle and the redraw it asked for run. */
 async function settle(): Promise<void> {
 	for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -679,13 +684,22 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
-	test('a pane narrower than the banner draws the compact one', async ($, on) => {
+	test('the header follows the pane width: banner, then the boxed header, then one line', async ($, on) => {
 		world(on);
 		await run($);
-		const ui = await mountPane($, 'terminal', 60);
+		const wide = await mountPane($, 'terminal', 100);
 		await settle();
-		expect(await exact(ui, '╭──')).toBeUndefined();
-		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
+		expect(await reads(wide, /CONSTELLATIONDEV\.IO/)).toBe(true);
+		await wide.unmount();
+		const medium = await mountPane($, 'terminal', 60);
+		await settle();
+		expect(await reads(medium, />_ CONSTELLATION:\/\/CODE_INTEL/)).toBe(true);
+		expect(await reads(medium, /CONSTELLATIONDEV\.IO/)).toBe(false);
+		await medium.unmount();
+		const narrow = await mountPane($, 'terminal', 30);
+		await settle();
+		expect(await reads(narrow, /✦ C O N S T E L L A T I O N/)).toBe(true);
+		expect(await reads(narrow, /CODE_INTEL/)).toBe(false);
 	});
 
 	test('the picker names its keys and hides the tab keys', async ($, on) => {

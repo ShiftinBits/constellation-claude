@@ -1,7 +1,7 @@
 import type { EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
-import { BANNER_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, kind, paint, palette, scheme, status } from './theme';
+import { BANNER_WIDTH, MARK, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -590,10 +590,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}),
 		);
 
-		// The full banner needs its 72 columns and a monospace grid, so the
-		// Desktop app and a narrow pane get the compact one.
+		// The pane's width less its padding; Claude Code redraws when it changes.
 		const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns - 2 : 0;
-		const head = e.surface === 'terminal' && columns >= BANNER_WIDTH ? banner(el, tint) : compactBanner(el, tint);
+		const head = header(el, columns, e.surface === 'terminal', tint);
 		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'

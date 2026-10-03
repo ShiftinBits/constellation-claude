@@ -281,12 +281,12 @@ export const BANNER_WIDTH = 72;
 /** Characters per colored run: the gradient steps every few columns, not every one, to keep the tree small. */
 const RUN = 3;
 
-/** One banner line, colored run by run along the gradient by column. */
-function gradientLine(el: ElementTable, text: string, to: Scheme): RenderElement {
+/** One banner line, colored run by run along the gradient by column across `width`. */
+function gradientLine(el: ElementTable, text: string, width: number, to: Scheme): RenderElement {
 	const chars = [...text];
 	const runs: RenderElement[] = [];
 	for (let i = 0; i < chars.length; i += RUN) {
-		const color = gradientAt(i / (BANNER_WIDTH - 1), to);
+		const color = gradientAt(i / (width - 1), to);
 		const chunk = chars.slice(i, i + RUN).join('');
 		runs.push(el.Text(color === undefined ? { children: chunk } : { color, children: chunk }));
 	}
@@ -299,7 +299,36 @@ function gradientLine(el: ElementTable, text: string, to: Scheme): RenderElement
  * grid; use `compactBanner` otherwise.
  */
 export function banner(el: ElementTable, to: Scheme): RenderElement {
-	return el.Box({ flexDirection: 'column', children: BANNER_ART.map((line) => gradientLine(el, line, to)) });
+	return el.Box({ flexDirection: 'column', children: BANNER_ART.map((line) => gradientLine(el, line, BANNER_WIDTH, to)) });
+}
+
+/** A smaller boxed header for a site too narrow for the banner, 33 columns wide. */
+const BOX_ART = [
+	'╭───────────────────────────────╮',
+	'│ >_ CONSTELLATION://CODE_INTEL │',
+	'│           constellationdev.io │',
+	'╰───────────────────────────────╯',
+] as const;
+
+/** The columns `boxBanner` needs. */
+export const BOX_WIDTH = 33;
+
+/** The boxed header in the scheme's colors, the gradient running across its own width. */
+export function boxBanner(el: ElementTable, to: Scheme): RenderElement {
+	return el.Box({ flexDirection: 'column', children: BOX_ART.map((line) => gradientLine(el, line, BOX_WIDTH, to)) });
+}
+
+/**
+ * The header that fits: the full banner from `BANNER_WIDTH` columns, the boxed
+ * one from `BOX_WIDTH`, else the one-line `compactBanner`. `columns` is the
+ * width the header gets (a pane's `bodyColumns` less its padding), and `grid`
+ * says the surface draws a monospace grid (the terminal); without one, box
+ * drawing misaligns, so only the one-line header is drawn.
+ */
+export function header(el: ElementTable, columns: number, grid: boolean, to: Scheme): RenderElement {
+	if (grid && columns >= BANNER_WIDTH) return banner(el, to);
+	if (grid && columns >= BOX_WIDTH) return boxBanner(el, to);
+	return compactBanner(el, to);
 }
 
 /** The banner for a narrow site or the Desktop app: the mark and name along the gradient. */

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import type { ElementTable, On, RenderElement } from 'claude-code';
-import { BANNER_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, kind, paint, palette, rgb, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, BOX_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, header, kind, paint, palette, rgb, risk, scheme, status } from './theme';
 import type { Tone } from './theme';
 
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -242,5 +242,35 @@ describe('banner', () => {
 	test('the compact banner draws the mark and the name', async ($, on) => {
 		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'none'));
 		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
+	});
+
+	const BOX = [
+		'╭───────────────────────────────╮',
+		'│ >_ CONSTELLATION://CODE_INTEL │',
+		'│           constellationdev.io │',
+		'╰───────────────────────────────╯',
+	];
+	const cases: [string, number, boolean, number | string[]][] = [
+		['the full banner at its width', BANNER_WIDTH, true, 6],
+		['the boxed header one column short of the banner', BANNER_WIDTH - 1, true, BOX],
+		['the boxed header at its width', BOX_WIDTH, true, BOX],
+		['one line one column short of the box', BOX_WIDTH - 1, true, 0],
+		['one line without a grid, however wide', 200, false, 0],
+	];
+	for (const [name, columns, grid, expected] of cases) {
+		test(`the header draws ${name}`, async ($, on) => {
+			const ui = await draw($, on, grid ? 'terminal' : 'desktop', (el) => header(el, columns, grid, 'brand'));
+			const lines = (await ui.findAll({ type: 'Text' })).filter((t) => t.props['wrap'] === 'truncate').map((t) => t.text);
+			if (typeof expected === 'number') expect(lines).toHaveLength(expected);
+			else expect(lines).toEqual(expected);
+		});
+	}
+
+	test('the boxed header runs the whole gradient across its own width', async ($, on) => {
+		const ui = await draw($, on, 'terminal', (el) => header(el, BOX_WIDTH, true, 'brand'));
+		const runs = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && typeof t.children[0] === 'string');
+		expect(runs[0]?.props['color']).toBe(palette.galactic);
+		// Runs start every three columns, so the sixth starts at column 15 of 33.
+		expect(runs[5]?.props['color']).toBe(gradientAt(15 / (BOX_WIDTH - 1), 'brand'));
 	});
 });
