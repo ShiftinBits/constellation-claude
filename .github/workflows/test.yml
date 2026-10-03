@@ -1,0 +1,72 @@
+name: Test
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Validate, test and type-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # The mods runtime, its test kit and its types change between releases,
+      # so the version is pinned and bumped on purpose.
+      CLAUDE_CODE_VERSION: "2.1.288"
+      TYPESCRIPT_VERSION: "6.0.3"
+      DISABLE_AUTOUPDATER: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Claude Code
+        run: |
+          npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+
+      - name: Validate the marketplace manifest
+        run: claude plugin validate --strict .
+
+      - name: Validate the plugin manifest and hooks module
+        run: claude plugin validate --strict .claude-plugin/plugin.json
+
+      - name: Run the mod tests
+        run: claude plugin test .
+
+      # Loading the plugin with --plugin-dir writes the engine's type
+      # declarations (.claude-plugin/types/) and the root tsconfig.json that
+      # tsc needs. /constellation is a mod command, so it runs with no model
+      # call and no sign-in; it also checks that the hooks module loads.
+      - name: Load the plugin and run /constellation
+        run: |
+          out="$(claude -p "/constellation status" --plugin-dir .)"
+          echo "$out"
+          grep -q "Constellation status" <<<"$out"
+          test -f .claude-plugin/types/claude-code/index.d.ts
+          test -f tsconfig.json
+
+      - name: Type-check
+        run: npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p .
+
+      - name: No color literals outside hooks/theme.ts
+        run: |
+          if grep -rnE '#[0-9A-Fa-f]{6}|0x[0-9A-Fa-f]{6}' hooks/ | grep -v '^hooks/theme\.ts:'; then
+            echo "::error::Color literals belong in hooks/theme.ts only"
+            exit 1
+          fi
