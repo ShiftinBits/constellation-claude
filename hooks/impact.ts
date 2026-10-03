@@ -69,9 +69,16 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 		if (String(e.tool) === 'Write' && !(await $.fs.exists(path))) return decided;
 		const risk = await fileRisk({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, root, path);
 		if (risk === undefined || !atLeast(risk.level, threshold)) return decided;
-		if (mode !== 'dialog') return decided;
 
 		const line = headline(risk);
+		if (mode === 'native') {
+			// Only an edit core would run unprompted is downgraded; one that already asks or is denied passes through.
+			if (decided.decision !== 'allow') return decided;
+			// A -p or SDK run has no one to answer the prompt: downgrading would turn the edit into a refusal.
+			if ((await $.session.surfaces()).length === 0) return decided;
+			$.ui.toast(line, { timeoutMs: TOAST_MS });
+			return { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` };
+		}
 		if (decided.decision === 'ask') {
 			$.ui.toast(line, { timeoutMs: TOAST_MS });
 			return decided;

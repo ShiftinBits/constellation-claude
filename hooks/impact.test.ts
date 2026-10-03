@@ -286,6 +286,67 @@ describe('impact gate dialog', () => {
 	});
 });
 
+describe('impact gate native', () => {
+	const ASK: ToolCheckResult = { decision: 'ask', reason: '25 dependents, HIGH risk' };
+
+	test('an allowed edit to a high-risk file is downgraded to the permission prompt with one toast', async () => {
+		const m = load({ impactGate: 'native' });
+		expect(await m.check()).toEqual(ASK);
+		expect(m.calls.toasts).toEqual([{ text: HEADLINE, options: { timeoutMs: 10000 } }]);
+		expect(m.calls.asks).toEqual([]);
+	});
+
+	test('an ask decision passes through with no toast', async () => {
+		const m = load({ impactGate: 'native' });
+		expect(await m.check('ask')).toEqual({ decision: 'ask' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('a deny decision passes through with no toast', async () => {
+		const m = load({ impactGate: 'native' });
+		expect(await m.check('deny')).toEqual({ decision: 'deny' });
+		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('a query (no tool_use_id) is left alone', async () => {
+		const m = load({ impactGate: 'native' });
+		expect(await m.query('allow')).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.envReads).toBe(0);
+	});
+
+	test('a low-risk file is left alone', async () => {
+		const m = load({ impactGate: 'native' }, { dependents: 2 });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('a new file is left alone', async () => {
+		const m = load({ impactGate: 'native' }, { files: [] });
+		expect(await m.check('allow', FILE, 'Write')).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('mode off is left alone', async () => {
+		const m = load({ impactGate: 'off' });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('a code_intel error is left alone', async () => {
+		const m = load({ impactGate: 'native' }, { success: false });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('with no surfaces the edit stays allowed and nothing is shown', async () => {
+		const m = load({ impactGate: 'native' }, { surfaces: [] });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.toasts).toEqual([]);
+	});
+});
+
 describe('impact gate as a loaded plugin', () => {
 	test('a $.tool.check query of a high-risk file is left alone: no lookup, no dialog, no toast', { options: { impactGate: 'dialog' } }, async ($, on) => {
 		const raised: string[] = [];
