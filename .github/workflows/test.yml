@@ -22,9 +22,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # The mods runtime, its test kit and its types change between releases,
-      # so the version is pinned and bumped on purpose.
-      CLAUDE_CODE_VERSION: "2.1.288"
+      # The latest release, the one users run: a change in the mods runtime,
+      # its test kit or its types shows up here first. The plugin needs
+      # 2.1.287 or later.
+      CLAUDE_CODE_VERSION: "latest"
       TYPESCRIPT_VERSION: "6.0.3"
       DISABLE_AUTOUPDATER: "1"
     steps:
