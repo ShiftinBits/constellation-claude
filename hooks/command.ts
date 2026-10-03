@@ -34,6 +34,8 @@ export type Item = {
 	text: string;
 	/** A file the person can pick: drawn as a pressable row. */
 	path?: string;
+	/** A project root the person can pick when the working directory is not one: a pressable row. */
+	project?: string;
 	/** Secondary text: drawn with `dimColor`. */
 	dim?: boolean;
 	/** A group title, such as a file in the unused list. */
@@ -96,14 +98,15 @@ function fromItems(items: Item[]): Summary {
 function failure(error: CodeIntelError): Summary {
 	const message = error.message ?? 'The request failed';
 	const guidance = error.guidance ?? [];
-	return {
-		lines: [`${error.code}: ${message}`, ...guidance],
-		items: [
-			{ badge: { kind: 'status', value: 'error' }, text: `${error.code}: ${message}` },
-			...guidance.map((g): Item => ({ text: g, dim: true })),
-		],
-		error,
-	};
+	const candidates = error.candidates ?? [];
+	const head: Item = { badge: { kind: 'status', value: 'error' }, text: `${error.code}: ${message}` };
+	// With project roots to offer, the pane asks for one instead of printing
+	// guidance written for an agent (re-invoke code_intel with a cwd).
+	const items: Item[] =
+		candidates.length > 0
+			? [head, { text: 'Choose a project:', heading: true }, ...candidates.map((c): Item => ({ text: projectName(c) ?? c, project: c }))]
+			: [head, ...guidance.map((g): Item => ({ text: g, dim: true }))];
+	return { lines: [`${error.code}: ${message}`, ...guidance], items, error };
 }
 
 function capped(items: Item[]): Item[] {
@@ -246,6 +249,13 @@ let light = false;
 let depsPath = '';
 let depsDirection: Direction = 'dependencies';
 let sessionCwd: string | undefined;
+let launchCwd: string | undefined;
+/**
+ * The project picked when the session's working directory is not a project
+ * (a workspace root above several). Kept across pane opens, unlike the rest,
+ * and used only while the session is still in `from`.
+ */
+let chosen: { from: string; root: string } | undefined;
 const cache = new Map<Tab, CodeIntelEnvelope>();
 const pending = new Set<Tab>();
 const generations = new Map<Tab, number>();
@@ -262,6 +272,12 @@ function reset(): void {
 	depsPath = '';
 	depsDirection = 'dependencies';
 	sessionCwd = undefined;
+	launchCwd = undefined;
+}
+
+/** The directory queries run in: the picked project while the session stays where it was picked. */
+function target(cwd: string): string {
+	return chosen?.from === cwd ? chosen.root : cwd;
 }
 
 /**
@@ -274,7 +290,7 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	pending.add(tab);
 	let envelope: CodeIntelEnvelope;
 	try {
-		const cwd = sessionCwd ?? (await $.session.cwd());
+		const cwd = sessionCwd ?? target(await $.session.cwd());
 		envelope = await codeIntel(
 			{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 			codeFor(tab, depsDirection, depsPath),
@@ -312,14 +328,15 @@ export function registerCommand(on: On): void {
 	on('command.run', { command: COMMAND }, async ($, e) => {
 		const { tab, path } = parseArgs(e.args);
 		const cwd = await $.session.cwd();
+		const dir = target(cwd);
 		if (!canDraw(await $.session.surfaces())) {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 				codeFor(tab, 'dependencies', path ?? ''),
-				{ cwd },
+				{ cwd: dir },
 			);
-			const summary = summarize(tab, envelope, { path, project: projectName(cwd) });
+			const summary = summarize(tab, envelope, { path, project: projectName(dir) });
 			const meta = metadata(envelope);
 			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
 			return { text: [`${MARK} Constellation ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
@@ -327,7 +344,8 @@ export function registerCommand(on: On): void {
 		reset();
 		selected = tab;
 		depsPath = path ?? '';
-		sessionCwd = cwd;
+		sessionCwd = dir;
+		launchCwd = cwd;
 		try {
 			const theme = (await $.config.list()).find((r) => r.key === 'theme');
 			light = typeof theme?.value === 'string' && theme.value.startsWith('light');
@@ -381,7 +399,22 @@ export function registerCommand(on: On): void {
 		if (summary !== undefined) {
 			for (const item of summary.items) {
 				const path = item.path;
-				if (path !== undefined) {
+				const project = item.project;
+				if (project !== undefined) {
+					body.push(
+						el.Button({
+							key: `project:${project}`,
+							label: item.text,
+							plain: true,
+							onPress: async () => {
+								chosen = { from: launchCwd ?? (await $.session.cwd()), root: project };
+								sessionCwd = project;
+								for (const tab of TABS) drop(tab);
+								redraw();
+							},
+						}),
+					);
+				} else if (path !== undefined) {
 					body.push(el.Button({ key: `dep:${path}`, label: path, plain: true, onPress: () => showDeps(path) }));
 				} else if (item.badge?.kind === 'status') {
 					body.push(badge(el, item.text, forTheme(status(item.badge.value), light)));

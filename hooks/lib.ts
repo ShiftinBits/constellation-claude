@@ -12,6 +12,8 @@ export type CodeIntelError = {
 	code: string;
 	message?: string;
 	guidance?: readonly string[];
+	/** Project roots code_intel found under the git root, sent with `CWD_NOT_INDEXED`. */
+	candidates?: readonly string[];
 };
 
 export type CodeIntelEnvelope = {
@@ -101,6 +103,10 @@ function parseError(value: unknown): CodeIntelError | undefined {
 	if (typeof value.message === 'string') error.message = value.message;
 	if (Array.isArray(value.guidance)) {
 		error.guidance = value.guidance.filter((g): g is string => typeof g === 'string');
+	}
+	const candidates = isRecord(value.context) ? value.context.candidates : undefined;
+	if (Array.isArray(candidates)) {
+		error.candidates = candidates.filter((c): c is string => typeof c === 'string');
 	}
 	return error;
 }

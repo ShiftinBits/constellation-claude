@@ -58,7 +58,7 @@ function answer(code: string): McpToolResult {
 type World = {
 	surfaces?: readonly RenderSurface[];
 	theme?: string;
-	answer?: (code: string) => McpToolResult | Promise<McpToolResult>;
+	answer?: (code: string, cwd: string) => McpToolResult | Promise<McpToolResult>;
 	/** Makes the hook that answers this event throw. */
 	throws?: 'session.cwd' | 'config.list';
 };
@@ -66,6 +66,7 @@ type World = {
 /** Answers everything beneath the plugin and returns the queries sent and the pane events seen. */
 function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws }: World = {}) {
 	const codes: string[] = [];
+	const cwds: string[] = [];
 	const events: string[] = [];
 	const opens: PaneOpenArgs[] = [];
 	let turns = 0;
@@ -84,7 +85,8 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 	on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
 	on('mcp.call', async (_, e) => {
 		codes.push(String(e.args.code));
-		return { value: await respond(String(e.args.code)) };
+		cwds.push(String(e.args.cwd));
+		return { value: await respond(String(e.args.code), String(e.args.cwd)) };
 	});
 	on('ui.open', (_, e) => {
 		opens.push(e);
@@ -99,7 +101,7 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 		turns += 1;
 		return { turnId: e.turnId };
 	});
-	return { codes, events, opens, turns: () => turns, armed };
+	return { codes, cwds, events, opens, turns: () => turns, armed };
 }
 
 async function run($: Engine, args = '') {
@@ -154,6 +156,17 @@ describe('summarize', () => {
 		const s = summarize('status', ok(PING), { project: 'app' });
 		expect(s.lines).toEqual(['connection: ok', 'auth: ok', 'project app']);
 		expect(s.error).toBeUndefined();
+	});
+
+	test('a cwd that is not a project offers its candidate roots instead of the agent guidance', () => {
+		const error = { code: 'CWD_NOT_INDEXED', message: 'no project', guidance: ['re-invoke code_intel'], candidates: ['/w/core', '/w/web'] };
+		const s = summarize('status', { success: false, error });
+		expect(s.items.filter((i) => i.project !== undefined).map((i) => [i.text, i.project])).toEqual([
+			['core', '/w/core'],
+			['web', '/w/web'],
+		]);
+		expect(s.items.find((i) => i.text === 're-invoke code_intel')).toBeUndefined();
+		expect(s.lines).toContain('re-invoke code_intel');
 	});
 
 	test('status without a pong is unknown', () => {
@@ -556,6 +569,35 @@ describe('the pane', () => {
 		const { opens } = world(on);
 		await run($);
 		expect(opens).toEqual([{ id: 'constellation', title: 'Constellation', focus: true, closeOnEscape: true }]);
+	});
+
+	test('a working directory that is not a project offers its projects, and the pick sticks', async ($, on) => {
+		// The session sits in /work/app, a workspace root above two projects.
+		const { cwds } = world(on, {
+			answer: (code, cwd) =>
+				cwd === '/work/app'
+					? { content: [{ type: 'text', text: JSON.stringify({ success: false, error: { code: 'CWD_NOT_INDEXED', message: 'no project', guidance: ['re-invoke code_intel'], context: { candidates: ['/work/app/core', '/work/app/web'] } } }) }], isError: false }
+					: answer(code),
+		});
+		await run($);
+		const first = await mountPane($, 'terminal');
+		await settle();
+		expect(await first.find({ key: 'project:/work/app/core' })).toBeDefined();
+		expect(await first.find({ type: 'Text', text: 're-invoke code_intel' })).toBeUndefined();
+
+		await first.press({ key: 'project:/work/app/web' });
+		await settle();
+		expect(cwds.at(-1)).toBe('/work/app/web');
+		expect(await first.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		await first.press({ key: 'close' });
+		await first.unmount();
+
+		// Opening the pane again from the same directory goes straight to the picked project.
+		await run($);
+		const again = await mountPane($, 'terminal');
+		await settle();
+		expect(cwds.at(-1)).toBe('/work/app/web');
+		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
 	});
 
 	test('closing clears what the pane held', async ($, on) => {

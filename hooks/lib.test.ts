@@ -115,6 +115,16 @@ describe('codeIntel', () => {
 		});
 	});
 
+	test('keeps the candidate project roots of a CWD_NOT_INDEXED error', async () => {
+		const body = JSON.stringify({
+			success: false,
+			error: { code: 'CWD_NOT_INDEXED', message: 'no project', context: { gitRoot: '/w', candidates: ['/w/a', 3, '/w/b'] } },
+		});
+		const { host } = mcpHost(CONNECTED, () => text(body));
+		const envelope = await codeIntel(host, 'x', { cwd: '/w' });
+		expect(envelope.error?.candidates).toEqual(['/w/a', '/w/b']);
+	});
+
 	test('returns INVALID_RESPONSE for text that is not JSON, not an envelope, or missing', async () => {
 		const bodies = ['not json', '[1]', '{"result":1}'];
 		for (const body of bodies) {
