@@ -51,7 +51,7 @@ jobs:
         run: |
           out="$(claude -p "/constellation status" --plugin-dir .)"
           echo "$out"
-          grep -q "Constellation status" <<<"$out"
+          grep -qF ">_CONSTELLATION:// status" <<<"$out"
           test -f .claude-plugin/types/claude-code/index.d.ts
           test -f tsconfig.json
 

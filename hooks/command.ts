@@ -1,7 +1,7 @@
 import type { EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
-import { BANNER_WIDTH, MARK, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
+import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -421,7 +421,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			const summary = summarize(tab, envelope, { path, project: projectName(dir) });
 			const meta = metadata(envelope);
 			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
-			return { text: [`${MARK} Constellation ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
+			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
 		reset();
 		selected = tab;

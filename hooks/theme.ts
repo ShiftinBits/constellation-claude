@@ -315,8 +315,8 @@ export function banner(el: ElementTable, to: Scheme): RenderElement {
 	return el.Box({ flexDirection: 'column', children: BANNER_ART.map((line) => gradientLine(el, line, BANNER_WIDTH, to)) });
 }
 
-/** The name the boxed and one-line headers draw in bold. */
-const PROMPT = '>_CONSTELLATION://';
+/** The name the boxed and one-line headers draw in bold, and the text reply's first line opens with. */
+export const PROMPT = '>_CONSTELLATION://';
 
 /** A smaller boxed header for a site too narrow for the banner, 23 columns wide. */
 const BOX_ART = [

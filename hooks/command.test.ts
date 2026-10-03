@@ -276,6 +276,7 @@ describe('command.run without a pane', () => {
 	test('status text names the connection', async ($, on) => {
 		world(on, { surfaces: ['vscode'] });
 		const r = await run($);
+		expect(r.text?.split('\n')[0]).toBe('>_CONSTELLATION:// status');
 		expect(r.text).toContain('Connection: ok');
 		expect(r.text).toContain('Project: app');
 	});
