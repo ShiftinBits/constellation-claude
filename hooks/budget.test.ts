@@ -293,7 +293,7 @@ describe('nudge budget', () => {
 		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' }, plugin);
 		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
 		collectEvidence(false);
-		expect(await m.search('agent-1')).not.toEqual(REMINDER);
+		expect(await m.search('agent-1')).toBeUndefined();
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

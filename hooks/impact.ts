@@ -88,7 +88,7 @@ function modeOf(value: unknown): Mode {
  */
 async function gatedRisk($: EngineInterface, tool: string, path: string, signal: AbortSignal): Promise<FileRisk | undefined> {
 	if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return undefined;
-	const root = await projectRoot(path, (p) => $.fs.exists(p), absolute('..', path));
+	const root = await projectRoot(absolute('..', path), (p) => $.fs.exists(p));
 	if (root === null) return undefined;
 	if (tool === 'Write' && !(await $.fs.exists(path))) return undefined;
 	const pending = fileRisk(
