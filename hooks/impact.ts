@@ -2,7 +2,7 @@ import type { EngineInterface, On, PluginOptions, ToolCheckResult } from 'claude
 import { agentKey } from './budget';
 import { absolute, isConfigured, projectRoot, stringArg } from './lib';
 import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, resetRiskCache, type RiskLevel } from './risk';
-import { MARK, risk as tone } from './theme';
+import { PROMPT, risk as tone } from './theme';
 
 /** What the gate does before an edit to a file at or above the threshold. */
 type Mode = 'off' | 'dialog' | 'native' | 'require-analysis';
@@ -38,7 +38,7 @@ const assessed = new Map<string, Set<string>>();
 
 /** One line naming the file, how many files depend on it and its risk word, with the indexed commit when known. */
 export function headline(risk: FileRisk): string {
-	const line = `${MARK} ${risk.path}: ${risk.dependents} dependents · ${tone(risk.level).word} risk`;
+	const line = `${PROMPT} ${risk.path}: ${risk.dependents} dependents · ${tone(risk.level).word} risk`;
 	return risk.asOfCommit === undefined ? line : `${line} (as of ${risk.asOfCommit})`;
 }
 
@@ -63,7 +63,7 @@ function refusal(risk: FileRisk): string {
 	const commit = risk.asOfCommit === undefined ? '' : `, as of ${risk.asOfCommit}`;
 	const top = risk.topDependents.length > 0 ? ` Top dependents: ${risk.topDependents.join(', ')}.` : '';
 	const symbols = risk.usedSymbols.length > 0 ? ` Symbols they import from it: ${risk.usedSymbols.join(', ')}.` : '';
-	return `${MARK} Constellation: ${risk.path} has ${risk.dependents} dependents (${tone(risk.level).word} risk${commit}).${top}${symbols} Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.`;
+	return `${PROMPT} ${risk.path} has ${risk.dependents} dependents (${tone(risk.level).word} risk${commit}).${top}${symbols} Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.`;
 }
 
 function modeOf(value: unknown): Mode {

@@ -166,7 +166,7 @@ const HIGH: FileRisk = {
 	asOfCommit: '0123456',
 };
 
-const HEADLINE = '✦ src/core.ts: 25 dependents · HIGH risk (as of 0123456)';
+const HEADLINE = '>_CONSTELLATION:// src/core.ts: 25 dependents · HIGH risk (as of 0123456)';
 const QUESTION = `${HEADLINE}\nTop dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts\nEdit it anyway?`;
 const OPTIONS = ['Proceed', "Proceed, and don't ask again for this file", 'Cancel'];
 const DENY: ToolCheckResult = {
@@ -181,7 +181,7 @@ describe('headline', () => {
 
 	test('leaves the commit out when it is unknown', () => {
 		const { asOfCommit: _commit, ...risk } = HIGH;
-		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe('✦ src/core.ts: 60 dependents · CRITICAL risk');
+		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe('>_CONSTELLATION:// src/core.ts: 60 dependents · CRITICAL risk');
 	});
 });
 
@@ -416,7 +416,7 @@ describe('impact gate native', () => {
 describe('impact gate require-analysis', () => {
 	const RAN = { result: 'ran' };
 	const DENIED =
-		'✦ Constellation: src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Symbols they import from it: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
+		'>_CONSTELLATION:// src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Symbols they import from it: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
 	const options = { impactGate: 'require-analysis' };
 
 	test('the first edit to a high-risk file is denied with the report and the retry passes', async () => {

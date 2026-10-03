@@ -2,6 +2,7 @@ import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { agentKey, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { codeIntel, isConfigured, projectRoot } from './lib';
+import { PROMPT } from './theme';
 
 /**
  * How long a finished search waits for its code_intel lookup before it returns
@@ -94,7 +95,7 @@ function foundOf(value: unknown): Found | null {
 export function augmentLine({ name, kind, filePath, line, usages, definitions }: Found): string {
 	const others = definitions > 1 ? `, the most used of ${definitions} symbols with that name` : '';
 	const count = `${usages} ${usages === 1 ? 'usage' : 'usages'}`;
-	return `✦ code_intel: ${name} (${kind}) is defined at ${filePath}:${line}${others}, with ${count}. Use code_intel for references, callers, and impact.`;
+	return `${PROMPT} ${name} (${kind}) is defined at ${filePath}:${line}${others}, with ${count}. Use code_intel for references, callers, and impact.`;
 }
 
 /** The lookup for `name` in the project at `root`, shared with any already in flight or settled. */
