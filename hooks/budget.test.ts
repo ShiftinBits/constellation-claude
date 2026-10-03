@@ -11,8 +11,14 @@ const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
 type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string };
-type Next = (e: object) => Promise<Answer>;
+type Bottom = (e: object) => Promise<Answer>;
+/** Who raised the dispatch, as `next.origin` holds it. */
+type Origin = { plugin: string; tier: string };
+type Next = Bottom & { origin: Origin };
 type Handler = ($: object, e: object, next: Next) => Promise<Answer>;
+
+/** The model's own call: the engine raises it. */
+const ENGINE: Origin = { plugin: 'engine', tier: 'core' };
 type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
 
 /** True when the event `e` satisfies a matcher: a pattern, a list of values, or a value per field. */
@@ -57,16 +63,18 @@ function load(options: PluginOptions) {
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
-	 * what sits beneath them is `bottom`.
+	 * what sits beneath them is `bottom`, and `origin` is who raised it.
 	 */
-	const raise = (event: string, e: object, bottom: Next = async () => ({})): Promise<Answer> => {
+	const raise = (event: string, e: object, bottom: Bottom = async () => ({}), origin = ENGINE): Promise<Answer> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
-		const step =
-			(i: number): Next =>
-			(input) => {
-				const hook = chain[i];
-				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
-			};
+		const step = (i: number): Next =>
+			Object.assign(
+				(input: object) => {
+					const hook = chain[i];
+					return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+				},
+				{ origin },
+			);
 		return step(0)(e);
 	};
 
@@ -77,9 +85,9 @@ function load(options: PluginOptions) {
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
-		/** A code_intel call running `code` for `agentId`, over a bottom that answers `answer`. */
-		program: (agentId: string, code: string, answer: Answer) =>
-			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer),
+		/** A code_intel call running `code` for `agentId`, raised by `origin`, over a bottom that answers `answer`. */
+		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
+			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
@@ -265,6 +273,15 @@ describe('nudge budget', () => {
 		const m = load({});
 		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { deny: 'x' });
 		expect(hasEvidence('agent-1', ['src/core.ts'])).toBe(false);
+	});
+
+	test("a plugin's own code_intel call is neither evidence nor the agent's code_intel use", async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		const plugin = { plugin: 'constellation', tier: 'user' };
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' }, plugin);
+		expect(hasEvidence('agent-1', ['src/core.ts', 'Core'])).toBe(false);
+		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

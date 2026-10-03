@@ -92,6 +92,8 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	});
 
 	on('tool.call', { tool: /code_intel$/ }, async (_$, e, next) => {
+		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis.
+		if (next.origin.plugin !== 'engine') return next(e);
 		const key = agentKey(e);
 		const turn = turnOf(key);
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
