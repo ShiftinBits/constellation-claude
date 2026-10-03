@@ -1,0 +1,314 @@
+import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCheckResult } from 'claude-code';
+import { describe, expect, mock, test } from 'claude-code/testing';
+import { headline, registerImpactGate } from './impact';
+import { type FileRisk, resetRiskCache } from './risk';
+import { registerSession } from './session';
+
+const KEY = 'ak:test-key';
+const PROJECT = '/work/app';
+const FILE = `${PROJECT}/src/core.ts`;
+const COMMIT = '0123456789abcdef';
+
+type Next = (e: object) => Promise<ToolCheckResult>;
+type Handler = ($: object, e: object, next: Next) => Promise<ToolCheckResult>;
+type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
+
+/** True when the event `e` satisfies a matcher: a pattern, a list of values, or a value per field. */
+function matches(matcher: Record<string, unknown>, e: object): boolean {
+	return Object.entries(matcher).every(([field, want]) => {
+		const got: unknown = Reflect.get(e, field);
+		if (want instanceof RegExp) return want.test(String(got));
+		if (Array.isArray(want)) return want.includes(got);
+		return want === got;
+	});
+}
+
+type World = {
+	/** Direct dependents code_intel reports for the file; 25 (high) when not given. */
+	dependents?: number;
+	/** Whether code_intel answers with success; true when not given. */
+	success?: boolean;
+	/** What `$.ui.ask` resolves to, or an Error it rejects with; `Proceed` when not given. */
+	answer?: string | Error;
+	/** What `$.session.surfaces` resolves to; the terminal when not given. */
+	surfaces?: readonly RenderSurface[];
+	/** The access key; `KEY` when not given. */
+	key?: string;
+	/** Paths that exist besides `constellation.json` at the root; the edited file when not given. */
+	files?: readonly string[];
+};
+
+/** What the fake `$` recorded. */
+type Calls = { asks: Array<{ question: string; options: unknown }>; toasts: Array<{ text: string; options: unknown }>; logs: string[]; programs: number; envReads: number };
+
+/**
+ * The gate and session handlers as one hooks module registers them, raised
+ * directly with a fake `$`: `$.tool.check` cannot pass a `tool_use_id`, so a
+ * loaded plugin only ever sees queries.
+ */
+function load(options: PluginOptions, world: World = {}) {
+	resetRiskCache();
+	const registered: Registered[] = [];
+	const capture = (event: string, ...rest: unknown[]) => {
+		const handler = rest[rest.length - 1] as Handler;
+		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
+		registered.push({ event, matcher, handler });
+	};
+	registerImpactGate(capture as unknown as On, options);
+	registerSession(capture as unknown as On);
+
+	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0 };
+	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
+	const $ = {
+		env: {
+			get: async () => {
+				calls.envReads += 1;
+				return world.key ?? KEY;
+			},
+		},
+		session: { cwd: async () => PROJECT, surfaces: async () => world.surfaces ?? ['terminal'] },
+		fs: { exists: async (path: string) => files.has(path) },
+		mcp: {
+			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
+			call: async (): Promise<McpToolResult> => {
+				calls.programs += 1;
+				const count = world.dependents ?? 25;
+				const body = {
+					success: world.success ?? true,
+					result: { dependents: Array.from({ length: count }, (_, i) => `src/dep${i}.ts`), exported: ['Core'] },
+					asOfCommit: COMMIT,
+				};
+				return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
+			},
+		},
+		ui: {
+			ask: async (question: string, opts: unknown) => {
+				calls.asks.push({ question, options: opts });
+				const answer = world.answer ?? 'Proceed';
+				if (answer instanceof Error) throw answer;
+				return answer;
+			},
+			toast: (text: string, opts: unknown) => {
+				calls.toasts.push({ text, options: opts });
+			},
+			log: (text: string) => {
+				calls.logs.push(text);
+			},
+		},
+	};
+
+	/** Raises `event` through the handlers that match it, in registration order, over `bottom`. */
+	const raise = (event: string, e: object, bottom: Next): Promise<ToolCheckResult> => {
+		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
+		const step =
+			(i: number): Next =>
+			(input) => {
+				const hook = chain[i];
+				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+			};
+		return step(0)(e);
+	};
+
+	/** A real call's check (it carries a `tool_use_id`) of `tool` on `path`, over core's `decision`. */
+	const check = (decision: ToolCheckResult['decision'] = 'allow', path = FILE, tool = 'Edit') => {
+		const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+		return raise('tool.check', { tool, input: { [field]: path }, tool_use_id: 'u1' }, async () => ({ decision }));
+	};
+
+	/** A query's check of an Edit of `FILE`: no `tool_use_id`, as another plugin's `$.tool.check` raises it. */
+	const query = (decision: ToolCheckResult['decision']) =>
+		raise('tool.check', { tool: 'Edit', input: { file_path: FILE } }, async () => ({ decision }));
+
+	const sessionStart = (source: string) =>
+		raise('classic.SessionStart', { source }, async () => ({ decision: 'allow' }));
+
+	return { calls, check, query, sessionStart };
+}
+
+const HIGH: FileRisk = {
+	path: 'src/core.ts',
+	dependents: 25,
+	topDependents: ['src/dep0.ts', 'src/dep1.ts', 'src/dep2.ts'],
+	exportedSymbols: ['Core'],
+	level: 'high',
+	asOfCommit: '0123456',
+};
+
+const HEADLINE = '✦ src/core.ts: 25 dependents · HIGH risk (as of 0123456)';
+const QUESTION = `${HEADLINE}\nTop dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts\nEdit it anyway?`;
+const OPTIONS = ['Proceed', "Proceed, and don't ask again for this file", 'Cancel'];
+const DENY: ToolCheckResult = {
+	decision: 'deny',
+	reason: 'The user declined this edit to src/core.ts (25 dependents, HIGH risk). Ask before trying a different approach.',
+};
+
+describe('headline', () => {
+	test('names the file, its dependents, the risk word and the commit', () => {
+		expect(headline(HIGH)).toBe(HEADLINE);
+	});
+
+	test('leaves the commit out when it is unknown', () => {
+		const { asOfCommit: _commit, ...risk } = HIGH;
+		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe('✦ src/core.ts: 60 dependents · CRITICAL risk');
+	});
+});
+
+describe('impact gate dialog', () => {
+	test('an allowed edit to a high-risk file asks, and Proceed allows it', async () => {
+		const m = load({ impactGate: 'dialog' });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
+		expect(m.calls.toasts).toEqual([]);
+	});
+
+	test('Cancel denies with the reason the model reads', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: 'Cancel' });
+		expect(await m.check()).toEqual(DENY);
+	});
+
+	test('free text typed under Other denies as Cancel does', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: 'Proceed please' });
+		expect(await m.check()).toEqual(DENY);
+	});
+
+	test("don't ask again allows the edit and suppresses a later dialog for that file only", async () => {
+		const other = `${PROJECT}/src/other.ts`;
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file", files: [FILE, other] });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks.length).toBe(1);
+		await m.check('allow', other);
+		expect(m.calls.asks.length).toBe(2);
+	});
+
+	test('a SessionStart clear forgets the files not to ask about', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
+		await m.check();
+		await m.sessionStart('clear');
+		await m.check();
+		expect(m.calls.asks.length).toBe(2);
+	});
+
+	test('an edit core already sends to the permission prompt gets one toast and no dialog', async () => {
+		const m = load({ impactGate: 'dialog' });
+		expect(await m.check('ask')).toEqual({ decision: 'ask' });
+		expect(m.calls.toasts).toEqual([{ text: HEADLINE, options: { timeoutMs: 10000 } }]);
+		expect(m.calls.asks).toEqual([]);
+	});
+
+	test('an edit core denies is left alone', async () => {
+		const m = load({ impactGate: 'dialog' });
+		expect(await m.check('deny')).toEqual({ decision: 'deny' });
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('a query (no tool_use_id) is left alone and reads nothing', async () => {
+		const m = load({ impactGate: 'dialog' });
+		expect(await m.query('allow')).toEqual({ decision: 'allow' });
+		expect(await m.query('ask')).toEqual({ decision: 'ask' });
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.envReads).toBe(0);
+	});
+
+	test('a low-risk file is left alone', async () => {
+		const m = load({ impactGate: 'dialog' }, { dependents: 4 });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.programs).toBe(1);
+	});
+
+	test('a Write that creates a new file is left alone and makes no lookup', async () => {
+		const m = load({ impactGate: 'dialog' }, { files: [] });
+		expect(await m.check('allow', FILE, 'Write')).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('a Write over an existing high-risk file asks', async () => {
+		const m = load({ impactGate: 'dialog' });
+		await m.check('allow', FILE, 'Write');
+		expect(m.calls.asks.length).toBe(1);
+	});
+
+	test('a NotebookEdit reads notebook_path', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: 'Cancel' });
+		expect((await m.check('allow', FILE, 'NotebookEdit')).decision).toBe('deny');
+	});
+
+	test('a code_intel error is left alone', async () => {
+		const m = load({ impactGate: 'dialog' }, { success: false });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
+	});
+
+	test('no access key is left alone', async () => {
+		const m = load({ impactGate: 'dialog' }, { key: 'sk:other' });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('a file outside any indexed project is left alone', async () => {
+		const m = load({ impactGate: 'dialog' });
+		expect(await m.check('allow', '/elsewhere/a.ts')).toEqual({ decision: 'allow' });
+		expect(m.calls.programs).toBe(0);
+	});
+
+	for (const impactGate of [undefined, 'off', 'loud']) {
+		test(`impactGate ${String(impactGate)} registers no gate`, async () => {
+			const m = load(impactGate === undefined ? {} : { impactGate });
+			expect(await m.check()).toEqual({ decision: 'allow' });
+			expect(m.calls.asks).toEqual([]);
+			expect(m.calls.programs).toBe(0);
+		});
+	}
+
+	test('impactThreshold critical leaves a high-risk file alone and asks for a critical one', async () => {
+		const high = load({ impactGate: 'dialog', impactThreshold: 'critical' });
+		await high.check();
+		expect(high.calls.asks).toEqual([]);
+		const critical = load({ impactGate: 'dialog', impactThreshold: 'critical' }, { dependents: 50 });
+		await critical.check();
+		expect(critical.calls.asks.length).toBe(1);
+	});
+
+	test('a rejected ask with no surface (headless) allows the edit and logs one line', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: new Error('no one to ask'), surfaces: [] });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.logs).toEqual([`${HEADLINE} (no one to ask, edit allowed)`]);
+	});
+
+	test('a dismissed dialog on the terminal denies as Cancel does', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: new Error('dismissed'), surfaces: ['terminal'] });
+		expect(await m.check()).toEqual(DENY);
+		expect(m.calls.logs).toEqual([]);
+	});
+});
+
+describe('impact gate as a loaded plugin', () => {
+	test('a $.tool.check query of a high-risk file is left alone: no lookup, no dialog, no toast', { options: { impactGate: 'dialog' } }, async ($, on) => {
+		const raised: string[] = [];
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		on('session.cwd', () => ({ value: PROJECT }));
+		on('session.surfaces', () => ({ value: ['terminal'] }));
+		on('fs.exists', (_$, e) => ({ value: e.path === `${PROJECT}/constellation.json` || e.path === FILE }));
+		on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:constellation:constellation' } }));
+		on('mcp.call', () => {
+			raised.push('code_intel');
+			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), exported: [] };
+			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result }) }], isError: false } };
+		});
+		on('tool.check', () => ({ decision: 'allow' }));
+		on('tool.call', (_$, e) => {
+			raised.push(String(e.tool));
+			return { result: 'Proceed' };
+		});
+		on('ui.toast', (_$, e) => {
+			raised.push(`toast ${e.text}`);
+			return { value: undefined };
+		});
+		expect(await $.tool.check({ tool: 'Edit', input: { file_path: FILE } })).toEqual({ decision: 'allow' });
+		expect(raised).toEqual([]);
+	});
+});

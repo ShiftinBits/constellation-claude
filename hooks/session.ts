@@ -1,6 +1,7 @@
 import type { On } from 'claude-code';
 import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
+import { resetImpact } from './impact';
 import { resetRiskCache } from './risk';
 
 /**
@@ -13,6 +14,7 @@ export function registerSession(on: On): void {
 		resetBudgets();
 		resetAugment();
 		resetRiskCache();
+		resetImpact();
 		return next(e);
 	});
 
