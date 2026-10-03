@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
+import { canDraw, codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -206,5 +206,31 @@ describe('projectRoot', () => {
 	test('returns null when no ancestor has one', async () => {
 		const exists = existsIn(['/other/constellation.json']);
 		expect(await projectRoot('/work', exists, '/repo/src/file.ts')).toBeNull();
+	});
+});
+
+describe('canDraw', () => {
+	test('is true for a terminal', () => {
+		expect(canDraw(['terminal'])).toBe(true);
+	});
+
+	test('is true for the desktop app', () => {
+		expect(canDraw(['desktop'])).toBe(true);
+	});
+
+	test('is false for vscode alone', () => {
+		expect(canDraw(['vscode'])).toBe(false);
+	});
+
+	test('is false for mobile alone', () => {
+		expect(canDraw(['mobile'])).toBe(false);
+	});
+
+	test('is false for no surfaces', () => {
+		expect(canDraw([])).toBe(false);
+	});
+
+	test('is true when any surface can draw', () => {
+		expect(canDraw(['vscode', 'terminal'])).toBe(true);
 	});
 });

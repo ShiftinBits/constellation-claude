@@ -1,4 +1,4 @@
-import type { EngineInterface } from 'claude-code';
+import type { EngineInterface, RenderSurface } from 'claude-code';
 
 /**
  * The MCP calls `codeIntel` makes. `claude plugin validate` follows `$` only
@@ -33,6 +33,16 @@ const PROJECT_FILE = 'constellation.json';
  */
 export function isConfigured(accessKey: string | undefined): boolean {
 	return (accessKey ?? '').startsWith('ak:');
+}
+
+/**
+ * True when the session can draw a pane: a `terminal` or `desktop` surface is
+ * present. `CommandRunInput` has no surface field, so the handler passes
+ * `await $.session.surfaces()`, which validate sees as a literal call. Later
+ * pane stories reuse this check.
+ */
+export function canDraw(surfaces: readonly RenderSurface[]): boolean {
+	return surfaces.includes('terminal') || surfaces.includes('desktop');
 }
 
 /** The string field `name` of a tool call or event, or undefined. */
