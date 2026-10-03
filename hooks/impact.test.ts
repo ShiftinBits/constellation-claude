@@ -154,7 +154,11 @@ function load(options: PluginOptions, world: World = {}) {
 	const sessionStart = (source: string) =>
 		raise('classic.SessionStart', { source }, async () => ({ decision: 'allow' }));
 
-	return { calls, check, query, edit, sessionStart };
+	/** A prompt submitted in permission mode `mode`, as `classic.UserPromptSubmit` carries it. */
+	const prompt = (mode: string) =>
+		raise('classic.UserPromptSubmit', { prompt: 'edit it', permission_mode: mode }, async () => ({ decision: 'allow' }));
+
+	return { calls, check, query, edit, sessionStart, prompt };
 }
 
 const HIGH: FileRisk = {
@@ -347,6 +351,57 @@ describe('impact gate dialog', () => {
 		retry?.fn();
 		await m.check();
 		expect(m.calls.programs).toBe(2);
+	});
+});
+
+describe('impact gate in auto mode', () => {
+	const ASK: ToolCheckResult = { decision: 'ask' };
+
+	for (const impactGate of ['dialog', 'native']) {
+		test(`${impactGate}: an edit headed to the auto-mode classifier asks, and Proceed leaves it to the classifier`, async () => {
+			const m = load({ impactGate });
+			await m.prompt('auto');
+			expect(await m.check('ask')).toEqual(ASK);
+			expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
+			expect(m.calls.toasts).toEqual([]);
+		});
+
+		test(`${impactGate}: Cancel refuses an edit headed to the classifier`, async () => {
+			const m = load({ impactGate }, { answer: 'Cancel' });
+			await m.prompt('auto');
+			expect(await m.check('ask')).toEqual(DENY);
+		});
+	}
+
+	test('a remembered file is not asked about again', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
+		await m.prompt('auto');
+		await m.check('ask');
+		await m.check('ask');
+		expect(m.calls.asks.length).toBe(1);
+		expect(m.calls.programs).toBe(1);
+	});
+
+	test('in default mode an ask still reaches the permission prompt: a toast in dialog mode, nothing in native', async () => {
+		const dialog = load({ impactGate: 'dialog' });
+		await dialog.prompt('default');
+		expect(await dialog.check('ask')).toEqual(ASK);
+		expect(dialog.calls.asks).toEqual([]);
+		expect(dialog.calls.toasts.length).toBe(1);
+		const native = load({ impactGate: 'native' });
+		await native.prompt('default');
+		expect(await native.check('ask')).toEqual(ASK);
+		expect(native.calls.toasts).toEqual([]);
+		expect(native.calls.programs).toBe(0);
+	});
+
+	test('a SessionStart clear forgets the mode', async () => {
+		const m = load({ impactGate: 'dialog' });
+		await m.prompt('auto');
+		await m.sessionStart('clear');
+		await m.check('ask');
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.toasts.length).toBe(1);
 	});
 });
 

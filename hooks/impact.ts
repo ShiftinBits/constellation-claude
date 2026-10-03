@@ -28,6 +28,15 @@ let mode: Mode = 'off';
 let threshold: RiskLevel = 'high';
 
 /**
+ * The session's permission mode as of the last prompt. In `auto` an `ask` goes
+ * to the classifier, not a person, so the gate treats it as auto-approved.
+ * Read from `classic.UserPromptSubmit`, because `tool.check` and the
+ * `classic.PreToolUse` envelope carry no mode; a mode switched mid-turn is seen
+ * at the next prompt.
+ */
+let permissionMode: string | undefined;
+
+/**
  * Files the user chose not to be asked about again, by absolute path. Session
  * wide, not per agent: `tool.check` carries no `agentId`.
  */
@@ -126,30 +135,37 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 	}
 	if (mode !== 'dialog' && mode !== 'native') return;
 
+	on('classic.UserPromptSubmit', async (_$, e, next) => {
+		permissionMode = e.permission_mode;
+		return next(e);
+	});
+
 	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
 		const decided = await next(e);
 		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog or toast.
 		if (e.tool_use_id === undefined || decided.decision === 'deny') return decided;
-		// Native mode only downgrades an edit core would run unprompted, and only when someone can answer the prompt:
-		// in a -p or SDK run the downgrade would turn the edit into a refusal.
-		if (mode === 'native' && (decided.decision !== 'allow' || (await $.session.surfaces()).length === 0)) return decided;
+		// In auto mode an ask goes to the classifier: no one would see it, so the gate asks itself.
+		const classified = decided.decision === 'ask' && permissionMode === 'auto';
+		// An edit headed to the permission prompt needs no downgrade (native) and gets only a toast (dialog).
+		if (mode === 'native' && decided.decision === 'ask' && !classified) return decided;
+		// A -p or SDK run has no one to answer: a downgrade there would turn the edit into a refusal.
+		if (mode === 'native' && decided.decision === 'allow' && (await $.session.surfaces()).length === 0) return decided;
 		const input = typeof e.input === 'object' && e.input !== null ? e.input : undefined;
 		const raw = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
 		if (raw === undefined) return decided;
 		const path = absolute(raw, await $.session.cwd());
-		if (mode === 'dialog' && decided.decision === 'allow' && remembered.has(path)) return decided;
+		const asks = (mode === 'dialog' && decided.decision === 'allow') || classified;
+		if (asks && remembered.has(path)) return decided;
 		const risk = await gatedRisk($, String(e.tool), path, next.signal);
 		if (risk === undefined) return decided;
 
 		const line = headline(risk);
-		if (mode === 'native') {
+		if (!asks) {
 			$.ui.toast(line, { timeoutMs: TOAST_MS });
-			return { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` };
+			// Native mode sends an auto-approved edit to the permission prompt; dialog mode leaves a prompted one there.
+			return mode === 'native' ? { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` } : decided;
 		}
-		if (decided.decision === 'ask') {
-			$.ui.toast(line, { timeoutMs: TOAST_MS });
-			return decided;
-		}
+		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
 		try {
 			const answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
 			if (answer === PROCEED) return decided;
@@ -171,6 +187,7 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 
 /** Forgets every file the user chose not to be asked about, for a new conversation (`/clear`, `/resume`, `/branch`). */
 export function resetImpact(): void {
+	permissionMode = undefined;
 	remembered.clear();
 	assessed.clear();
 }
