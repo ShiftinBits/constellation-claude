@@ -56,7 +56,7 @@ export function stringArg(e: object, name: string): string | undefined {
 }
 
 /** Resolves `path` against `cwd` into an absolute, forward-slash path with no `.` or `..` segments. */
-function absolute(path: string, cwd: string): string {
+export function absolute(path: string, cwd: string): string {
 	const full = path.replace(/\\/g, '/');
 	const joined = /^([A-Za-z]:)?\//.test(full) ? full : `${cwd.replace(/\\/g, '/')}/${full}`;
 	const root = /^([A-Za-z]:)?\//.exec(joined)?.[0] ?? '/';

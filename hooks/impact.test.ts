@@ -1,7 +1,7 @@
 import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCallArgs, ToolCheckResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { forgetAgentImpact, headline, registerImpactGate } from './impact';
-import { type FileRisk, noteCodeIntel, resetRiskCache } from './risk';
+import { type FileRisk, noteCodeIntel, RETRY_MS } from './risk';
 import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
@@ -9,7 +9,8 @@ const PROJECT = '/work/app';
 const FILE = `${PROJECT}/src/core.ts`;
 const COMMIT = '0123456789abcdef';
 
-type Next = (e: object) => Promise<ToolCheckResult>;
+type Bottom = (e: object) => Promise<ToolCheckResult>;
+type Next = Bottom & { signal: AbortSignal };
 type Handler = ($: object, e: object, next: Next) => Promise<ToolCheckResult>;
 type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
 
@@ -32,6 +33,8 @@ type World = {
 	answer?: string | Error;
 	/** What `$.session.surfaces` resolves to; the terminal when not given. */
 	surfaces?: readonly RenderSurface[];
+	/** When true, code_intel never answers and the gate's deadline passes at once. */
+	slow?: boolean;
 	/** The access key; `KEY` when not given. */
 	key?: string;
 	/** Paths that exist besides `constellation.json` at the root; the edited file when not given. */
@@ -39,7 +42,15 @@ type World = {
 };
 
 /** What the fake `$` recorded. */
-type Calls = { asks: Array<{ question: string; options: unknown }>; toasts: Array<{ text: string; options: unknown }>; logs: string[]; programs: number; envReads: number };
+type Calls = {
+	asks: Array<{ question: string; options: unknown }>;
+	toasts: Array<{ text: string; options: unknown }>;
+	logs: string[];
+	programs: number;
+	envReads: number;
+	/** `$.clock.after` timers, in the order they were set. */
+	timers: Array<{ ms: number; fn: () => void }>;
+};
 
 /**
  * The gate and session handlers as one hooks module registers them, raised
@@ -47,7 +58,6 @@ type Calls = { asks: Array<{ question: string; options: unknown }>; toasts: Arra
  * loaded plugin only ever sees queries.
  */
 function load(options: PluginOptions, world: World = {}) {
-	resetRiskCache();
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -57,7 +67,7 @@ function load(options: PluginOptions, world: World = {}) {
 	registerImpactGate(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 
-	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0 };
+	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0, timers: [] };
 	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
 	const $ = {
 		env: {
@@ -72,13 +82,25 @@ function load(options: PluginOptions, world: World = {}) {
 			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
 			call: async (): Promise<McpToolResult> => {
 				calls.programs += 1;
+				if (world.slow) return new Promise<McpToolResult>(() => {});
 				const count = world.dependents ?? 25;
 				const body = {
 					success: world.success ?? true,
-					result: { dependents: Array.from({ length: count }, (_, i) => `src/dep${i}.ts`), exported: ['Core'] },
+					result: { dependents: Array.from({ length: count }, (_, i) => `src/dep${i}.ts`), used: ['Core'] },
 					asOfCommit: COMMIT,
 				};
 				return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
+			},
+		},
+		clock: {
+			// The deadline passes at once in a slow world; otherwise it waits until the hook aborts it.
+			sleep: (_ms: number, opts?: { signal?: AbortSignal }) =>
+				world.slow
+					? Promise.resolve()
+					: new Promise<void>((_, reject) => opts?.signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+			after: (ms: number, fn: () => void) => {
+				calls.timers.push({ ms, fn });
+				return { cancel: () => {} };
 			},
 		},
 		ui: {
@@ -98,14 +120,17 @@ function load(options: PluginOptions, world: World = {}) {
 	};
 
 	/** Raises `event` through the handlers that match it, in registration order, over `bottom`. */
-	const raise = (event: string, e: object, bottom: Next): Promise<ToolCheckResult> => {
+	const raise = (event: string, e: object, bottom: Bottom): Promise<ToolCheckResult> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
-		const step =
-			(i: number): Next =>
-			(input) => {
-				const hook = chain[i];
-				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
-			};
+		const signal = new AbortController().signal;
+		const step = (i: number): Next =>
+			Object.assign(
+				(input: object) => {
+					const hook = chain[i];
+					return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+				},
+				{ signal },
+			);
 		return step(0)(e);
 	};
 
@@ -136,7 +161,7 @@ const HIGH: FileRisk = {
 	path: 'src/core.ts',
 	dependents: 25,
 	topDependents: ['src/dep0.ts', 'src/dep1.ts', 'src/dep2.ts'],
-	exportedSymbols: ['Core'],
+	usedSymbols: ['Core'],
 	level: 'high',
 	asOfCommit: '0123456',
 };
@@ -280,16 +305,48 @@ describe('impact gate dialog', () => {
 		expect(critical.calls.asks.length).toBe(1);
 	});
 
-	test('a rejected ask with no surface (headless) allows the edit and logs one line', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: new Error('no one to ask'), surfaces: [] });
+	test('an ask that cannot open (headless) allows the edit and logs one line', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: new Error('no tool named "AskUserQuestion" in this session') });
 		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.logs).toEqual([`${HEADLINE} (no one to ask, edit allowed)`]);
+		expect(m.calls.logs).toEqual([`${HEADLINE} (could not ask, edit allowed)`]);
 	});
 
-	test('a dismissed dialog on the terminal denies as Cancel does', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: new Error('dismissed'), surfaces: ['terminal'] });
+	test('a dismissed dialog (Esc) denies as Cancel does', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: new Error('$.ui.ask: no answer') });
 		expect(await m.check()).toEqual(DENY);
 		expect(m.calls.logs).toEqual([]);
+	});
+
+	test('a remembered file makes no second lookup', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
+		await m.check();
+		await m.check();
+		expect(m.calls.programs).toBe(1);
+	});
+
+	test('a path with .. segments is gated as the file it names, and remembered as one file', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
+		await m.check('allow', `${PROJECT}/src/../src/core.ts`);
+		await m.check();
+		expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
+	});
+
+	test('a lookup slower than the deadline lets the edit go ahead ungated', async () => {
+		const m = load({ impactGate: 'dialog' }, { slow: true });
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
+		expect(m.calls.programs).toBe(1);
+	});
+
+	test('a failed lookup is not repeated until its retry timer fires', async () => {
+		const m = load({ impactGate: 'dialog' }, { success: false });
+		await m.check();
+		await m.check();
+		expect(m.calls.programs).toBe(1);
+		const retry = m.calls.timers.find((t) => t.ms === RETRY_MS);
+		retry?.fn();
+		await m.check();
+		expect(m.calls.programs).toBe(2);
 	});
 });
 
@@ -303,10 +360,11 @@ describe('impact gate native', () => {
 		expect(m.calls.asks).toEqual([]);
 	});
 
-	test('an ask decision passes through with no toast', async () => {
+	test('an ask decision passes through with no toast and no lookup', async () => {
 		const m = load({ impactGate: 'native' });
 		expect(await m.check('ask')).toEqual({ decision: 'ask' });
 		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.programs).toBe(0);
 	});
 
 	test('a deny decision passes through with no toast', async () => {
@@ -347,17 +405,18 @@ describe('impact gate native', () => {
 		expect(m.calls.toasts).toEqual([]);
 	});
 
-	test('with no surfaces the edit stays allowed and nothing is shown', async () => {
+	test('with no surfaces the edit stays allowed, nothing is shown and nothing is looked up', async () => {
 		const m = load({ impactGate: 'native' }, { surfaces: [] });
 		expect(await m.check()).toEqual({ decision: 'allow' });
 		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.programs).toBe(0);
 	});
 });
 
 describe('impact gate require-analysis', () => {
 	const RAN = { result: 'ran' };
 	const DENIED =
-		'✦ Constellation: src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Exported symbols here: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
+		'✦ Constellation: src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Symbols they import from it: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
 	const options = { impactGate: 'require-analysis' };
 
 	test('the first edit to a high-risk file is denied with the report and the retry passes', async () => {
@@ -425,10 +484,31 @@ describe('impact gate require-analysis', () => {
 		expect(await m.edit(FILE, 'agent-2')).toEqual({ deny: DENIED });
 	});
 
-	test('earlier code_intel naming an exported symbol passes', async () => {
+	test('earlier impact analysis of a symbol its dependents import passes', async () => {
 		const m = load(options);
-		noteCodeIntel('agent-1', { code: 'api.traceSymbolUsage' }, { result: {}, text: 'Core is used by' });
+		const code = "const { symbols } = await api.searchSymbols({ query: 'Core' }); return api.impactAnalysis({ symbolId: symbols[0].id });";
+		noteCodeIntel('agent-1', { code }, { result: {} });
 		expect(await m.edit()).toEqual(RAN);
+	});
+
+	test('a search alone, or a path that only ends like the file, is not evidence', async () => {
+		const m = load(options);
+		noteCodeIntel('agent-1', { code: "api.searchSymbols({ query: 'Core' })" }, { result: {} });
+		noteCodeIntel('agent-1', { code: "api.getDependents({ filePath: 'packages/b/src/core.ts' })" }, { result: {} });
+		expect(await m.edit()).toEqual({ deny: DENIED });
+	});
+
+	test('an absolute path in the analysis counts', async () => {
+		const m = load(options);
+		noteCodeIntel('agent-1', { code: `api.getDependents({ filePath: '${FILE}' })` }, { result: {} });
+		expect(await m.edit()).toEqual(RAN);
+	});
+
+	test('a refused file makes no second lookup for that agent', async () => {
+		const m = load(options);
+		await m.edit();
+		await m.edit();
+		expect(m.calls.programs).toBe(1);
 	});
 });
 
@@ -442,7 +522,7 @@ describe('impact gate as a loaded plugin', () => {
 		on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:constellation:constellation' } }));
 		on('mcp.call', () => {
 			raised.push('code_intel');
-			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), exported: [] };
+			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), used: [] };
 			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result }) }], isError: false } };
 		});
 		on('tool.check', () => ({ decision: 'allow' }));
@@ -461,11 +541,12 @@ describe('impact gate as a loaded plugin', () => {
 	/** Answers the gate's reads as an indexed project where `FILE` has 25 dependents; the Edit itself runs. */
 	function world(on: On) {
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		mock.clock(on);
 		on('session.cwd', () => ({ value: PROJECT }));
 		on('fs.exists', (_$, e) => ({ value: e.path === `${PROJECT}/constellation.json` || e.path === FILE }));
 		on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:constellation:constellation' } }));
 		on('mcp.call', () => {
-			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), exported: ['Core'] };
+			const result = { dependents: Array.from({ length: 25 }, (_, i) => `src/dep${i}.ts`), used: ['Core'] };
 			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result }) }], isError: false } };
 		});
 		on('tool.call', () => ({ result: 'ran' }));

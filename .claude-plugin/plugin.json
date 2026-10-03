@@ -50,7 +50,7 @@
 		"impactGate": {
 			"type": "string",
 			"title": "Impact gate",
-			"description": "What happens before Claude edits a high-impact file. off does nothing; dialog asks you before an auto-approved edit to a high-impact file; native sends that edit to Claude Code's own permission prompt; require-analysis refuses Claude's first edit to such a file until it checks the impact (works headless and in CI).",
+			"description": "What happens before Claude edits a high-impact file. off does nothing; dialog asks you before an auto-approved edit to a high-impact file; native sends that edit to Claude Code's own permission prompt; require-analysis refuses Claude's first edit to such a file once, with the impact report, unless it already analyzed the file's impact with code_intel; the retry goes through (works headless and in CI).",
 			"options": [
 				"off",
 				"dialog",

@@ -1,7 +1,7 @@
-import type { On, PluginOptions, ToolCheckResult } from 'claude-code';
+import type { EngineInterface, On, PluginOptions, ToolCheckResult } from 'claude-code';
 import { agentKey } from './budget';
-import { isConfigured, projectRoot, stringArg } from './lib';
-import { atLeast, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, type RiskLevel } from './risk';
+import { absolute, isConfigured, projectRoot, stringArg } from './lib';
+import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, resetRiskCache, type RiskLevel } from './risk';
 import { MARK, risk as tone } from './theme';
 
 /** What the gate does before an edit to a file at or above the threshold. */
@@ -11,6 +11,14 @@ const MODES: readonly Mode[] = ['off', 'dialog', 'native', 'require-analysis'];
 
 /** How long the toast for an edit already headed to the permission prompt stays. */
 const TOAST_MS = 10_000;
+
+/**
+ * How long an edit waits for its file's risk before it goes ahead ungated. The
+ * hook's own time limit pauses while `$.mcp.call` runs, so a slow server would
+ * otherwise hold the edit for code_intel's full timeout. A late lookup still
+ * settles into the cache for the next edit.
+ */
+export const RISK_DEADLINE_MS = 3000;
 
 const PROCEED = 'Proceed';
 const PROCEED_REMEMBER = "Proceed, and don't ask again for this file";
@@ -54,7 +62,7 @@ function declined(risk: FileRisk): ToolCheckResult {
 function refusal(risk: FileRisk): string {
 	const commit = risk.asOfCommit === undefined ? '' : `, as of ${risk.asOfCommit}`;
 	const top = risk.topDependents.length > 0 ? ` Top dependents: ${risk.topDependents.join(', ')}.` : '';
-	const symbols = risk.exportedSymbols.length > 0 ? ` Exported symbols here: ${risk.exportedSymbols.join(', ')}.` : '';
+	const symbols = risk.usedSymbols.length > 0 ? ` Symbols they import from it: ${risk.usedSymbols.join(', ')}.` : '';
 	return `${MARK} Constellation: ${risk.path} has ${risk.dependents} dependents (${tone(risk.level).word} risk${commit}).${top}${symbols} Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.`;
 }
 
@@ -62,27 +70,56 @@ function modeOf(value: unknown): Mode {
 	return MODES.find((m) => m === value) ?? 'off';
 }
 
+/**
+ * The risk of an edit by `tool` to `path` (absolute, normalized) when it is at
+ * or above the threshold, else undefined: no access key, no indexed project, a
+ * `Write` that creates the file, a failed lookup, or one slower than
+ * `RISK_DEADLINE_MS`.
+ */
+async function gatedRisk($: EngineInterface, tool: string, path: string, signal: AbortSignal): Promise<FileRisk | undefined> {
+	if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return undefined;
+	const root = await projectRoot(path, (p) => $.fs.exists(p));
+	if (root === null) return undefined;
+	if (tool === 'Write' && !(await $.fs.exists(path))) return undefined;
+	const pending = fileRisk(
+		{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a), after: (ms, fn) => $.clock.after(ms, fn) },
+		root,
+		path,
+	);
+	const stop = new AbortController();
+	const deadline = $.clock.sleep(RISK_DEADLINE_MS, { signal: AbortSignal.any([signal, stop.signal]) }).then(
+		() => undefined,
+		() => undefined,
+	);
+	try {
+		const risk = await Promise.race([pending, deadline]);
+		return risk !== undefined && atLeast(risk.level, threshold) ? risk : undefined;
+	} finally {
+		stop.abort();
+	}
+}
+
 export function registerImpactGate(on: On, options: PluginOptions): void {
 	resetImpact();
+	resetRiskCache();
 	mode = modeOf(options.impactGate);
 	threshold = options.impactThreshold === 'critical' ? 'critical' : 'high';
+	collectEvidence(mode === 'require-analysis');
 
 	if (mode === 'require-analysis') {
 		on('tool.call', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-			const path = stringArg(e, 'file_path') ?? stringArg(e, 'notebook_path');
-			if (path === undefined) return next(e);
-			if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return next(e);
-			const root = await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path);
-			if (root === null) return next(e);
-			if (String(e.tool) === 'Write' && !(await $.fs.exists(path))) return next(e);
-			const found = await fileRisk({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, root, path);
-			if (found === undefined || !atLeast(found.level, threshold)) return next(e);
+			const raw = stringArg(e, 'file_path') ?? stringArg(e, 'notebook_path');
+			if (raw === undefined) return next(e);
+			const path = absolute(raw, await $.session.cwd());
 			const key = agentKey(e);
+			if (assessed.get(key)?.has(path)) return next(e);
+			const found = await gatedRisk($, String(e.tool), path, next.signal);
+			if (found === undefined) return next(e);
 			const seen = assessed.get(key) ?? new Set<string>();
 			assessed.set(key, seen);
 			if (seen.has(path)) return next(e);
 			seen.add(path);
-			if (hasEvidence(key, [found.path, ...found.exportedSymbols])) return next(e);
+			if (hasEvidence(key, [found.path, path], found.usedSymbols)) return next(e);
 			return { deny: refusal(found) };
 		});
 		return;
@@ -92,23 +129,20 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
 		const decided = await next(e);
 		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog or toast.
-		if (e.tool_use_id === undefined) return decided;
+		if (e.tool_use_id === undefined || decided.decision === 'deny') return decided;
+		// Native mode only downgrades an edit core would run unprompted, and only when someone can answer the prompt:
+		// in a -p or SDK run the downgrade would turn the edit into a refusal.
+		if (mode === 'native' && (decided.decision !== 'allow' || (await $.session.surfaces()).length === 0)) return decided;
 		const input = typeof e.input === 'object' && e.input !== null ? e.input : undefined;
-		const path = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
-		if (path === undefined || decided.decision === 'deny') return decided;
-		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return decided;
-		const root = await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path);
-		if (root === null) return decided;
-		if (String(e.tool) === 'Write' && !(await $.fs.exists(path))) return decided;
-		const risk = await fileRisk({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, root, path);
-		if (risk === undefined || !atLeast(risk.level, threshold)) return decided;
+		const raw = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
+		if (raw === undefined) return decided;
+		const path = absolute(raw, await $.session.cwd());
+		if (mode === 'dialog' && decided.decision === 'allow' && remembered.has(path)) return decided;
+		const risk = await gatedRisk($, String(e.tool), path, next.signal);
+		if (risk === undefined) return decided;
 
 		const line = headline(risk);
 		if (mode === 'native') {
-			// Only an edit core would run unprompted is downgraded; one that already asks or is denied passes through.
-			if (decided.decision !== 'allow') return decided;
-			// A -p or SDK run has no one to answer the prompt: downgrading would turn the edit into a refusal.
-			if ((await $.session.surfaces()).length === 0) return decided;
 			$.ui.toast(line, { timeoutMs: TOAST_MS });
 			return { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` };
 		}
@@ -116,7 +150,6 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 			$.ui.toast(line, { timeoutMs: TOAST_MS });
 			return decided;
 		}
-		if (remembered.has(path)) return decided;
 		try {
 			const answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
 			if (answer === PROCEED) return decided;
@@ -125,14 +158,13 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 				return decided;
 			}
 			return declined(risk);
-		} catch {
-			// Rejected: no one to ask (a headless run), or the user dismissed the dialog.
-			const surfaces = await $.session.surfaces();
-			if (surfaces.length === 0) {
-				$.ui.log(`${line} (no one to ask, edit allowed)`);
-				return decided;
-			}
-			return declined(risk);
+		} catch (error) {
+			// Esc rejects with "no answer" (Claude Code 2.1.288): the user dismissed the dialog, which refuses.
+			// Any other rejection means the dialog could not open (a -p or SDK run, AskUserQuestion not
+			// available), so no one saw it: fail open.
+			if (String(error).includes('no answer')) return declined(risk);
+			$.ui.log(`${line} (could not ask, edit allowed)`);
+			return decided;
 		}
 	});
 }

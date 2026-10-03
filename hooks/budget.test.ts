@@ -1,8 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
-import type { McpPort } from './lib';
-import { fileRisk, hasEvidence, resetRiskCache } from './risk';
+import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerSession } from './session';
 
@@ -244,11 +243,12 @@ describe('nudge budget', () => {
 
 	test('a SessionStart clear empties the risk cache', async () => {
 		let calls = 0;
-		const mcp: McpPort = {
+		const mcp: RiskPort = {
+			after: () => {},
 			connect: async () => ({ isConnected: true, server: 's' }),
 			call: async () => {
 				calls += 1;
-				return { content: [{ type: 'text', text: JSON.stringify({ success: true, result: { dependents: [], exported: [] } }) }], isError: false };
+				return { content: [{ type: 'text', text: JSON.stringify({ success: true, result: { dependents: [], used: [] } }) }], isError: false };
 			},
 		};
 		const m = load({});
@@ -260,27 +260,39 @@ describe('nudge budget', () => {
 		expect(calls).toBe(2);
 	});
 
-	test('a code_intel call records its code and result text as evidence for its agent only', async () => {
+	test('a code_intel call records evidence for its agent only, while collection is on', async () => {
 		const m = load({});
+		collectEvidence(true);
 		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' });
-		expect(hasEvidence('agent-1', ['src/core.ts'])).toBe(true);
-		expect(hasEvidence('agent-1', ['Core'])).toBe(true);
-		expect(hasEvidence('agent-2', ['src/core.ts'])).toBe(false);
-		expect(hasEvidence('main', ['src/core.ts'])).toBe(false);
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(true);
+		expect(hasEvidence('agent-2', ['src/core.ts'], [])).toBe(false);
+		expect(hasEvidence('main', ['src/core.ts'], [])).toBe(false);
+		collectEvidence(false);
+	});
+
+	test('with the gate off a code_intel call records no evidence', async () => {
+		const m = load({});
+		collectEvidence(false);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {} });
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(false);
 	});
 
 	test('a denied code_intel call records no evidence', async () => {
 		const m = load({});
+		collectEvidence(true);
 		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { deny: 'x' });
-		expect(hasEvidence('agent-1', ['src/core.ts'])).toBe(false);
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(false);
+		collectEvidence(false);
 	});
 
 	test("a plugin's own code_intel call is neither evidence nor the agent's code_intel use", async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		const plugin = { plugin: 'constellation', tier: 'user' };
+		collectEvidence(true);
 		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' }, plugin);
-		expect(hasEvidence('agent-1', ['src/core.ts', 'Core'])).toBe(false);
+		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
+		collectEvidence(false);
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 
