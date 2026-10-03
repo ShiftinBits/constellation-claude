@@ -138,9 +138,27 @@ describe('forTheme', () => {
 
 describe('buttonRow', () => {
 	for (const surface of SURFACES) {
+		test(`each button runs its own onPress on ${surface}`, async ($, on) => {
+			const pressed: string[] = [];
+			const ui = await draw($, on, surface, (el) =>
+				buttonRow(
+					el,
+					{ key: 'cancel', label: 'Cancel', onPress: () => pressed.push('cancel') },
+					{ key: 'save', label: 'Save', onPress: () => pressed.push('save') },
+				),
+			);
+			await ui.press({ key: 'save' });
+			await ui.press({ key: 'cancel' });
+			expect(pressed).toEqual(['save', 'cancel']);
+		});
+
 		test(`right-aligns cancel then action on ${surface}`, async ($, on) => {
 			const ui = await draw($, on, surface, (el) =>
-				buttonRow(el, { key: 'cancel', label: 'Cancel', hotkey: 'c' }, { key: 'save', label: 'Save', hotkey: 's' }),
+				buttonRow(
+					el,
+					{ key: 'cancel', label: 'Cancel', hotkey: 'c', onPress: () => {} },
+					{ key: 'save', label: 'Save', hotkey: 's', onPress: () => {} },
+				),
 			);
 			const row = await ui.find({ type: 'Box' });
 			expect(row?.props).toMatchObject({ flexDirection: 'row', justifyContent: 'flex-end', columnGap: 2 });

@@ -168,20 +168,17 @@ export function badge(el: ElementTable, text: string, tone: Tone): RenderElement
 	return el.Text({ children: text ? [label, ` ${text}`] : [label] });
 }
 
-type ButtonSpec = Pick<ButtonProps, 'key' | 'label' | 'hotkey' | 'plain'>;
-
-function press(): void {}
+type ButtonSpec = Pick<ButtonProps, 'key' | 'label' | 'hotkey' | 'plain' | 'onPress'>;
 
 /**
  * A right-aligned button row, cancel on the left and the affirmative action on
- * the right. Presses arrive as `ui.press` events addressed by each `key`, so
- * the buttons carry no handler of their own and no color.
+ * the right. Each button runs its own `onPress`; neither carries a color.
  */
 export function buttonRow(el: ElementTable, cancel: ButtonSpec, action: ButtonSpec): RenderElement {
 	return el.Box({
 		flexDirection: 'row',
 		justifyContent: 'flex-end',
 		columnGap: 2,
-		children: [el.Button({ ...cancel, onPress: press }), el.Button({ ...action, onPress: press })],
+		children: [el.Button(cancel), el.Button(action)],
 	});
 }

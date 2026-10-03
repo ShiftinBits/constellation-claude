@@ -347,25 +347,42 @@ export function registerCommand(on: On): void {
 		if (envelope === undefined && !pending.has(selected) && !needsPath) void runQuery($, selected);
 		const isPending = pending.has(selected);
 
-		const noop = (): void => {};
+		const redraw = (): void => $.ui.invalidate('ui.render');
+		const showDeps = (path: string): void => {
+			depsPath = path;
+			drop('deps');
+			redraw();
+		};
 		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd) });
 
 		const body: RenderElement[] = [];
 		if (selected === 'deps') {
 			body.push(
-				el.Input({ key: 'deps-path', label: 'File', value: depsPath, placeholder: 'path/to/file.ts', submitLabel: 'show', onSubmit: noop }),
+				el.Input({
+					key: 'deps-path',
+					label: 'File',
+					value: depsPath,
+					placeholder: 'path/to/file.ts',
+					submitLabel: 'show',
+					onSubmit: (value) => showDeps(value.trim()),
+				}),
 				el.Button({
 					key: 'deps-toggle',
 					label: depsDirection === 'dependencies' ? 'Showing dependencies (switch to dependents)' : 'Showing dependents (switch to dependencies)',
 					plain: true,
-					onPress: noop,
+					onPress: () => {
+						depsDirection = depsDirection === 'dependencies' ? 'dependents' : 'dependencies';
+						drop('deps');
+						redraw();
+					},
 				}),
 			);
 		}
 		if (summary !== undefined) {
 			for (const item of summary.items) {
-				if (item.path !== undefined) {
-					body.push(el.Button({ key: `dep:${item.path}`, label: item.path, plain: true, onPress: noop }));
+				const path = item.path;
+				if (path !== undefined) {
+					body.push(el.Button({ key: `dep:${path}`, label: path, plain: true, onPress: () => showDeps(path) }));
 				} else if (item.badge?.kind === 'status') {
 					body.push(badge(el, item.text, forTheme(status(item.badge.value), light)));
 				} else if (item.badge?.kind === 'kind') {
@@ -389,7 +406,10 @@ export function registerCommand(on: On): void {
 				label: tab === selected ? `▸ ${TAB_LABEL[tab]}` : TAB_LABEL[tab],
 				hotkey: String(index + 1),
 				plain: true,
-				onPress: noop,
+				onPress: () => {
+					selected = tab;
+					redraw();
+				},
 			}),
 		);
 
@@ -406,36 +426,27 @@ export function registerCommand(on: On): void {
 				...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
 				el.Box({ flexDirection: 'row', columnGap: 2, children: tabs }),
 				el.Box({ flexDirection: 'column', children: body }),
-				buttonRow(el, { key: 'close', label: 'Close' }, { key: 'refresh', label: 'Refresh', hotkey: 'r' }),
+				buttonRow(
+					el,
+					{ key: 'close', label: 'Close', onPress: async () => {
+							// The ui.close hook below sees Esc and unload, not this plugin's own
+							// close from a callback, so the button clears the state itself.
+							await $.ui.close({ id: PANE });
+							reset();
+						},
+					},
+					{
+						key: 'refresh',
+						label: 'Refresh',
+						hotkey: 'r',
+						onPress: () => {
+							drop(selected);
+							redraw();
+						},
+					},
+				),
 			],
 		});
-	});
-
-	on('ui.press', { requestId: PANE }, async ($, e) => {
-		const element = e.element;
-		const tab = TABS.find((t) => `tab-${t}` === element);
-		if (element === 'close') {
-			await $.ui.close({ id: PANE });
-			return { element };
-		}
-		if (tab !== undefined) selected = tab;
-		else if (element === 'refresh') drop(selected);
-		else if (element === 'deps-toggle') {
-			depsDirection = depsDirection === 'dependencies' ? 'dependents' : 'dependencies';
-			drop('deps');
-		} else if (element.startsWith('dep:')) {
-			depsPath = element.slice('dep:'.length);
-			drop('deps');
-		}
-		$.ui.invalidate('ui.render');
-		return { element };
-	});
-
-	on('ui.input', { requestId: PANE, element: 'deps-path', kind: 'submit' }, async ($, e) => {
-		depsPath = e.value.trim();
-		drop('deps');
-		$.ui.invalidate('ui.render');
-		return { element: e.element, value: e.value };
 	});
 
 	on('ui.close', { id: PANE }, async (_$, e, next) => {
