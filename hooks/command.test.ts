@@ -59,19 +59,28 @@ type World = {
 	surfaces?: readonly RenderSurface[];
 	theme?: string;
 	answer?: (code: string) => McpToolResult | Promise<McpToolResult>;
+	/** Makes the hook that answers this event throw. */
+	throws?: 'session.cwd' | 'config.list';
 };
 
 /** Answers everything beneath the plugin and returns the queries sent and the pane events seen. */
-function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer }: World = {}) {
+function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws }: World = {}) {
 	const codes: string[] = [];
 	const events: string[] = [];
 	const opens: PaneOpenArgs[] = [];
 	let turns = 0;
-	on('session.cwd', () => ({ value: '/work/app' }));
+	const armed = { cwd: false };
+	on('session.cwd', () => {
+		if (throws === 'session.cwd' && armed.cwd) throw new Error('no cwd');
+		return { value: '/work/app' };
+	});
 	on('session.surfaces', () => ({ value: surfaces }));
-	on('config.list', () => ({
-		value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }],
-	}));
+	on('config.list', () => {
+		if (throws === 'config.list') throw new Error('no config');
+		return {
+			value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: theme, provider: { plugin: 'engine', tier: 'core' }, isLocked: false }],
+		};
+	});
 	on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
 	on('mcp.call', async (_, e) => {
 		codes.push(String(e.args.code));
@@ -90,7 +99,7 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 		turns += 1;
 		return { turnId: e.turnId };
 	});
-	return { codes, events, opens, turns: () => turns };
+	return { codes, events, opens, turns: () => turns, armed };
 }
 
 async function run($: Engine, args = '') {
@@ -332,6 +341,122 @@ describe('the pane', () => {
 		await settle();
 		expect(await ui.find({ type: 'Text', text: /◐ pending/ })).toBeUndefined();
 		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+	});
+
+	/** The first query waits on a gate; later ones answer at once. Returns the gate's release. */
+	function gateFirst(on: On, stale: McpToolResult) {
+		let release: (value: McpToolResult) => void = () => {};
+		const gate = new Promise<McpToolResult>((resolve) => {
+			release = resolve;
+		});
+		let calls = 0;
+		const { codes } = world(on, { answer: () => (calls++ === 0 ? gate : success(PING)) });
+		return { codes, release: () => release(stale) };
+	}
+
+	test('an answer that lands after a refresh is discarded and the fresh one is cached', async ($, on) => {
+		const { codes, release } = gateFirst(on, failure('STALE_CODE', 'stale'));
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		await ui.press({ key: 'refresh' });
+		await settle();
+		expect(codes).toHaveLength(2);
+		release();
+		await settle();
+		expect(await ui.find({ type: 'Text', text: /STALE_CODE/ })).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		await ui.press({ key: 'tab-unused' });
+		await settle();
+		await ui.press({ key: 'tab-status' });
+		await settle();
+		expect(codes).toHaveLength(3);
+		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+	});
+
+	test('an answer that lands after the deps direction toggled is discarded', async ($, on) => {
+		let calls = 0;
+		let release: (value: McpToolResult) => void = () => {};
+		const gate = new Promise<McpToolResult>((resolve) => {
+			release = resolve;
+		});
+		world(on, { answer: (code) => (calls++ === 0 ? gate : answer(code)) });
+		await run($, 'deps src/app.ts');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		await ui.press({ key: 'deps-toggle' });
+		await settle();
+		release(success(DEPS));
+		await settle();
+		expect(await ui.find({ type: 'Button', key: 'dep:src/lib.ts' })).toBeUndefined();
+		expect(await ui.find({ type: 'Button', key: 'dep:src/main.ts' })).toBeDefined();
+	});
+
+	test('an answer that lands after the pane closed is not kept', async ($, on) => {
+		const { codes, release } = gateFirst(on, success(PING));
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		await ui.press({ key: 'close' });
+		release();
+		await settle();
+		await ui.unmount();
+		const again = await mountPane($, 'terminal');
+		await settle();
+		expect(codes).toHaveLength(2);
+		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
+	});
+
+	test('a failing MCP call draws an error badge', async ($, on) => {
+		world(on, {
+			answer: () => {
+				throw new Error('socket closed');
+			},
+		});
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await ui.find({ type: 'Text', text: /✗ error MCP_CALL_FAILED/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /no implementation for mcp\.call/ })).toBeDefined();
+	});
+
+	test('a drawing that cannot read the working directory draws an error badge', async ($, on) => {
+		const { armed } = world(on, { throws: 'session.cwd' });
+		await run($);
+		const first = await mountPane($, 'terminal');
+		await settle();
+		await first.press({ key: 'close' });
+		await first.unmount();
+		armed.cwd = true;
+		const again = await mountPane($, 'terminal');
+		await settle();
+		expect(await again.find({ type: 'Text', text: /✗ error MCP_CALL_FAILED/ })).toBeDefined();
+		expect(await again.find({ type: 'Text', text: /MCP_CALL_FAILED: no implementation for session\.cwd/ })).toBeDefined();
+	});
+
+	test('an unreadable theme falls back to the dark colors', async ($, on) => {
+		world(on, { theme: 'light-ansi', throws: 'config.list' });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		const badge = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✓ ok'));
+		expect(badge?.props['color']).toBe(palette.cosmic);
+	});
+
+	test('a surface that is neither terminal nor desktop passes through', async ($, on) => {
+		world(on);
+		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
+		await run($);
+		const ui = await $.ui.mount({
+			plugin: 'constellation',
+			surface: 'vscode',
+			component: 'Pane',
+			requestId: 'constellation',
+			props: { title: 'Constellation', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+		});
+		await settle();
+		expect(await ui.find({ type: 'Text', text: 'Constellation' })).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
 	});
 
 	test('a tab is queried once and cached', async ($, on) => {
