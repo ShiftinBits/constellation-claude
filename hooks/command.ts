@@ -99,13 +99,17 @@ function failure(error: CodeIntelError): Summary {
 	const message = error.message ?? 'The request failed';
 	const guidance = error.guidance ?? [];
 	const candidates = error.candidates ?? [];
-	const head: Item = { badge: { kind: 'status', value: 'error' }, text: `${error.code}: ${message}` };
-	// With project roots to offer, the pane asks for one instead of printing
+	// With project roots to offer (the working directory sits above several
+	// projects), the pane asks for one: no error badge, and none of the
 	// guidance written for an agent (re-invoke code_intel with a cwd).
 	const items: Item[] =
 		candidates.length > 0
-			? [head, { text: 'Choose a project:', heading: true }, ...candidates.map((c): Item => ({ text: projectName(c) ?? c, project: c }))]
-			: [head, ...guidance.map((g): Item => ({ text: g, dim: true }))];
+			? [
+					{ text: 'Choose a project', heading: true },
+					{ text: 'This folder holds several Constellation projects.', dim: true },
+					...candidates.map((c): Item => ({ text: projectName(c) ?? c, project: c })),
+				]
+			: [{ badge: { kind: 'status', value: 'error' }, text: `${error.code}: ${message}` }, ...guidance.map((g): Item => ({ text: g, dim: true }))];
 	return { lines: [`${error.code}: ${message}`, ...guidance], items, error };
 }
 
@@ -433,6 +437,19 @@ export function registerCommand(on: On): void {
 		}
 
 		const meta = metadata(envelope);
+		// Until a project is picked every tab would ask the same question, so the
+		// picker hides the tabs and Refresh.
+		const picking = summary?.items.some((i) => i.project !== undefined) ?? false;
+		const close = {
+			key: 'close',
+			label: 'Close',
+			onPress: async () => {
+				// The ui.close hook below sees Esc and unload, not this plugin's own
+				// close from a callback, so the button clears the state itself.
+				await $.ui.close({ id: PANE });
+				reset();
+			},
+		};
 		const tabs = TABS.map((tab, index) =>
 			el.Button({
 				key: `tab-${tab}`,
@@ -457,27 +474,19 @@ export function registerCommand(on: On): void {
 					children: [el.Text({ color: palette.nebula, children: MARK }), el.Text({ bold: true, children: 'Constellation' })],
 				}),
 				...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
-				el.Box({ flexDirection: 'row', columnGap: 2, children: tabs }),
+				...(picking ? [] : [el.Box({ flexDirection: 'row', columnGap: 2, children: tabs })]),
 				el.Box({ flexDirection: 'column', children: body }),
-				buttonRow(
-					el,
-					{ key: 'close', label: 'Close', onPress: async () => {
-							// The ui.close hook below sees Esc and unload, not this plugin's own
-							// close from a callback, so the button clears the state itself.
-							await $.ui.close({ id: PANE });
-							reset();
-						},
-					},
-					{
-						key: 'refresh',
-						label: 'Refresh',
-						hotkey: 'r',
-						onPress: () => {
-							drop(selected);
-							redraw();
-						},
-					},
-				),
+				picking
+					? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(close)] })
+					: buttonRow(el, close, {
+							key: 'refresh',
+							label: 'Refresh',
+							hotkey: 'r',
+							onPress: () => {
+								drop(selected);
+								redraw();
+							},
+						}),
 			],
 		});
 	});

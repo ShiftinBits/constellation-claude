@@ -166,6 +166,7 @@ describe('summarize', () => {
 			['web', '/w/web'],
 		]);
 		expect(s.items.find((i) => i.text === 're-invoke code_intel')).toBeUndefined();
+		expect(s.items.find((i) => i.badge !== undefined)).toBeUndefined();
 		expect(s.lines).toContain('re-invoke code_intel');
 	});
 
@@ -584,11 +585,16 @@ describe('the pane', () => {
 		await settle();
 		expect(await first.find({ key: 'project:/work/app/core' })).toBeDefined();
 		expect(await first.find({ type: 'Text', text: 're-invoke code_intel' })).toBeUndefined();
+		expect(await first.find({ type: 'Text', text: /CWD_NOT_INDEXED/ })).toBeUndefined();
+		expect(await first.find({ key: 'tab-status' })).toBeUndefined();
+		expect(await first.find({ key: 'refresh' })).toBeUndefined();
+		expect(await first.find({ key: 'close' })).toBeDefined();
 
 		await first.press({ key: 'project:/work/app/web' });
 		await settle();
 		expect(cwds.at(-1)).toBe('/work/app/web');
 		expect(await first.find({ type: 'Text', text: /connection/ })).toBeDefined();
+		expect(await first.find({ key: 'tab-status' })).toBeDefined();
 		await first.press({ key: 'close' });
 		await first.unmount();
 
