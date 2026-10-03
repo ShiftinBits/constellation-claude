@@ -12,5 +12,5 @@ export const register: Register = (on, options) => {
 	registerDescribe(on);
 	registerAugment(on, options);
 	registerSession(on);
-	registerCommand(on);
+	registerCommand(on, options);
 };

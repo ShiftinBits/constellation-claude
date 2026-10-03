@@ -61,16 +61,19 @@ type World = {
 	answer?: (code: string, cwd: string) => McpToolResult | Promise<McpToolResult>;
 	/** Makes the hook that answers this event throw. */
 	throws?: 'session.cwd' | 'config.list';
+	/** What `$.store` already holds, as from an earlier session. */
+	saved?: [string, unknown][];
 };
 
 /** Answers everything beneath the plugin and returns the queries sent and the pane events seen. */
-function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws }: World = {}) {
+function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws, saved = [] }: World = {}) {
 	const codes: string[] = [];
 	const cwds: string[] = [];
 	const events: string[] = [];
 	const opens: PaneOpenArgs[] = [];
 	let turns = 0;
 	const armed = { cwd: false };
+	const store = new Map<string, unknown>(saved);
 	on('session.cwd', () => {
 		if (throws === 'session.cwd' && armed.cwd) throw new Error('no cwd');
 		return { value: '/work/app' };
@@ -101,7 +104,16 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 		turns += 1;
 		return { turnId: e.turnId };
 	});
-	return { codes, cwds, events, opens, turns: () => turns, armed };
+	on('store.get', (_, e) => ({ value: store.get(e.key) }));
+	on('store.set', (_, e) => {
+		store.set(e.key, e.value);
+		return { value: undefined };
+	});
+	on('store.delete', (_, e) => {
+		store.delete(e.key);
+		return { value: undefined };
+	});
+	return { codes, cwds, events, opens, store, turns: () => turns, armed };
 }
 
 async function run($: Engine, args = '') {
@@ -606,6 +618,74 @@ describe('the pane', () => {
 		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
 	});
 
+	const WORKSPACE = (code: string, cwd: string): McpToolResult => {
+		if (cwd === '/work/app') {
+			const error = { code: 'CWD_NOT_INDEXED', message: 'no project', context: { candidates: ['/work/app/core', '/work/app/web'] } };
+			return { content: [{ type: 'text', text: JSON.stringify({ success: false, error }) }], isError: false };
+		}
+		if (code === 'return await api.getCapabilities()') {
+			return success({ isIndexed: true, supportedLanguages: ['typescript'], fileCount: 42, lastIndexedAt: INDEXED_AT });
+		}
+		return answer(code);
+	};
+
+	test('the picker rows carry digit hotkeys, focus the first, and show each project in one line', async ($, on) => {
+		world(on, { answer: WORKSPACE });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		const core = await ui.find({ key: 'project:/work/app/core' });
+		const web = await ui.find({ key: 'project:/work/app/web' });
+		expect(core?.props).toMatchObject({ hotkey: '1', autoFocus: true, plain: true });
+		expect(web?.props).toMatchObject({ hotkey: '2' });
+		expect(web?.props['autoFocus']).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: /typescript · 42 files/ })).toBeDefined();
+	});
+
+	test('a pick is remembered for the next session and switch project forgets it', async ($, on) => {
+		const { store, cwds } = world(on, { answer: WORKSPACE });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		await ui.press({ key: 'project:/work/app/core' });
+		await settle();
+		expect(store.get('project:/work/app')).toBe('/work/app/core');
+		expect(await ui.find({ type: 'Text', text: 'core' })).toBeDefined();
+		expect(await ui.find({ key: 'switch-project' })).toBeDefined();
+
+		await ui.press({ key: 'switch-project' });
+		await settle();
+		expect(store.has('project:/work/app')).toBe(false);
+		expect(cwds.at(-1)).not.toBe('/work/app/core');
+		expect(await ui.find({ key: 'project:/work/app/web' })).toBeDefined();
+	});
+
+	test('a pick saved by an earlier session opens straight into that project', async ($, on) => {
+		const { cwds } = world(on, { answer: WORKSPACE, saved: [['project:/work/app', '/work/app/web']] });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(cwds[0]).toBe('/work/app/web');
+		expect(await ui.find({ type: 'Text', text: /connection/ })).toBeDefined();
+	});
+
+	test('a project of its own shows no switch control', async ($, on) => {
+		world(on);
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await ui.find({ type: 'Text', text: 'app' })).toBeDefined();
+		expect(await ui.find({ key: 'switch-project' })).toBeUndefined();
+	});
+
+	test('Close is marked as the dismiss control of the pane', async ($, on) => {
+		world(on);
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect((await ui.find({ key: 'close' }))?.props['role']).toBe('dismiss');
+	});
+
 	test('closing clears what the pane held', async ($, on) => {
 		const { codes } = world(on);
 		await run($, 'unused');
@@ -621,14 +701,45 @@ describe('the pane', () => {
 		expect(await again.find({ type: 'Text', text: /connection/ })).toBeDefined();
 	});
 
-	test('a light theme drops the gold and green colors for bold', async ($, on) => {
-		world(on, { theme: 'light-ansi' });
+	const okColor = async (ui: Awaited<ReturnType<typeof mountPane>>) =>
+		(await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✓ ok'))?.props['color'];
+	const markColor = async (ui: Awaited<ReturnType<typeof mountPane>>) =>
+		(await ui.findAll({ type: 'Text' })).find((t) => t.children.includes(MARK))?.props['color'];
+
+	test('a light theme swaps the green for the theme success color and keeps the brand blue', async ($, on) => {
+		world(on, { theme: 'light' });
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		const badge = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✓ ok'));
-		expect(badge?.props['color']).toBeUndefined();
-		expect(badge?.props['bold']).toBe(true);
+		expect(await okColor(ui)).toBe('success');
+		expect(await markColor(ui)).toBe(palette.nebula);
+	});
+
+	test('an ANSI or color-blind theme draws with the theme colors only', async ($, on) => {
+		world(on, { theme: 'dark-daltonized' });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await okColor(ui)).toBe('success');
+		expect(await markColor(ui)).toBe('suggestion');
+	});
+
+	test('the colors option set to theme draws with the theme colors on a dark theme', { options: { colors: 'theme' } }, async ($, on) => {
+		world(on, { theme: 'dark' });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await okColor(ui)).toBe('success');
+	});
+
+	test('the colors option set to none draws no color and keeps the words', { options: { colors: 'none' } }, async ($, on) => {
+		world(on, { theme: 'dark' });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await okColor(ui)).toBeUndefined();
+		expect(await markColor(ui)).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: '✓ ok' })).toBeDefined();
 	});
 
 	test('a dark theme keeps the green', async ($, on) => {

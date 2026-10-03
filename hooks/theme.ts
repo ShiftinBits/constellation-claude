@@ -137,18 +137,54 @@ export function kind(symbolKind: string): Tone {
 }
 
 /**
- * The light-theme fallback, the one place it lives. Gold and green read poorly
- * on a light terminal and the theme key names are not confirmed by the engine
- * types, so on light the color is dropped and the tone is bold; the word and
- * glyph carry the meaning. Every other tone is returned unchanged. Callers
- * pass whether the theme is light; this module never reads the theme.
+ * How the plugin colors what it draws, the one place that decides it:
+ * - `brand`: the Constellation palette.
+ * - `brand-light`: the palette with gold and green, which read poorly on white,
+ *   swapped for Claude Code's `warning` and `success` theme colors.
+ * - `theme`: only Claude Code's theme colors, so ANSI and color-blind themes
+ *   draw their own values (a raw hex color is only approximated there).
+ * - `none`: no color; every tone's word and glyph carry its meaning.
  */
-export function forTheme(tone: Tone, light: boolean): Tone {
-	if (!light || (tone.color !== palette.solar && tone.color !== palette.cosmic)) {
-		return tone;
-	}
+export type Scheme = 'brand' | 'brand-light' | 'theme' | 'none';
+
+/**
+ * The scheme for the `colors` option (`brand`, the default, `theme` or `none`) and Claude Code's `theme` setting (its
+ * `/config` row). `brand` follows the theme: an ANSI or color-blind theme gets
+ * the theme's own colors, a light one the light swap. `auto` reads as dark.
+ */
+export function scheme(colors: unknown, theme: unknown): Scheme {
+	if (colors === 'none' || colors === 'theme') return colors;
+	const name = typeof theme === 'string' ? theme : '';
+	if (name.endsWith('-ansi') || name.includes('daltonized')) return 'theme';
+	return name.startsWith('light') ? 'brand-light' : 'brand';
+}
+
+/**
+ * Claude Code theme keys for the five accents, read from its built-in themes:
+ * blue `suggestion`, purple `merged`, `warning`, `success` and `error`.
+ */
+const THEME_KEY: Readonly<Record<string, string>> = {
+	[palette.nebula]: 'suggestion',
+	[palette.galactic]: 'merged',
+	[palette.solar]: 'warning',
+	[palette.cosmic]: 'success',
+	[palette.stellar]: 'error',
+};
+
+/** A palette color as the scheme draws it: itself, a theme key, or no color. */
+export function paint(color: string | undefined, to: Scheme): string | undefined {
+	if (color === undefined || to === 'brand') return color;
+	if (to === 'none') return undefined;
+	if (to === 'brand-light' && color !== palette.solar && color !== palette.cosmic) return color;
+	return THEME_KEY[color] ?? color;
+}
+
+/** A tone in the scheme's colors. Its word, glyph, bold and dim are kept, so meaning never rides on color alone. */
+export function forTheme(tone: Tone, to: Scheme): Tone {
+	const color = paint(tone.color, to);
+	if (color === tone.color) return tone;
 	const { color: _color, ...rest } = tone;
-	return { ...rest, bold: true };
+	return color === undefined ? rest : { ...rest, color };
 }
 
 function textProps(tone: Tone): TextProps {
@@ -168,7 +204,7 @@ export function badge(el: ElementTable, text: string, tone: Tone): RenderElement
 	return el.Text({ children: text ? [label, ` ${text}`] : [label] });
 }
 
-type ButtonSpec = Pick<ButtonProps, 'key' | 'label' | 'hotkey' | 'plain' | 'onPress'>;
+type ButtonSpec = Pick<ButtonProps, 'key' | 'label' | 'hotkey' | 'plain' | 'role' | 'onPress'>;
 
 /**
  * A right-aligned button row, cancel on the left and the affirmative action on

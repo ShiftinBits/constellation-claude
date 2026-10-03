@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import type { ElementTable, On, RenderElement } from 'claude-code';
-import { MARK, badge, buttonRow, forTheme, kind, palette, rgb, risk, status } from './theme';
+import { MARK, badge, buttonRow, forTheme, kind, paint, palette, rgb, risk, scheme, status } from './theme';
 import type { Tone } from './theme';
 
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -113,26 +113,59 @@ describe('kind', () => {
 	});
 });
 
+describe('scheme', () => {
+	test('brand follows a dark theme, swaps on a light one, and hands ANSI and color-blind themes their own colors', () => {
+		expect(scheme('brand', 'dark')).toBe('brand');
+		expect(scheme('brand', 'auto')).toBe('brand');
+		expect(scheme(undefined, undefined)).toBe('brand');
+		expect(scheme('brand', 'light')).toBe('brand-light');
+		expect(scheme('brand', 'dark-ansi')).toBe('theme');
+		expect(scheme('brand', 'light-ansi')).toBe('theme');
+		expect(scheme('brand', 'dark-daltonized')).toBe('theme');
+		expect(scheme('brand', 'light-daltonized')).toBe('theme');
+	});
+
+	test('the theme and none options win over the theme', () => {
+		expect(scheme('theme', 'dark')).toBe('theme');
+		expect(scheme('none', 'light')).toBe('none');
+	});
+});
+
 describe('forTheme', () => {
-	test('light replaces solar and cosmic colors', () => {
-		for (const tone of [status('stale'), status('healthy')]) {
-			const themed = forTheme(tone, true);
-			expect(themed.color).not.toBe(palette.solar);
-			expect(themed.color).not.toBe(palette.cosmic);
-			expect(themed.word).toBe(tone.word);
-			expect(themed.glyph).toBe(tone.glyph);
-		}
-	});
-
-	test('light leaves other tones unchanged', () => {
-		for (const tone of [status('error'), status('info'), status('unknown'), risk('critical')]) {
-			expect(forTheme(tone, true)).toBe(tone);
-		}
-	});
-
-	test('dark returns the tone as given', () => {
+	test('brand returns the tone as given', () => {
 		const tone: Tone = status('stale');
-		expect(forTheme(tone, false)).toBe(tone);
+		expect(forTheme(tone, 'brand')).toBe(tone);
+	});
+
+	test('brand-light swaps gold and green for the warning and success theme colors', () => {
+		expect(forTheme(status('stale'), 'brand-light')).toMatchObject({ color: 'warning', word: 'stale', glyph: '◐' });
+		expect(forTheme(status('healthy'), 'brand-light')).toMatchObject({ color: 'success', word: 'ok', glyph: '✓' });
+	});
+
+	test('brand-light leaves the other accents in the palette', () => {
+		for (const tone of [status('error'), status('info'), status('unknown'), risk('critical')]) {
+			expect(forTheme(tone, 'brand-light')).toBe(tone);
+		}
+	});
+
+	test('theme maps every accent to a Claude Code theme color', () => {
+		expect(forTheme(status('info'), 'theme').color).toBe('suggestion');
+		expect(forTheme(kind('class'), 'theme').color).toBe('merged');
+		expect(forTheme(status('stale'), 'theme').color).toBe('warning');
+		expect(forTheme(status('healthy'), 'theme').color).toBe('success');
+		expect(forTheme(risk('critical'), 'theme')).toMatchObject({ color: 'error', bold: true, word: 'CRITICAL' });
+	});
+
+	test('none drops the color and keeps the word, glyph and weight', () => {
+		const themed = forTheme(risk('critical'), 'none');
+		expect(themed.color).toBeUndefined();
+		expect(themed).toMatchObject({ bold: true, word: 'CRITICAL', glyph: '✗' });
+	});
+
+	test('paint maps a bare palette color the same way', () => {
+		expect(paint(palette.nebula, 'brand')).toBe(palette.nebula);
+		expect(paint(palette.nebula, 'theme')).toBe('suggestion');
+		expect(paint(palette.nebula, 'none')).toBeUndefined();
 	});
 });
 

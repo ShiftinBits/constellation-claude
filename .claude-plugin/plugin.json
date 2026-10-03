@@ -35,6 +35,17 @@
 			"title": "Search result hints",
 			"description": "Add one code_intel line (the symbol's kind, location and usage count) to the result of a symbol search with Grep or grep/rg in the shell, once per symbol.",
 			"default": true
+		},
+		"colors": {
+			"type": "string",
+			"title": "Colors",
+			"description": "How the /constellation pane is colored: brand uses the Constellation palette (switching to Claude Code's theme colors on light, ANSI and color-blind themes), theme uses only Claude Code's theme colors, none draws no color (words and symbols still show each status).",
+			"options": [
+				"brand",
+				"theme",
+				"none"
+			],
+			"default": "brand"
 		}
 	}
 }

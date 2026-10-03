@@ -1,7 +1,8 @@
-import type { EngineInterface, On, RenderElement } from 'claude-code';
+import type { EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
-import { MARK, badge, buttonRow, forTheme, kind, palette, status } from './theme';
+import { MARK, badge, buttonRow, forTheme, kind, paint, palette, scheme, status } from './theme';
+import type { Scheme } from './theme';
 
 /**
  * The command's name. Mod commands allow letters, digits, `_` and `-`, so the
@@ -234,6 +235,28 @@ function metadata(envelope: CodeIntelEnvelope | undefined): string | undefined {
 	return parts.length === 0 ? undefined : parts.join(' · ');
 }
 
+/**
+ * One line about a project for the picker, from its `getCapabilities` envelope:
+ * when it was indexed, its languages and its file count.
+ */
+export function projectDetail(envelope: CodeIntelEnvelope | undefined): string {
+	if (envelope === undefined) return '…';
+	if (!envelope.success) return envelope.error?.code === 'PROJECT_NOT_INDEXED' ? 'not indexed' : (envelope.error?.code ?? 'unavailable');
+	const caps = isRecord(envelope.result) ? envelope.result : {};
+	if (caps['isIndexed'] === false) return 'not indexed';
+	const parts: string[] = [];
+	const indexedAt = text(caps['lastIndexedAt']) ?? envelope.lastIndexedAt;
+	if (indexedAt !== undefined) parts.push(`indexed ${relative(indexedAt)}`);
+	const languages = caps['supportedLanguages'];
+	if (Array.isArray(languages)) {
+		const names = languages.filter((l): l is string => typeof l === 'string');
+		if (names.length > 0) parts.push(names.join(', '));
+	}
+	const files = count(caps['fileCount']);
+	if (files !== undefined) parts.push(`${files} files`);
+	return parts.length === 0 ? 'indexed' : parts.join(' · ');
+}
+
 function codeFor(tab: Tab, direction: Direction, path: string): string {
 	switch (tab) {
 		case 'status':
@@ -249,7 +272,7 @@ function codeFor(tab: Tab, direction: Direction, path: string): string {
 
 // The pane's state: module variables, lost on a hot reload, so every read has a default.
 let selected: Tab = 'status';
-let light = false;
+let tint: Scheme = 'brand';
 let depsPath = '';
 let depsDirection: Direction = 'dependencies';
 let sessionCwd: string | undefined;
@@ -263,6 +286,14 @@ let chosen: { from: string; root: string } | undefined;
 const cache = new Map<Tab, CodeIntelEnvelope>();
 const pending = new Set<Tab>();
 const generations = new Map<Tab, number>();
+/** The picker's per-project `getCapabilities` envelopes, by project root. */
+const details = new Map<string, CodeIntelEnvelope>();
+const detailsPending = new Set<string>();
+
+/** The `$.store` key that remembers the project picked in `from`, across sessions. */
+function pickKey(from: string): string {
+	return `project:${from}`;
+}
 
 function drop(tab: Tab): void {
 	cache.delete(tab);
@@ -277,6 +308,8 @@ function reset(): void {
 	depsDirection = 'dependencies';
 	sessionCwd = undefined;
 	launchCwd = undefined;
+	details.clear();
+	detailsPending.clear();
 }
 
 /** The directory queries run in: the picked project while the session stays where it was picked. */
@@ -309,11 +342,24 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	$.ui.invalidate('ui.render');
 }
 
+/** Reads one project's capabilities for the picker; a result that lands after the pane closed is dropped. */
+async function runDetail($: EngineInterface, root: string): Promise<void> {
+	detailsPending.add(root);
+	const envelope = await codeIntel(
+		{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
+		'return await api.getCapabilities()',
+		{ cwd: root },
+	);
+	if (!detailsPending.delete(root)) return;
+	details.set(root, envelope);
+	$.ui.invalidate('ui.render');
+}
+
 function projectName(cwd: string | undefined): string | undefined {
 	return cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop();
 }
 
-export function registerCommand(on: On): void {
+export function registerCommand(on: On, options: PluginOptions): void {
 	on('session.start', async ($, e, next) => {
 		const r = await next(e);
 		try {
@@ -332,6 +378,14 @@ export function registerCommand(on: On): void {
 	on('command.run', { command: COMMAND }, async ($, e) => {
 		const { tab, path } = parseArgs(e.args);
 		const cwd = await $.session.cwd();
+		if (chosen?.from !== cwd) {
+			try {
+				const saved = await $.store.get(pickKey(cwd));
+				if (typeof saved === 'string') chosen = { from: cwd, root: saved };
+			} catch {
+				// Nothing saved, or the store is unavailable: the picker asks again.
+			}
+		}
 		const dir = target(cwd);
 		if (!canDraw(await $.session.surfaces())) {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
@@ -351,10 +405,9 @@ export function registerCommand(on: On): void {
 		sessionCwd = dir;
 		launchCwd = cwd;
 		try {
-			const theme = (await $.config.list()).find((r) => r.key === 'theme');
-			light = typeof theme?.value === 'string' && theme.value.startsWith('light');
+			tint = scheme(options.colors, (await $.config.list()).find((r) => r.key === 'theme')?.value);
 		} catch {
-			light = false;
+			tint = scheme(options.colors, undefined);
 		}
 		await $.ui.open({ id: PANE, title: 'Constellation', focus: true, closeOnEscape: true });
 		$.ui.invalidate('ui.render');
@@ -374,6 +427,31 @@ export function registerCommand(on: On): void {
 			depsPath = path;
 			drop('deps');
 			redraw();
+		};
+		const accent = paint(palette.nebula, tint);
+		const pick = async (project: string): Promise<void> => {
+			const from = launchCwd ?? (await $.session.cwd());
+			chosen = { from, root: project };
+			sessionCwd = project;
+			for (const tab of TABS) drop(tab);
+			redraw();
+			try {
+				await $.store.set(pickKey(from), project);
+			} catch {
+				// Not remembered across sessions; this session keeps the pick.
+			}
+		};
+		const switchProject = async (): Promise<void> => {
+			const from = launchCwd ?? (await $.session.cwd());
+			chosen = undefined;
+			sessionCwd = from;
+			for (const tab of TABS) drop(tab);
+			redraw();
+			try {
+				await $.store.delete(pickKey(from));
+			} catch {
+				// A pick left in the store is offered again and can be switched again.
+			}
 		};
 		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd) });
 
@@ -401,29 +479,39 @@ export function registerCommand(on: On): void {
 			);
 		}
 		if (summary !== undefined) {
+			let row = 0;
 			for (const item of summary.items) {
 				const path = item.path;
 				const project = item.project;
 				if (project !== undefined) {
+					// The tabs are hidden while picking, so the digits are free for the rows.
+					const n = row++;
+					if (!details.has(project) && !detailsPending.has(project)) void runDetail($, project);
 					body.push(
-						el.Button({
-							key: `project:${project}`,
-							label: item.text,
-							plain: true,
-							onPress: async () => {
-								chosen = { from: launchCwd ?? (await $.session.cwd()), root: project };
-								sessionCwd = project;
-								for (const tab of TABS) drop(tab);
-								redraw();
-							},
+						el.Box({
+							key: `row:${project}`,
+							flexDirection: 'row',
+							columnGap: 2,
+							children: [
+								el.Button({
+									key: `project:${project}`,
+									label: item.text,
+									plain: true,
+									...(n < 9 ? { hotkey: String(n + 1) } : {}),
+									...(n === 0 ? { autoFocus: true as const } : {}),
+									hover: accent === undefined ? { bold: true } : { bold: true, color: accent },
+									onPress: () => pick(project),
+								}),
+								el.Text({ dimColor: true, children: projectDetail(details.get(project)) }),
+							],
 						}),
 					);
 				} else if (path !== undefined) {
 					body.push(el.Button({ key: `dep:${path}`, label: path, plain: true, onPress: () => showDeps(path) }));
 				} else if (item.badge?.kind === 'status') {
-					body.push(badge(el, item.text, forTheme(status(item.badge.value), light)));
+					body.push(badge(el, item.text, forTheme(status(item.badge.value), tint)));
 				} else if (item.badge?.kind === 'kind') {
-					body.push(badge(el, item.text, forTheme(kind(item.badge.value), light)));
+					body.push(badge(el, item.text, forTheme(kind(item.badge.value), tint)));
 				} else if (item.heading) {
 					body.push(el.Text({ bold: true, children: item.text }));
 				} else {
@@ -431,7 +519,7 @@ export function registerCommand(on: On): void {
 				}
 			}
 		} else if (isPending) {
-			body.push(badge(el, 'querying Constellation', forTheme(status('pending'), light)));
+			body.push(badge(el, 'querying Constellation', forTheme(status('pending'), tint)));
 		} else if (needsPath) {
 			body.push(el.Text({ dimColor: true, children: 'Enter a file path to see its dependencies.' }));
 		}
@@ -440,9 +528,12 @@ export function registerCommand(on: On): void {
 		// Until a project is picked every tab would ask the same question, so the
 		// picker hides the tabs and Refresh.
 		const picking = summary?.items.some((i) => i.project !== undefined) ?? false;
+		const canSwitch = !picking && launchCwd !== undefined && sessionCwd !== undefined && sessionCwd !== launchCwd;
+		const project = picking ? undefined : projectName(sessionCwd);
 		const close = {
 			key: 'close',
 			label: 'Close',
+			role: 'dismiss' as const,
 			onPress: async () => {
 				// The ui.close hook below sees Esc and unload, not this plugin's own
 				// close from a callback, so the button clears the state itself.
@@ -471,7 +562,17 @@ export function registerCommand(on: On): void {
 				el.Box({
 					flexDirection: 'row',
 					columnGap: 1,
-					children: [el.Text({ color: palette.nebula, children: MARK }), el.Text({ bold: true, children: 'Constellation' })],
+					children: [
+						el.Text(accent === undefined ? { children: MARK } : { color: accent, children: MARK }),
+						el.Text({ bold: true, children: 'Constellation' }),
+						...(project === undefined ? [] : [el.Text({ children: project })]),
+						...(canSwitch
+							? [
+									el.Text({ dimColor: true, children: '·' }),
+									el.Button({ key: 'switch-project', label: 'switch project', hotkey: 'p', plain: true, onPress: switchProject }),
+								]
+							: []),
+					],
 				}),
 				...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
 				...(picking ? [] : [el.Box({ flexDirection: 'row', columnGap: 2, children: tabs })]),
