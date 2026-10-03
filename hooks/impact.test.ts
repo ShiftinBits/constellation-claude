@@ -1,7 +1,7 @@
 import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCheckResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { headline, registerImpactGate } from './impact';
-import { type FileRisk, resetRiskCache } from './risk';
+import { forgetAgentImpact, headline, registerImpactGate } from './impact';
+import { type FileRisk, noteCodeIntel, resetRiskCache } from './risk';
 import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
@@ -119,10 +119,17 @@ function load(options: PluginOptions, world: World = {}) {
 	const query = (decision: ToolCheckResult['decision']) =>
 		raise('tool.check', { tool: 'Edit', input: { file_path: FILE } }, async () => ({ decision }));
 
+	/** An agent's real Edit of `path`, over a bottom that lets it through. */
+	const edit = (path = FILE, agentId = 'agent-1', tool = 'Edit'): Promise<object> => {
+		const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+		const e = { tool, [field]: path, tool_use_id: 'u1', agentId };
+		return raise('tool.call', e, async () => ({ result: 'ran' }) as unknown as ToolCheckResult);
+	};
+
 	const sessionStart = (source: string) =>
 		raise('classic.SessionStart', { source }, async () => ({ decision: 'allow' }));
 
-	return { calls, check, query, sessionStart };
+	return { calls, check, query, edit, sessionStart };
 }
 
 const HIGH: FileRisk = {
@@ -344,6 +351,84 @@ describe('impact gate native', () => {
 		const m = load({ impactGate: 'native' }, { surfaces: [] });
 		expect(await m.check()).toEqual({ decision: 'allow' });
 		expect(m.calls.toasts).toEqual([]);
+	});
+});
+
+describe('impact gate require-analysis', () => {
+	const RAN = { result: 'ran' };
+	const DENIED =
+		'✦ Constellation: src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Exported symbols here: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
+	const options = { impactGate: 'require-analysis' };
+
+	test('the first edit to a high-risk file is denied with the report and the retry passes', async () => {
+		const m = load(options);
+		expect(await m.edit()).toEqual({ deny: DENIED });
+		expect(await m.edit()).toEqual(RAN);
+		expect(await m.edit()).toEqual(RAN);
+	});
+
+	test('each agent is refused once per file', async () => {
+		const m = load(options);
+		await m.edit(FILE, 'agent-1');
+		expect(await m.edit(FILE, 'agent-2')).toEqual({ deny: DENIED });
+		expect(await m.edit(FILE, 'agent-2')).toEqual(RAN);
+	});
+
+	test('an agent run ending forgets its refusal and evidence', async () => {
+		const m = load(options);
+		await m.edit();
+		forgetAgentImpact('agent-1');
+		expect(await m.edit()).toEqual({ deny: DENIED });
+	});
+
+	test('a SessionStart clear forgets the refusals', async () => {
+		const m = load(options);
+		await m.edit();
+		await m.sessionStart('clear');
+		expect(await m.edit()).toEqual({ deny: DENIED });
+	});
+
+	test('a low-risk file passes', async () => {
+		expect(await load(options, { dependents: 4 }).edit()).toEqual(RAN);
+	});
+
+	test('a new file passes without a lookup', async () => {
+		const m = load(options, { files: [] });
+		expect(await m.edit(FILE, 'agent-1', 'Write')).toEqual(RAN);
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('mode off passes', async () => {
+		const m = load({ impactGate: 'off' });
+		expect(await m.edit()).toEqual(RAN);
+		expect(m.calls.programs).toBe(0);
+	});
+
+	test('a code_intel error passes', async () => {
+		expect(await load(options, { success: false }).edit()).toEqual(RAN);
+	});
+
+	test('a NotebookEdit reads notebook_path', async () => {
+		expect(await load(options).edit(FILE, 'agent-1', 'NotebookEdit')).toEqual({ deny: DENIED });
+	});
+
+	test('registers no tool.check hook', async () => {
+		const m = load(options);
+		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
+	});
+
+	test('earlier code_intel naming the file passes for that agent only', async () => {
+		const m = load(options);
+		noteCodeIntel('agent-1', { code: 'api.getDependents({ filePath: "src/core.ts" })' }, { result: {} });
+		expect(await m.edit(FILE, 'agent-1')).toEqual(RAN);
+		expect(await m.edit(FILE, 'agent-2')).toEqual({ deny: DENIED });
+	});
+
+	test('earlier code_intel naming an exported symbol passes', async () => {
+		const m = load(options);
+		noteCodeIntel('agent-1', { code: 'api.traceSymbolUsage' }, { result: {}, text: 'Core is used by' });
+		expect(await m.edit()).toEqual(RAN);
 	});
 });
 

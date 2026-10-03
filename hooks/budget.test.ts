@@ -266,6 +266,7 @@ describe('budget hooks as a loaded plugin', () => {
 		expect(await $.turn.start({ text: 'hi', turnId: 't1' })).toEqual({ turnId: 't1' });
 		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 		expect(call).toEqual({ result: 'beneath' });
+		expect(await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' })).toEqual({ result: 'beneath' });
 		const start = await $.classic.SessionStart({ source: 'clear' });
 		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
 	});

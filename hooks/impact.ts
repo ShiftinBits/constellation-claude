@@ -1,6 +1,7 @@
 import type { On, PluginOptions, ToolCheckResult } from 'claude-code';
+import { agentKey } from './budget';
 import { isConfigured, projectRoot, stringArg } from './lib';
-import { atLeast, type FileRisk, fileRisk, type RiskLevel } from './risk';
+import { atLeast, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, type RiskLevel } from './risk';
 import { MARK, risk as tone } from './theme';
 
 /** What the gate does before an edit to a file at or above the threshold. */
@@ -24,6 +25,9 @@ let threshold: RiskLevel = 'high';
  */
 const remembered = new Set<string>();
 
+/** Per agent, the files require-analysis mode has already refused once, by absolute path. */
+const assessed = new Map<string, Set<string>>();
+
 /** One line naming the file, how many files depend on it and its risk word, with the indexed commit when known. */
 export function headline(risk: FileRisk): string {
 	const line = `${MARK} ${risk.path}: ${risk.dependents} dependents · ${tone(risk.level).word} risk`;
@@ -46,6 +50,14 @@ function declined(risk: FileRisk): ToolCheckResult {
 	};
 }
 
+/** The refusal the model reads before its first edit to a file it has not looked into. */
+function refusal(risk: FileRisk): string {
+	const commit = risk.asOfCommit === undefined ? '' : `, as of ${risk.asOfCommit}`;
+	const top = risk.topDependents.length > 0 ? ` Top dependents: ${risk.topDependents.join(', ')}.` : '';
+	const symbols = risk.exportedSymbols.length > 0 ? ` Exported symbols here: ${risk.exportedSymbols.join(', ')}.` : '';
+	return `${MARK} Constellation: ${risk.path} has ${risk.dependents} dependents (${tone(risk.level).word} risk${commit}).${top}${symbols} Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.`;
+}
+
 function modeOf(value: unknown): Mode {
 	return MODES.find((m) => m === value) ?? 'off';
 }
@@ -54,6 +66,27 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 	resetImpact();
 	mode = modeOf(options.impactGate);
 	threshold = options.impactThreshold === 'critical' ? 'critical' : 'high';
+
+	if (mode === 'require-analysis') {
+		on('tool.call', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+			const path = stringArg(e, 'file_path') ?? stringArg(e, 'notebook_path');
+			if (path === undefined) return next(e);
+			if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return next(e);
+			const root = await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path);
+			if (root === null) return next(e);
+			if (String(e.tool) === 'Write' && !(await $.fs.exists(path))) return next(e);
+			const found = await fileRisk({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, root, path);
+			if (found === undefined || !atLeast(found.level, threshold)) return next(e);
+			const key = agentKey(e);
+			const seen = assessed.get(key) ?? new Set<string>();
+			assessed.set(key, seen);
+			if (seen.has(path)) return next(e);
+			seen.add(path);
+			if (hasEvidence(key, [found.path, ...found.exportedSymbols])) return next(e);
+			return { deny: refusal(found) };
+		});
+		return;
+	}
 	if (mode !== 'dialog' && mode !== 'native') return;
 
 	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
@@ -107,4 +140,11 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 /** Forgets every file the user chose not to be asked about, for a new conversation (`/clear`, `/resume`, `/branch`). */
 export function resetImpact(): void {
 	remembered.clear();
+	assessed.clear();
+}
+
+/** Drops what the subagent `agentId` has been refused and looked at, when its run ends. */
+export function forgetAgentImpact(agentId: string): void {
+	assessed.delete(agentId);
+	forgetAgentEvidence(agentId);
 }

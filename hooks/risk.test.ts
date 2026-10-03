@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { McpPort } from './lib';
-import { atLeast, fileRisk, resetRiskCache } from './risk';
+import { atLeast, fileRisk, forgetAgentEvidence, hasEvidence, noteCodeIntel, resetRiskCache } from './risk';
 
 const ROOT = '/work/app';
 
@@ -133,5 +133,55 @@ describe('fileRisk', () => {
 		resetRiskCache();
 		await fileRisk(port, ROOT, `${ROOT}/src/a.ts`);
 		expect(programs.length).toBe(2);
+	});
+});
+
+describe('code_intel evidence', () => {
+	const call = (code: string) => ({ tool: 'code_intel', code });
+
+	test('a path in the code counts', () => {
+		resetRiskCache();
+		noteCodeIntel('a', call('api.getDependents({ filePath: "src/core.ts" })'), { result: {} });
+		expect(hasEvidence('a', ['src/core.ts'])).toBe(true);
+		expect(hasEvidence('a', ['src/other.ts'])).toBe(false);
+	});
+
+	test('a symbol in the result text counts', () => {
+		resetRiskCache();
+		noteCodeIntel('a', call('api.searchSymbols({})'), { result: {}, text: '{"symbols":[{"name":"Core"}]}' });
+		expect(hasEvidence('a', ['src/core.ts', 'Core'])).toBe(true);
+	});
+
+	test('missing input and text record nothing and do not throw', () => {
+		resetRiskCache();
+		noteCodeIntel('a', { tool: 'code_intel' }, { result: {} });
+		expect(hasEvidence('a', ['x'])).toBe(false);
+	});
+
+	test('empty needles never match', () => {
+		resetRiskCache();
+		noteCodeIntel('a', call('code'), { result: {}, text: 'text' });
+		expect(hasEvidence('a', [''])).toBe(false);
+		expect(hasEvidence('a', [])).toBe(false);
+	});
+
+	test('a deny result is ignored', () => {
+		resetRiskCache();
+		noteCodeIntel('a', call('src/core.ts'), { deny: 'no' });
+		expect(hasEvidence('a', ['src/core.ts'])).toBe(false);
+	});
+
+	test('evidence is per agent and forgetAgentEvidence drops it', () => {
+		resetRiskCache();
+		noteCodeIntel('a', call('src/core.ts'), { result: {} });
+		expect(hasEvidence('b', ['src/core.ts'])).toBe(false);
+		forgetAgentEvidence('a');
+		expect(hasEvidence('a', ['src/core.ts'])).toBe(false);
+	});
+
+	test('resetRiskCache clears evidence', () => {
+		noteCodeIntel('a', call('src/core.ts'), { result: {} });
+		resetRiskCache();
+		expect(hasEvidence('a', ['src/core.ts'])).toBe(false);
 	});
 });

@@ -1,4 +1,4 @@
-import { codeIntel, type McpPort } from './lib';
+import { codeIntel, type McpPort, stringArg } from './lib';
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -76,10 +76,36 @@ const cache = new Map<string, Promise<FileRisk | undefined>>();
 /** The commit each root's cached entries were read at. */
 const commits = new Map<string, string>();
 
-/** Forgets every cached risk and commit. */
+/**
+ * Per agent, the code each of its code_intel calls ran and the text they
+ * returned, joined: what the agent has looked at, searched for by substring.
+ */
+const evidence = new Map<string, string>();
+
+/** Forgets every cached risk and commit, and every agent's evidence. */
 export function resetRiskCache(): void {
 	cache.clear();
 	commits.clear();
+	evidence.clear();
+}
+
+/** Records a code_intel tool call `e` (its arguments sit on the event itself) and its result `r` as evidence for the agent `key`; a denied call adds nothing. */
+export function noteCodeIntel(key: string, e: object, r: object): void {
+	if (Reflect.has(r, 'deny')) return;
+	const code = stringArg(e, 'code') ?? '';
+	const text = stringArg(r, 'text') ?? '';
+	evidence.set(key, `${evidence.get(key) ?? ''}\n${code}\n${text}`);
+}
+
+/** True when the agent `key` has code_intel evidence that mentions any non-empty `needle`. */
+export function hasEvidence(key: string, needles: string[]): boolean {
+	const seen = evidence.get(key);
+	return seen !== undefined && needles.some((n) => n !== '' && seen.includes(n));
+}
+
+/** Drops what the agent `key` has looked at. */
+export function forgetAgentEvidence(key: string): void {
+	evidence.delete(key);
 }
 
 async function load(mcp: McpPort, root: string, rel: string, key: string): Promise<FileRisk | undefined> {
