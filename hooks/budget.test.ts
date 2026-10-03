@@ -263,7 +263,7 @@ describe('nudge budget', () => {
 	test('a code_intel call records evidence for its agent only, while collection is on', async () => {
 		const m = load({});
 		collectEvidence(true);
-		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' });
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' });
 		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(true);
 		expect(hasEvidence('agent-2', ['src/core.ts'], [])).toBe(false);
 		expect(hasEvidence('main', ['src/core.ts'], [])).toBe(false);
@@ -273,7 +273,7 @@ describe('nudge budget', () => {
 	test('with the gate off a code_intel call records no evidence', async () => {
 		const m = load({});
 		collectEvidence(false);
-		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {} });
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' });
 		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(false);
 	});
 
@@ -285,15 +285,15 @@ describe('nudge budget', () => {
 		collectEvidence(false);
 	});
 
-	test("a plugin's own code_intel call is neither evidence nor the agent's code_intel use", async () => {
+	test("a plugin's own code_intel call is not evidence but still counts as the turn's code_intel use", async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		const plugin = { plugin: 'constellation', tier: 'user' };
 		collectEvidence(true);
-		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: 'Core' }, plugin);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' }, plugin);
 		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
 		collectEvidence(false);
-		expect(await m.search('agent-1')).toEqual(REMINDER);
+		expect(await m.search('agent-1')).not.toEqual(REMINDER);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

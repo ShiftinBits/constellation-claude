@@ -1,6 +1,6 @@
 import type { EngineInterface, On, PluginOptions, ToolCheckResult } from 'claude-code';
 import { agentKey } from './budget';
-import { absolute, isConfigured, projectRoot, stringArg } from './lib';
+import { absolute, isConfigured, projectRoot, stringArg, withinDeadline } from './lib';
 import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, resetRiskCache, type RiskLevel } from './risk';
 import { PROMPT, risk as tone } from './theme';
 
@@ -59,11 +59,12 @@ function question(risk: FileRisk): string {
 	return lines.join('\n');
 }
 
-/** The refusal the model reads when the user declines or dismisses the dialog. */
-function declined(risk: FileRisk): ToolCheckResult {
+/** The refusal the model reads when the user declines or dismisses the dialog, with what they typed under "Other". */
+function declined(risk: FileRisk, said?: string): ToolCheckResult {
+	const words = said === undefined ? '' : ` The user said: "${said}"`;
 	return {
 		decision: 'deny',
-		reason: `The user declined this edit to ${risk.path} (${risk.dependents} dependents, ${tone(risk.level).word} risk). Ask before trying a different approach.`,
+		reason: `The user declined this edit to ${risk.path} (${risk.dependents} dependents, ${tone(risk.level).word} risk). Ask before trying a different approach.${words}`,
 	};
 }
 
@@ -87,7 +88,7 @@ function modeOf(value: unknown): Mode {
  */
 async function gatedRisk($: EngineInterface, tool: string, path: string, signal: AbortSignal): Promise<FileRisk | undefined> {
 	if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return undefined;
-	const root = await projectRoot(path, (p) => $.fs.exists(p));
+	const root = await projectRoot(path, (p) => $.fs.exists(p), absolute('..', path));
 	if (root === null) return undefined;
 	if (tool === 'Write' && !(await $.fs.exists(path))) return undefined;
 	const pending = fileRisk(
@@ -95,17 +96,8 @@ async function gatedRisk($: EngineInterface, tool: string, path: string, signal:
 		root,
 		path,
 	);
-	const stop = new AbortController();
-	const deadline = $.clock.sleep(RISK_DEADLINE_MS, { signal: AbortSignal.any([signal, stop.signal]) }).then(
-		() => undefined,
-		() => undefined,
-	);
-	try {
-		const risk = await Promise.race([pending, deadline]);
-		return risk !== undefined && atLeast(risk.level, threshold) ? risk : undefined;
-	} finally {
-		stop.abort();
-	}
+	const risk = await withinDeadline((ms, o) => $.clock.sleep(ms, o), pending, RISK_DEADLINE_MS, signal);
+	return risk !== undefined && atLeast(risk.level, threshold) ? risk : undefined;
 }
 
 export function registerImpactGate(on: On, options: PluginOptions): void {
@@ -121,14 +113,14 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 			if (raw === undefined) return next(e);
 			const path = absolute(raw, await $.session.cwd());
 			const key = agentKey(e);
-			if (assessed.get(key)?.has(path)) return next(e);
-			const found = await gatedRisk($, String(e.tool), path, next.signal);
-			if (found === undefined) return next(e);
 			const seen = assessed.get(key) ?? new Set<string>();
-			assessed.set(key, seen);
 			if (seen.has(path)) return next(e);
+			// The first edit is the one chance: a lookup that misses the deadline or fails lets
+			// it through, and a later refusal would come after the file already changed.
+			assessed.set(key, seen);
 			seen.add(path);
-			if (hasEvidence(key, [found.path, path], found.usedSymbols)) return next(e);
+			const found = await gatedRisk($, String(e.tool), path, next.signal);
+			if (found === undefined || hasEvidence(key, [found.path, path], found.usedSymbols)) return next(e);
 			return { deny: refusal(found) };
 		});
 		return;
@@ -165,6 +157,11 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 			// Native mode sends an auto-approved edit to the permission prompt; dialog mode leaves a prompted one there.
 			return mode === 'native' ? { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` } : decided;
 		}
+		// A -p or SDK run has no one to ask: no one would see the dialog, so fail open.
+		if ((await $.session.surfaces()).length === 0) {
+			$.ui.log(`${line} (could not ask, edit allowed)`);
+			return decided;
+		}
 		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
 		try {
 			const answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
@@ -173,14 +170,10 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 				remembered.add(path);
 				return decided;
 			}
+			return declined(risk, answer === CANCEL ? undefined : answer);
+		} catch {
+			// With someone to ask, a rejection is the dialog dismissed (Esc), which refuses.
 			return declined(risk);
-		} catch (error) {
-			// Esc rejects with "no answer" (Claude Code 2.1.288): the user dismissed the dialog, which refuses.
-			// Any other rejection means the dialog could not open (a -p or SDK run, AskUserQuestion not
-			// available), so no one saw it: fail open.
-			if (String(error).includes('no answer')) return declined(risk);
-			$.ui.log(`${line} (could not ask, edit allowed)`);
-			return decided;
 		}
 	});
 }

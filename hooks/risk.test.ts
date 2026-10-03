@@ -191,6 +191,30 @@ describe('fileRisk', () => {
 		expect(programs.length).toBe(5);
 	});
 
+	test('a lookup swept by a newer commit leaves the newer entries and commit alone', async () => {
+		let commit = 'aaaaaaa1';
+		let release: (c: Canned) => void = () => {};
+		let hold = false;
+		const { port, programs } = host(() => {
+			if (!hold) return { dependents: 1, commit };
+			hold = false;
+			return new Promise<Canned>((resolve) => {
+				release = resolve;
+			});
+		});
+		await fileRisk(port, ROOT, `${ROOT}/src/c.ts`);
+		hold = true;
+		const stale = fileRisk(port, ROOT, `${ROOT}/src/a.ts`);
+		commit = 'bbbbbbb2';
+		await fileRisk(port, ROOT, `${ROOT}/src/b.ts`);
+		expect((await fileRisk(port, ROOT, `${ROOT}/src/a.ts`))?.asOfCommit).toBe('bbbbbbb');
+		release({ dependents: 9, commit: 'aaaaaaa1' });
+		await stale;
+		expect((await fileRisk(port, ROOT, `${ROOT}/src/a.ts`))?.asOfCommit).toBe('bbbbbbb');
+		await fileRisk(port, ROOT, `${ROOT}/src/b.ts`);
+		expect(programs.length).toBe(4);
+	});
+
 	test('resetRiskCache empties the cache', async () => {
 		const { port, programs } = host(() => ({ dependents: 1 }));
 		await fileRisk(port, ROOT, `${ROOT}/src/a.ts`);
@@ -203,6 +227,7 @@ describe('fileRisk', () => {
 describe('code_intel evidence', () => {
 	const call = (code: string) => ({ tool: 'code_intel', code });
 	const DEPS = "api.getDependents({ filePath: 'src/core.ts' })";
+	const OK = { text: '{"success":true}' };
 
 	/** An empty cache with evidence recorded, as require-analysis mode runs. */
 	function collecting() {
@@ -212,7 +237,7 @@ describe('code_intel evidence', () => {
 
 	test('a path an impact method was asked about counts, exactly', () => {
 		collecting();
-		noteCodeIntel('a', call(DEPS), { result: {} });
+		noteCodeIntel('a', call(DEPS), OK);
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(true);
 		expect(hasEvidence('a', ['core.ts'], [])).toBe(false);
 		expect(hasEvidence('a', ['src/other.ts'], [])).toBe(false);
@@ -220,7 +245,7 @@ describe('code_intel evidence', () => {
 
 	test('a symbol counts as a whole identifier in a literal of the same program', () => {
 		collecting();
-		noteCodeIntel('a', call("const s = await api.searchSymbols({ query: 'AuthService.login' }); return api.impactAnalysis({ symbolId: s.symbols[0].id });"), {});
+		noteCodeIntel('a', call("const s = await api.searchSymbols({ query: 'AuthService.login' }); return api.impactAnalysis({ symbolId: s.symbols[0].id });"), OK);
 		expect(hasEvidence('a', [], ['AuthService'])).toBe(true);
 		expect(hasEvidence('a', [], ['login'])).toBe(true);
 		expect(hasEvidence('a', [], ['Auth'])).toBe(false);
@@ -228,32 +253,46 @@ describe('code_intel evidence', () => {
 
 	test('a program with no impact method records nothing', () => {
 		collecting();
-		noteCodeIntel('a', call("api.searchSymbols({ query: 'api' })"), { text: 'api success src/core.ts' });
+		noteCodeIntel('a', call("api.searchSymbols({ query: 'api' })"), { text: '{"success":true,"result":"api src/core.ts"}' });
 		expect(hasEvidence('a', ['src/core.ts'], ['api', 'success'])).toBe(false);
 	});
 
 	test('the result text is not evidence', () => {
 		collecting();
-		noteCodeIntel('a', call("api.getDependents({ filePath: 'src/other.ts' })"), { text: 'src/core.ts Core' });
+		noteCodeIntel('a', call("api.getDependents({ filePath: 'src/other.ts' })"), { text: '{"success":true,"result":"src/core.ts Core"}' });
 		expect(hasEvidence('a', ['src/core.ts'], ['Core'])).toBe(false);
+	});
+
+	test('a path in a literal does not name the symbols its words spell', () => {
+		collecting();
+		noteCodeIntel('a', call("api.getDependents({ filePath: 'src/config/index.ts' })"), OK);
+		expect(hasEvidence('a', ['src/other.ts'], ['config', 'index', 'src'])).toBe(false);
+	});
+
+	test('a failed call records nothing: an error result, success false, or no text', () => {
+		collecting();
+		noteCodeIntel('a', call(DEPS), { isError: true, text: '{"success":true}' });
+		noteCodeIntel('a', call(DEPS), { text: '{"success":false,"error":{"code":"CWD_NOT_INDEXED"}}' });
+		noteCodeIntel('a', call(DEPS), {});
+		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(false);
 	});
 
 	test('nothing is recorded while collection is off', () => {
 		resetRiskCache();
 		collectEvidence(false);
-		noteCodeIntel('a', call(DEPS), {});
+		noteCodeIntel('a', call(DEPS), OK);
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(false);
 	});
 
 	test('missing code records nothing and does not throw', () => {
 		collecting();
-		noteCodeIntel('a', { tool: 'code_intel' }, { result: {} });
+		noteCodeIntel('a', { tool: 'code_intel' }, OK);
 		expect(hasEvidence('a', ['x'], ['x'])).toBe(false);
 	});
 
 	test('empty needles never match', () => {
 		collecting();
-		noteCodeIntel('a', call(DEPS), {});
+		noteCodeIntel('a', call(DEPS), OK);
 		expect(hasEvidence('a', [''], [''])).toBe(false);
 		expect(hasEvidence('a', [], [])).toBe(false);
 	});
@@ -262,13 +301,13 @@ describe('code_intel evidence', () => {
 		collecting();
 		noteCodeIntel('a', call(DEPS), { deny: 'no' });
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(false);
-		noteCodeIntel('a', call(DEPS), { deny: undefined, result: {} });
+		noteCodeIntel('a', call(DEPS), { deny: undefined, ...OK });
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(true);
 	});
 
 	test('evidence is per agent and forgetAgentEvidence drops it', () => {
 		collecting();
-		noteCodeIntel('a', call(DEPS), {});
+		noteCodeIntel('a', call(DEPS), OK);
 		expect(hasEvidence('b', ['src/core.ts'], [])).toBe(false);
 		forgetAgentEvidence('a');
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(false);
@@ -276,7 +315,7 @@ describe('code_intel evidence', () => {
 
 	test('resetRiskCache clears evidence', () => {
 		collecting();
-		noteCodeIntel('a', call(DEPS), {});
+		noteCodeIntel('a', call(DEPS), OK);
 		resetRiskCache();
 		expect(hasEvidence('a', ['src/core.ts'], [])).toBe(false);
 	});

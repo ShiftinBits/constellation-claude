@@ -1,4 +1,4 @@
-import { absolute, codeIntel, type McpPort, stringArg } from './lib';
+import { absolute, codeIntel, type McpPort, parseEnvelope, stringArg } from './lib';
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -89,6 +89,14 @@ const ANALYSIS = /\bapi\.(?:impactAnalysis|traceSymbolUsage|getDependents)\s*\(/
 /** String literals in a program: the paths and names it asked about. */
 const LITERAL = /'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`\\$\n]*)`/g;
 
+/**
+ * A literal that can name symbols: `AuthService` or `AuthService.login`, not a
+ * path, whose words (`config`, `index`) would match unrelated files' symbols.
+ * ponytail: a bare file name such as `'config.ts'` still passes; tell paths
+ * from members by extension if that ever matters.
+ */
+const IDENTIFIERS = /^[\w$]+(?:\.[\w$]+)*$/;
+
 /** Whether code_intel calls are recorded as evidence: only require-analysis reads it. */
 let collecting = false;
 
@@ -112,10 +120,11 @@ export function collectEvidence(on: boolean): void {
 /**
  * Records a code_intel tool call `e` (its arguments sit on the event itself) as
  * evidence for the agent `key`: the string literals of a program that ran
- * `impactAnalysis`, `traceSymbolUsage` or `getDependents`. A denied call adds nothing.
+ * `impactAnalysis`, `traceSymbolUsage` or `getDependents`. A denied or failed
+ * call (an error result, or `success: false` such as `CWD_NOT_INDEXED`) adds nothing.
  */
-export function noteCodeIntel(key: string, e: object, r: object): void {
-	if (!collecting || Reflect.get(r, 'deny') !== undefined) return;
+export function noteCodeIntel(key: string, e: object, r: { deny?: string; isError?: true; text?: string }): void {
+	if (!collecting || r.deny !== undefined || r.isError || !parseEnvelope(r.text).success) return;
 	const code = stringArg(e, 'code');
 	if (code === undefined || !ANALYSIS.test(code)) return;
 	const seen = evidence.get(key) ?? new Set<string>();
@@ -128,13 +137,15 @@ export function noteCodeIntel(key: string, e: object, r: object): void {
 
 /**
  * True when the agent `key` ran an impact method naming one of `paths` exactly,
- * or one of `symbols` as a whole identifier (`'AuthService.login'` names both).
+ * or one of `symbols` in a literal that is an identifier or a dotted chain of
+ * them (`'AuthService.login'` names both).
  */
 export function hasEvidence(key: string, paths: string[], symbols: string[]): boolean {
 	for (const literal of evidence.get(key) ?? []) {
 		if (paths.includes(literal)) return true;
-		const words = literal.split(/[^\w$]+/);
-		if (symbols.some((s) => s !== '' && words.includes(s))) return true;
+		if (!IDENTIFIERS.test(literal)) continue;
+		const words = literal.split('.');
+		if (symbols.some((s) => words.includes(s))) return true;
 	}
 	return false;
 }
@@ -178,8 +189,8 @@ export function fileRisk(port: RiskPort, root: string, path: string): Promise<Fi
 	if (known !== undefined) return known;
 	const born = generation;
 	const pending: Promise<FileRisk | undefined> = load(port, root, rel).then((found) => {
-		// A reset while this was in flight: the cache now belongs to newer lookups.
-		if (generation !== born) return found?.risk;
+		// A reset or a commit sweep while this was in flight: the cache now belongs to newer lookups.
+		if (generation !== born || cache.get(key) !== pending) return found?.risk;
 		if (found?.commit !== undefined && commits.get(root) !== found.commit) {
 			if (commits.has(root)) {
 				for (const other of [...cache.keys()]) {

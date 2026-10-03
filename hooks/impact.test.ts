@@ -48,6 +48,8 @@ type Calls = {
 	logs: string[];
 	programs: number;
 	envReads: number;
+	/** Every path `$.fs.exists` was asked about. */
+	exists: string[];
 	/** `$.clock.after` timers, in the order they were set. */
 	timers: Array<{ ms: number; fn: () => void }>;
 };
@@ -67,7 +69,7 @@ function load(options: PluginOptions, world: World = {}) {
 	registerImpactGate(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 
-	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0, timers: [] };
+	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0, exists: [], timers: [] };
 	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
 	const $ = {
 		env: {
@@ -77,7 +79,12 @@ function load(options: PluginOptions, world: World = {}) {
 			},
 		},
 		session: { cwd: async () => PROJECT, surfaces: async () => world.surfaces ?? ['terminal'] },
-		fs: { exists: async (path: string) => files.has(path) },
+		fs: {
+			exists: async (path: string) => {
+				calls.exists.push(path);
+				return files.has(path);
+			},
+		},
 		mcp: {
 			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
 			call: async (): Promise<McpToolResult> => {
@@ -202,9 +209,9 @@ describe('impact gate dialog', () => {
 		expect(await m.check()).toEqual(DENY);
 	});
 
-	test('free text typed under Other denies as Cancel does', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: 'Proceed please' });
-		expect(await m.check()).toEqual(DENY);
+	test('free text typed under Other denies with what the user typed', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: 'go ahead, but keep the export name' });
+		expect(await m.check()).toEqual({ ...DENY, reason: `${DENY.reason} The user said: "go ahead, but keep the export name"` });
 	});
 
 	test("don't ask again allows the edit and suppresses a later dialog for that file only", async () => {
@@ -309,14 +316,15 @@ describe('impact gate dialog', () => {
 		expect(critical.calls.asks.length).toBe(1);
 	});
 
-	test('an ask that cannot open (headless) allows the edit and logs one line', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: new Error('no tool named "AskUserQuestion" in this session') });
+	test('with no surfaces (headless) the edit stays allowed, nothing is asked and one line is logged', async () => {
+		const m = load({ impactGate: 'dialog' }, { surfaces: [] });
 		expect(await m.check()).toEqual({ decision: 'allow' });
+		expect(m.calls.asks).toEqual([]);
 		expect(m.calls.logs).toEqual([`${HEADLINE} (could not ask, edit allowed)`]);
 	});
 
-	test('a dismissed dialog (Esc) denies as Cancel does', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: new Error('$.ui.ask: no answer') });
+	test('a dismissed dialog (Esc) denies as Cancel does, whatever the rejection says', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: new Error('dismissed') });
 		expect(await m.check()).toEqual(DENY);
 		expect(m.calls.logs).toEqual([]);
 	});
@@ -470,6 +478,8 @@ describe('impact gate native', () => {
 
 describe('impact gate require-analysis', () => {
 	const RAN = { result: 'ran' };
+	/** A successful code_intel answer, as `noteCodeIntel` reads it. */
+	const OK = { text: '{"success":true}' };
 	const DENIED =
 		'>_CONSTELLATION:// src/core.ts has 25 dependents (HIGH risk, as of 0123456). Top dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts. Symbols they import from it: Core. Check that your change keeps these callers working (use code_intel impactAnalysis / traceSymbolUsage on the symbols you change), then retry the edit.';
 	const options = { impactGate: 'require-analysis' };
@@ -518,8 +528,18 @@ describe('impact gate require-analysis', () => {
 		expect(m.calls.programs).toBe(0);
 	});
 
-	test('a code_intel error passes', async () => {
-		expect(await load(options, { success: false }).edit()).toEqual(RAN);
+	test('a code_intel error passes, and so does the next edit to the file', async () => {
+		const m = load(options, { success: false });
+		expect(await m.edit()).toEqual(RAN);
+		expect(await m.edit()).toEqual(RAN);
+		expect(m.calls.programs).toBe(1);
+	});
+
+	test('a lookup that misses the deadline passes, and its late result refuses no later edit', async () => {
+		const m = load(options, { slow: true });
+		expect(await m.edit()).toEqual(RAN);
+		expect(await m.edit()).toEqual(RAN);
+		expect(m.calls.programs).toBe(1);
 	});
 
 	test('a NotebookEdit reads notebook_path', async () => {
@@ -534,7 +554,7 @@ describe('impact gate require-analysis', () => {
 
 	test('earlier code_intel naming the file passes for that agent only', async () => {
 		const m = load(options);
-		noteCodeIntel('agent-1', { code: 'api.getDependents({ filePath: "src/core.ts" })' }, { result: {} });
+		noteCodeIntel('agent-1', { code: 'api.getDependents({ filePath: "src/core.ts" })' }, OK);
 		expect(await m.edit(FILE, 'agent-1')).toEqual(RAN);
 		expect(await m.edit(FILE, 'agent-2')).toEqual({ deny: DENIED });
 	});
@@ -542,21 +562,27 @@ describe('impact gate require-analysis', () => {
 	test('earlier impact analysis of a symbol its dependents import passes', async () => {
 		const m = load(options);
 		const code = "const { symbols } = await api.searchSymbols({ query: 'Core' }); return api.impactAnalysis({ symbolId: symbols[0].id });";
-		noteCodeIntel('agent-1', { code }, { result: {} });
+		noteCodeIntel('agent-1', { code }, OK);
 		expect(await m.edit()).toEqual(RAN);
 	});
 
 	test('a search alone, or a path that only ends like the file, is not evidence', async () => {
 		const m = load(options);
-		noteCodeIntel('agent-1', { code: "api.searchSymbols({ query: 'Core' })" }, { result: {} });
-		noteCodeIntel('agent-1', { code: "api.getDependents({ filePath: 'packages/b/src/core.ts' })" }, { result: {} });
+		noteCodeIntel('agent-1', { code: "api.searchSymbols({ query: 'Core' })" }, OK);
+		noteCodeIntel('agent-1', { code: "api.getDependents({ filePath: 'packages/b/src/core.ts' })" }, OK);
 		expect(await m.edit()).toEqual({ deny: DENIED });
 	});
 
 	test('an absolute path in the analysis counts', async () => {
 		const m = load(options);
-		noteCodeIntel('agent-1', { code: `api.getDependents({ filePath: '${FILE}' })` }, { result: {} });
+		noteCodeIntel('agent-1', { code: `api.getDependents({ filePath: '${FILE}' })` }, OK);
 		expect(await m.edit()).toEqual(RAN);
+	});
+
+	test('the walk for constellation.json starts at the file\'s directory', async () => {
+		const m = load(options);
+		await m.edit();
+		expect(m.calls.exists).not.toContain(`${FILE}/constellation.json`);
 	});
 
 	test('a refused file makes no second lookup for that agent', async () => {

@@ -115,7 +115,7 @@ function parseError(value: unknown): CodeIntelError | undefined {
 }
 
 /** Reads a code_intel response body into the typed envelope, or a stable parse failure. */
-function parseEnvelope(text: string | undefined): CodeIntelEnvelope {
+export function parseEnvelope(text: string | undefined): CodeIntelEnvelope {
 	if (text === undefined) return failure('INVALID_RESPONSE', 'code_intel returned no text content');
 	let body: unknown;
 	try {
@@ -159,5 +159,28 @@ export async function codeIntel(mcp: McpPort, code: string, { cwd }: { cwd: stri
 		return failure('MCP_TOOL_ERROR', text ?? 'code_intel returned an error');
 	} catch (error) {
 		return failure('MCP_CALL_FAILED', error instanceof Error ? error.message : String(error));
+	}
+}
+
+/**
+ * `pending` if it settles within `ms` (and before `signal` aborts), else
+ * undefined. `sleep` is `(ms, o) => $.clock.sleep(ms, o)`: the hook's own time
+ * limit pauses during `$` calls, so a slow lookup needs a deadline of its own.
+ */
+export async function withinDeadline<T>(
+	sleep: (ms: number, options: { signal: AbortSignal }) => Promise<unknown>,
+	pending: Promise<T>,
+	ms: number,
+	signal: AbortSignal,
+): Promise<T | undefined> {
+	const stop = new AbortController();
+	const deadline = sleep(ms, { signal: AbortSignal.any([signal, stop.signal]) }).then(
+		() => undefined,
+		() => undefined,
+	);
+	try {
+		return await Promise.race([pending, deadline]);
+	} finally {
+		stop.abort();
 	}
 }
