@@ -262,72 +262,52 @@ export function gradientAt(t: number, to: Scheme): string | undefined {
 	return `#${channels.map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
 }
 
-/** The CLI banner's art, 84 columns wide, above the tag box. */
+/**
+ * The Constellation banner: the CLI banner's wordmark and URL without its
+ * `CLI` letters and tag box, 72 columns wide.
+ */
 const BANNER_ART = [
-	'╭──────────────────────────────────────────────────────────────────────────────────╮',
-	'│ ▀▄     █▀▀ █▀█ █▀█ █▀▀ ▀█▀ █▀▀ █   █   █▀█ ▀█▀ ▀█▀ █▀█ █▀█      ▄  ▄ █▀▀ █   ▀█▀ │',
-	'│  ▄▀    █   █ █ █ █ ▀▀█  █  █▀  █   █   █▀█  █   █  █ █ █ █ ▀  ▄▀ ▄▀  █   █    █  │',
-	'│ ▀  ▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀ ▀▀▀  ▀  ▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀▀▀ ▀ ▀ ▀ ▀  ▀    ▀▀▀ ▀▀▀ ▀▀▀ │',
-	'│                                                         CONSTELLATIONDEV.IO      │',
+	'╭──────────────────────────────────────────────────────────────────────╮',
+	'│ ▀▄     █▀▀ █▀█ █▀█ █▀▀ ▀█▀ █▀▀ █   █   █▀█ ▀█▀ ▀█▀ █▀█ █▀█      ▄  ▄ │',
+	'│  ▄▀    █   █ █ █ █ ▀▀█  █  █▀  █   █   █▀█  █   █  █ █ █ █ ▀  ▄▀ ▄▀  │',
+	'│ ▀  ▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀ ▀▀▀  ▀  ▀▀▀ ▀▀▀ ▀▀▀ ▀ ▀  ▀  ▀▀▀ ▀▀▀ ▀ ▀ ▀ ▀  ▀    │',
+	'│                                             CONSTELLATIONDEV.IO      │',
+	'╰──────────────────────────────────────────────────────────────────────╯',
 ] as const;
 
 /** The columns the full banner needs. Narrower sites draw `compactBanner`. */
-export const BANNER_WIDTH = 84;
+export const BANNER_WIDTH = 72;
 
 /** Characters per colored run: the gradient steps every few columns, not every one, to keep the tree small. */
 const RUN = 3;
 
-/** One stretch of banner text starting at column `start`, colored run by run along the gradient. */
-function gradientRuns(el: ElementTable, text: string, start: number, to: Scheme): RenderElement[] {
+/** One banner line, colored run by run along the gradient by column. */
+function gradientLine(el: ElementTable, text: string, to: Scheme): RenderElement {
 	const chars = [...text];
 	const runs: RenderElement[] = [];
 	for (let i = 0; i < chars.length; i += RUN) {
-		const color = gradientAt((start + i) / (BANNER_WIDTH - 1), to);
+		const color = gradientAt(i / (BANNER_WIDTH - 1), to);
 		const chunk = chars.slice(i, i + RUN).join('');
 		runs.push(el.Text(color === undefined ? { children: chunk } : { color, children: chunk }));
 	}
-	return runs;
+	return el.Text({ wrap: 'truncate', children: runs });
 }
 
 /**
- * The Constellation CLI banner with its tag box (as `printBanner(name, cmd)`
- * draws it), the gradient taking the scheme's colors. The tag (for example
- * `constellation-core › status`) is one bold Text, so it reads and searches as
- * a whole. Needs `BANNER_WIDTH` columns; use `compactBanner` below that.
+ * The Constellation banner in the scheme's colors, the gradient running left
+ * to right as the CLI draws it. Needs `BANNER_WIDTH` columns and a monospace
+ * grid; use `compactBanner` otherwise.
  */
-export function banner(el: ElementTable, tag: string, to: Scheme): RenderElement {
-	const shown = [...tag].length > 76 ? `${[...tag].slice(0, 75).join('')}…` : tag;
-	const n = [...shown].length;
-	const line = (text: string) => el.Text({ wrap: 'truncate', children: gradientRuns(el, text, 0, to) });
-	const tagColor = gradientAt(2 / (BANNER_WIDTH - 1), to);
-	return el.Box({
-		flexDirection: 'column',
-		children: [
-			...BANNER_ART.map(line),
-			line(`├─${'─'.repeat(n)}─┬─${'─'.repeat(78 - n)}╯`),
-			el.Text({
-				wrap: 'truncate',
-				children: [
-					...gradientRuns(el, '│ ', 0, to),
-					el.Text(tagColor === undefined ? { bold: true, children: shown } : { bold: true, color: tagColor, children: shown }),
-					...gradientRuns(el, ' │', n + 2, to),
-				],
-			}),
-			line(`╰─${'─'.repeat(n)}─╯`),
-		],
-	});
+export function banner(el: ElementTable, to: Scheme): RenderElement {
+	return el.Box({ flexDirection: 'column', children: BANNER_ART.map((line) => gradientLine(el, line, to)) });
 }
 
-/** The banner for a narrow site or the Desktop app: the mark and name along the gradient, then the tag in bold. */
-export function compactBanner(el: ElementTable, tag: string, to: Scheme): RenderElement {
-	const title = `${MARK} C O N S T E L L A T I O N`;
-	const chars = [...title];
+/** The banner for a narrow site or the Desktop app: the mark and name along the gradient. */
+export function compactBanner(el: ElementTable, to: Scheme): RenderElement {
+	const chars = [...`${MARK} C O N S T E L L A T I O N`];
 	const runs = chars.map((ch, i) => {
 		const color = gradientAt(i / (chars.length - 1), to);
 		return el.Text(color === undefined ? { children: ch } : { color, children: ch });
 	});
-	return el.Box({
-		flexDirection: 'column',
-		children: [el.Text({ bold: true, children: runs }), el.Text({ bold: true, children: tag })],
-	});
+	return el.Text({ bold: true, children: runs });
 }

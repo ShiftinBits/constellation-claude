@@ -230,19 +230,17 @@ describe('banner', () => {
 		expect(gradientAt(0.5, 'none')).toBeUndefined();
 	});
 
-	test('every line of the full banner is the CLI width and the tag is one bold Text', async ($, on) => {
-		const ui = await draw($, on, 'terminal', (el) => banner(el, 'core › status', 'brand'));
+	test('the full banner is six lines of its width, with no tag box', async ($, on) => {
+		const ui = await draw($, on, 'terminal', (el) => banner(el, 'brand'));
 		const lines = (await ui.findAll({ type: 'Text' })).filter((t) => t.props['wrap'] === 'truncate');
-		expect(lines).toHaveLength(8);
-		for (const line of lines.slice(0, 6)) expect([...line.text].length).toBe(BANNER_WIDTH);
-		expect(lines[6]?.text).toBe('│ core › status │');
-		const tag = (await ui.findAll({ type: 'Text' })).find((t) => t.children.length === 1 && t.children[0] === 'core › status');
-		expect(tag?.props['bold']).toBe(true);
+		expect(lines).toHaveLength(6);
+		for (const line of lines) expect([...line.text].length).toBe(BANNER_WIDTH);
+		expect(lines[4]?.text).toMatch(/CONSTELLATIONDEV\.IO/);
+		expect(lines[5]?.text.startsWith('╰')).toBe(true);
 	});
 
-	test('the compact banner draws the mark and the tag', async ($, on) => {
-		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'core › status', 'none'));
+	test('the compact banner draws the mark and the name', async ($, on) => {
+		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'none'));
 		expect(await ui.find({ type: 'Text', text: /✦ C O N S T E L L A T I O N/ })).toBeDefined();
-		expect(await ui.find({ type: 'Text', text: 'core › status' })).toBeDefined();
 	});
 });

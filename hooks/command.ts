@@ -590,11 +590,10 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}),
 		);
 
-		// The full CLI banner needs its 84 columns and a monospace grid, so the
+		// The full banner needs its 72 columns and a monospace grid, so the
 		// Desktop app and a narrow pane get the compact one.
 		const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns - 2 : 0;
-		const tag = picking ? 'choose a project' : `${project ?? 'constellation'} › ${selected}`;
-		const head = e.surface === 'terminal' && columns >= BANNER_WIDTH ? banner(el, tag, tint) : compactBanner(el, tag, tint);
+		const head = e.surface === 'terminal' && columns >= BANNER_WIDTH ? banner(el, tint) : compactBanner(el, tint);
 		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
@@ -606,15 +605,17 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			gap: 1,
 			children: [
 				head,
-				...(meta === undefined && !canSwitch
+				...(project === undefined && meta === undefined && !canSwitch
 					? []
 					: [
 							el.Box({
 								flexDirection: 'row',
 								columnGap: 1,
 								children: [
+									...(project === undefined ? [] : [el.Text({ bold: true, children: project })]),
+									...(project !== undefined && meta !== undefined ? [el.Text({ dimColor: true, children: '·' })] : []),
 									...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
-									...(meta !== undefined && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),
+									...((project !== undefined || meta !== undefined) && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),
 									...(canSwitch
 										? [el.Button({ key: 'switch-project', label: 'switch project', hotkey: 'p', plain: true, onPress: switchProject })]
 										: []),

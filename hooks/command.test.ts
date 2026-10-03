@@ -314,7 +314,7 @@ describe('the pane', () => {
 			// The terminal draws the CLI banner, starting in galactic; Desktop the compact one.
 			const first = surface === 'terminal' ? '╭──' : MARK;
 			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
-			expect((await exact(ui, 'app › status'))?.props['bold']).toBe(true);
+			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /1-4 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
@@ -660,7 +660,7 @@ describe('the pane', () => {
 		await ui.press({ key: 'project:/work/app/core' });
 		await settle();
 		expect(store.get('project:/work/app')).toBe('/work/app/core');
-		expect(await ui.find({ type: 'Text', text: 'core › status' })).toBeDefined();
+		expect((await exact(ui, 'core'))?.props['bold']).toBe(true);
 		expect(await ui.find({ key: 'switch-project' })).toBeDefined();
 
 		await ui.press({ key: 'switch-project' });
@@ -693,7 +693,7 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect(await exact(ui, 'choose a project')).toBeDefined();
+		expect(await exact(ui, 'Choose a project')).toBeDefined();
 		expect(await ui.find({ type: 'Text', text: /1-9 open a project/ })).toBeDefined();
 		expect(await ui.find({ type: 'Text', text: /switch tabs/ })).toBeUndefined();
 	});
@@ -703,7 +703,7 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect(await ui.find({ type: 'Text', text: 'app › status' })).toBeDefined();
+		expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 		expect(await ui.find({ key: 'switch-project' })).toBeUndefined();
 	});
 
