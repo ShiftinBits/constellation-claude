@@ -3,7 +3,9 @@ import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { COMMAND, parseArgs, summarize } from './command';
 import type { Tab } from './command';
+import { searchCode } from './explore';
 import { palette } from './theme';
+import { orphanCode } from './unused';
 
 const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -35,6 +37,35 @@ const UNUSED = {
 	orphanedFiles: [],
 	summary: { totalOrphanedSymbols: 2, totalOrphanedFiles: 0, potentialDeletions: 2 },
 };
+const SEARCH = {
+	symbols: [
+		{ id: 's1', name: 'GraphService', qualifiedName: 'GraphService', kind: 'class', filePath: 'src/service.ts', line: 3, isExported: true },
+		{ id: 's2', name: 'Graph', qualifiedName: 'Graph', kind: 'class', filePath: 'src/graph.ts', line: 10, isExported: true },
+		{ id: 's3', name: 'GraphNode', qualifiedName: 'GraphNode', kind: 'interface', filePath: 'src/node.ts', line: 1, isExported: true },
+		{ id: 's4', name: 'graphOf', qualifiedName: 'graphOf', kind: 'function', filePath: 'src/of.ts', line: 7, isExported: true },
+	],
+};
+const DRILL = {
+	details: { symbol: { signature: 'class Graph', kind: 'class', isExported: true, qualifiedName: 'Graph', complexity: { cyclomaticComplexity: 3, complexityRisk: 'low' } } },
+	usages: { summary: { totalUsages: 2, filesAffected: 1 }, directUsages: [{ filePath: 'src/use.ts', line: 4, usageType: 'call' }] },
+	impact: {
+		breakingChangeRisk: { riskLevel: 'high' },
+		summary: { impactedFileCount: 4, directDependentCount: 2, transitiveDependentCount: 6, testFileCount: 1, productionFileCount: 3 },
+		directDependents: [{ name: 'Renderer', kind: 'function', qualifiedName: 'Renderer', depth: 1 }],
+	},
+	calls: {
+		root: { name: 'Graph', filePath: 'src/graph.ts', line: 10 },
+		callers: [{ symbolId: 'c1', name: 'outer', filePath: 'src/outer.ts', line: 2, depth: 1 }],
+		callees: [{ symbolId: 'c2', name: 'inner', filePath: 'src/inner.ts', line: 9, depth: 1 }],
+	},
+};
+const UNUSED_PAGED = { ...UNUSED, pagination: { total: 3, hasMore: true, nextOffset: 50 }, summary: { ...UNUSED.summary, totalOrphanedSymbols: 3 } };
+const UNUSED_MORE = {
+	orphanedSymbols: [{ symbolId: 'c', name: 'Extra', kind: 'interface', filePath: 'src/more.ts', isExported: true, reason: 'x', confidence: 1, lineEnd: 9 }],
+	orphanedFiles: [],
+	summary: { totalOrphanedSymbols: 3, totalOrphanedFiles: 0, potentialDeletions: 3 },
+	pagination: { total: 3, hasMore: false },
+};
 
 /** A code_intel response whose envelope carries `result` and the graph's as-of metadata. */
 function success(result: unknown): McpToolResult {
@@ -49,10 +80,12 @@ function failure(code: string, message: string, guidance: string[] = []): McpToo
 
 /** What code_intel answers for the code a tab sends. */
 function answer(code: string): McpToolResult {
+	if (code.includes('impactAnalysis')) return success(DRILL);
+	if (code.includes('searchSymbols')) return success(SEARCH);
 	if (code.includes('getCapabilities')) return success({ ping: PING, caps: CAPS });
 	if (code.includes('getDependencies')) return success(DEPS);
 	if (code.includes('getDependents')) return success(DEPENDENTS);
-	if (code.includes('findOrphanedCode')) return success(UNUSED);
+	if (code.includes('findOrphanedCode')) return success(code.includes('"offset":50') ? UNUSED_MORE : UNUSED);
 	return success(PING);
 }
 
@@ -163,6 +196,18 @@ describe('parseArgs', () => {
 		expect(parseArgs('diagnose')).toEqual({ tab: 'diagnose' });
 		expect(parseArgs('UNUSED')).toEqual({ tab: 'unused' });
 		expect(parseArgs('status extra words')).toEqual({ tab: 'status' });
+	});
+
+	test('unused takes an optional kind, bare or after --kind, lowercased', () => {
+		expect(parseArgs('unused')).toEqual({ tab: 'unused' });
+		expect(parseArgs('unused function')).toEqual({ tab: 'unused', kind: 'function' });
+		expect(parseArgs('unused --kind Class')).toEqual({ tab: 'unused', kind: 'class' });
+		expect(parseArgs('unused --kind=type')).toEqual({ tab: 'unused', kind: 'type' });
+	});
+
+	test('explore takes the rest as the query', () => {
+		expect(parseArgs('explore')).toEqual({ tab: 'explore' });
+		expect(parseArgs('explore Graph Service')).toEqual({ tab: 'explore', query: 'Graph Service' });
 	});
 
 	test('deps takes an optional file path', () => {
@@ -290,6 +335,31 @@ describe('command.run without a pane', () => {
 		expect(r.text).toContain('  Code   AUTH_ERROR');
 	});
 
+	test('explore needs a symbol', async ($, on) => {
+		const { codes } = world(on, { surfaces: ['vscode'] });
+		const r = await run($, 'explore');
+		expect(r.text).toBe('Usage: /constellation explore <symbol>');
+		expect(codes).toEqual([]);
+	});
+
+	test('explore lists at most five hits, exact name first, and the commit', async ($, on) => {
+		const many = { symbols: Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, name: i === 7 ? 'Graph' : `Graph${i}`, kind: 'function', filePath: `src/f${i}.ts`, line: i + 1 })) };
+		const { codes } = world(on, { surfaces: ['vscode'], answer: () => success(many) });
+		const r = await run($, 'explore Graph');
+		expect(codes).toEqual([searchCode('Graph')]);
+		const lines = (r.text ?? '').split('\n');
+		expect(lines[0]).toBe('>_CONSTELLATION:// explore');
+		expect(lines.filter((l) => l.startsWith('- function'))).toHaveLength(5);
+		expect(lines[1]).toBe('- function Graph src/f7.ts:8');
+		expect(r.text).toContain('as of 0123456');
+	});
+
+	test('an explore error answers with its guidance', async ($, on) => {
+		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
+		const r = await run($, 'explore Graph');
+		expect(r.text).toContain('  1. constellation auth');
+	});
+
 	test('deps needs a file', async ($, on) => {
 		const { codes } = world(on, { surfaces: ['vscode'] });
 		const r = await run($, 'deps');
@@ -324,7 +394,7 @@ describe('the pane', () => {
 			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
 			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
-			expect(await ui.find({ type: 'Text', text: /1-4 switch tabs · r refresh · esc close/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /✓ ok/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
@@ -354,12 +424,221 @@ describe('the pane', () => {
 			await run($, 'unused');
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Text', text: 'src/util.ts' })).toMatchObject({ props: { dimColor: true } });
-			expect(await ui.find({ type: 'Text', text: /• function helper/ })).toBeDefined();
-			const kinds = await ui.findAll({ type: 'Text', text: /• class/ });
-			expect(kinds.length).toBeGreaterThan(0);
+			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[ ] src/util.ts' } });
+			expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
+			expect(await ui.find({ type: 'Button', key: 'orphan:b' })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /• function/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /• class/ })).toBeDefined();
 		});
 	}
+
+	describe('the unused picker', () => {
+		/** Records what `$.prompt.fill` was asked for and answers with `isFilled`. */
+		function stubFill(on: On, isFilled = true) {
+			const texts: string[] = [];
+			on('prompt.fill', (_, e) => {
+				texts.push(e.text);
+				return { isFilled };
+			});
+			return texts;
+		}
+
+		async function openUnused($: Engine, surface: (typeof SURFACES)[number], args = 'unused') {
+			await run($, args);
+			const ui = await mountPane($, surface);
+			await settle();
+			return ui;
+		}
+
+		for (const surface of SURFACES) {
+			test(`pressing a symbol toggles the selected count on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await reads(ui, /^1 selected$/)).toBe(true);
+				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: '[x]' } });
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+			});
+
+			test(`the list's keys sit by the count, where a long list keeps them in view, and the hand-off joins them once something is checked, on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle$/ })).toBeDefined();
+				expect(await ui.find({ type: 'Text', text: /^1-5 switch tabs · r refresh · esc close$/ })).toBeDefined();
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle · h hand off$/ })).toBeDefined();
+			});
+
+			test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				const locations = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && String(t.children[0]).startsWith('src/util.ts'));
+				expect(locations.length).toBeGreaterThan(0);
+				for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
+			});
+
+			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'orphan-file:src/util.ts' });
+				await settle();
+				expect(await reads(ui, /^2 selected$/)).toBe(true);
+				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[x] src/util.ts' } });
+				await ui.press({ key: 'orphan-file:src/util.ts' });
+				await settle();
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+			});
+
+			test(`select all picks every loaded symbol on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect((await ui.find({ key: 'select-all' }))?.props['hotkey']).toBe('a');
+				await ui.press({ key: 'select-all' });
+				await settle();
+				expect(await reads(ui, /^2 selected$/)).toBe(true);
+				expect(await reads(ui, /of 2 unused exports/)).toBe(true);
+			});
+
+			test(`load more asks for offset 50 and draws the appended rows on ${surface}`, async ($, on) => {
+				const { codes } = world(on, {
+					surfaces: [surface],
+					answer: (code) => success(code.includes('"offset":50') ? UNUSED_MORE : UNUSED_PAGED),
+				});
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'load-more' });
+				await settle();
+				expect(codes.at(-1)).toBe(orphanCode({ limit: 50, offset: 50 }));
+				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
+				expect(await reads(ui, /src\/more\.ts:9/)).toBe(true);
+				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
+			});
+
+			test(`hand-off fills the prompt box with exactly the selected exports on ${surface}`, async ($, on) => {
+				const { events } = world(on, { surfaces: [surface] });
+				const texts = stubFill(on);
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				await ui.press({ key: 'handoff' });
+				await settle();
+				expect(texts).toHaveLength(1);
+				expect(texts[0]).toContain('`helper` (function) in src/util.ts');
+				expect(texts[0]).not.toContain('Legacy');
+				expect(texts[0]).toContain('confirm it is unused with code_intel');
+				expect(texts[0]).toContain('Graph as of 0123456.');
+				expect(events).toContain('close:constellation');
+			});
+		}
+
+		test('the clear and hand-off buttons appear only with a selection, the footer always', async ($, on) => {
+			world(on);
+			const ui = await openUnused($, 'terminal');
+			expect(await ui.find({ key: 'clear' })).toBeUndefined();
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toMatchObject({ props: { label: 'Hand 1 removal to Claude', hotkey: 'h' } });
+			await ui.press({ key: 'select-all' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toMatchObject({ props: { label: 'Hand 2 removals to Claude' } });
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+			await ui.press({ key: 'clear' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+			expect(await reads(ui, /^0 selected$/)).toBe(true);
+		});
+
+		test('a failed load more says so and keeps the button to try again', async ($, on) => {
+			world(on, { answer: (code) => (code.includes('"offset":50') ? failure('X', 'boom') : success(UNUSED_PAGED)) });
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'load-more' });
+			await settle();
+			expect(await reads(ui, /Could not load more/)).toBe(true);
+			expect(await ui.find({ key: 'load-more' })).toBeDefined();
+			expect(await ui.find({ key: 'orphan:c' })).toBeUndefined();
+		});
+
+		test('a page that lands after refresh is discarded', async ($, on) => {
+			let release: (value: McpToolResult) => void = () => undefined;
+			const late = new Promise<McpToolResult>((resolve) => {
+				release = resolve;
+			});
+			world(on, { answer: (code) => (code.includes('"offset":50') ? late : success(UNUSED_PAGED)) });
+			const ui = await openUnused($, 'terminal');
+			const pressed = ui.press({ key: 'load-more' });
+			await settle();
+			await ui.press({ key: 'refresh' });
+			await settle();
+			release(success(UNUSED_MORE));
+			await pressed;
+			await settle();
+			expect(await ui.find({ key: 'orphan:c' })).toBeUndefined();
+			expect(await reads(ui, /src\/more\.ts/)).toBe(false);
+		});
+
+		test('a hand-off the prompt box refuses keeps the selection and says why', async ($, on) => {
+			const { events } = world(on);
+			stubFill(on, false);
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			await ui.press({ key: 'handoff' });
+			await settle();
+			expect(events).not.toContain('close:constellation');
+			expect(await reads(ui, /Could not fill the prompt box/)).toBe(true);
+			expect(await reads(ui, /^1 selected$/)).toBe(true);
+		});
+
+		test('refresh clears the selection', async ($, on) => {
+			world(on);
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			await ui.press({ key: 'refresh' });
+			await settle();
+			expect(await reads(ui, /^0 selected$/)).toBe(true);
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+		});
+
+		test('an empty answer draws the empty state', async ($, on) => {
+			world(on, { answer: () => success({ orphanedSymbols: [], orphanedFiles: [], summary: { totalOrphanedSymbols: 0 } }) });
+			const ui = await openUnused($, 'terminal');
+			expect((await exact(ui, '✦ No unused exports found'))?.props['color']).toBe(palette.cosmic);
+			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
+		});
+
+		test('an error answer draws the guidance, not the picker', async ($, on) => {
+			world(on, { answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
+			const ui = await openUnused($, 'terminal');
+			expect(await exact(ui, "Your access key wasn't accepted")).toBeDefined();
+			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
+		});
+
+		test('the kind reaches the query from both argument forms', async ($, on) => {
+			const { codes } = world(on);
+			const first = await openUnused($, 'terminal', 'unused function');
+			await first.unmount();
+			expect(codes[0]).toBe(orphanCode({ filterByKind: ['function'] }));
+			const second = await openUnused($, 'terminal', 'unused --kind class');
+			await second.unmount();
+			expect(codes.at(-1)).toBe(orphanCode({ filterByKind: ['class'] }));
+		});
+
+		test('the text fallback keeps the kind filter and still lists the exports', async ($, on) => {
+			const { codes } = world(on, { surfaces: ['vscode'] });
+			const r = await run($, 'unused class');
+			expect(codes).toEqual([orphanCode({ filterByKind: ['class'] })]);
+			expect(r.text).toContain('helper (function)');
+		});
+	});
 
 	test('an error draws its code as an error badge with the guidance dim', async ($, on) => {
 		world(on, { answer: () => failure('PROJECT_NOT_INDEXED', 'Not indexed', ['Run constellation index']) });
@@ -534,7 +813,7 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Input', key: 'deps-path' })).toBeDefined();
 		await ui.press({ key: 'tab-unused' });
 		await settle();
-		expect(await ui.find({ type: 'Text', text: /• function helper/ })).toBeDefined();
+		expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
 		await ui.press({ key: 'tab-status' });
 		expect(await labels()).toContain('▸ Status');
 	});
@@ -800,6 +1079,212 @@ describe('the pane', () => {
 		await settle();
 		const badge = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✓ ok'));
 		expect(badge?.props['color']).toBe(palette.cosmic);
+	});
+});
+
+describe('the symbol explorer', () => {
+	/** Records what `$.prompt.fill` and `$.ui.copy` were asked for. */
+	function stubActions(on: On) {
+		const fills: string[] = [];
+		const copies: string[] = [];
+		on('prompt.fill', (_, e) => {
+			fills.push(e.text);
+			return { isFilled: true };
+		});
+		on('ui.copy', (_, e) => {
+			copies.push(e.text);
+			return { value: { isCopied: true } };
+		});
+		return { fills, copies };
+	}
+
+	async function openExplore($: Engine, surface: (typeof SURFACES)[number], args = 'explore Graph') {
+		await run($, args);
+		const ui = await mountPane($, surface);
+		await settle();
+		return ui;
+	}
+
+	async function focus(ui: Awaited<ReturnType<typeof mountPane>>) {
+		await ui.press({ key: 'hit:s2' });
+		await settle();
+	}
+
+	test('an ask claude the prompt box refuses keeps the pane open and says why', async ($, on) => {
+		const { events } = world(on);
+		on('prompt.fill', () => ({ isFilled: false }));
+		const ui = await openExplore($, 'terminal');
+		await focus(ui);
+		await ui.press({ key: 'ask-claude' });
+		await settle();
+		expect(events).not.toContain('close:constellation');
+		expect(await reads(ui, /Could not fill the prompt box/)).toBe(true);
+	});
+
+	for (const surface of SURFACES) {
+		test(`the search sends searchSymbols and ranks the exact match first on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			expect(codes).toEqual([searchCode('Graph')]);
+			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toMatchObject({ props: { value: 'Graph' } });
+			const keys = (await ui.findAll({ type: 'Button' })).map((b) => b.key).filter((k) => k?.startsWith('hit:'));
+			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3', 'hit:s4']);
+			expect(await ui.find({ type: 'Text', text: /esc leaves the search field · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /as of 0123456/ })).toBeDefined();
+		});
+
+		test(`pressing a hit sends the drill, draws details and drops the search field on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await focus(ui);
+			const drill = codes.at(-1) ?? '';
+			expect(drill).toContain('"s2"');
+			expect(drill).not.toContain('getCallGraph');
+			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeUndefined();
+			expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
+			expect(await reads(ui, /^Exported: yes$/)).toBe(true);
+			expect(await reads(ui, /results for Graph/)).toBe(true);
+			expect(await ui.find({ type: 'Text', text: /b back · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+		});
+
+		test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
+			world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			expect((await exact(ui, 'src/graph.ts:10'))?.props['wrap']).toBe('truncate-middle');
+			await focus(ui);
+			expect((await exact(ui, 'src/graph.ts:10'))?.props['wrap']).toBe('truncate-middle');
+		});
+
+		test(`a function's drill asks for its call graph and draws the tree on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await ui.press({ key: 'hit:s4' });
+			await settle();
+			expect(codes.at(-1)).toContain('api.getCallGraph(');
+			await ui.press({ key: 'section-calls' });
+			await settle();
+			expect(await exact(ui, '  outer  src/outer.ts:2')).toBeDefined();
+			expect(await exact(ui, 'Graph')).toBeDefined();
+			expect(await exact(ui, '  inner  src/inner.ts:9')).toBeDefined();
+		});
+
+		test(`each section press draws its section on ${surface}`, async ($, on) => {
+			world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await focus(ui);
+
+			await ui.press({ key: 'section-usages' });
+			await settle();
+			expect(await reads(ui, /^2 usages in 1 file$/)).toBe(true);
+			expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
+			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
+			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: { label: '▸ Usages' } });
+
+			await ui.press({ key: 'section-impact' });
+			await settle();
+			const risk = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✗ HIGH'));
+			expect(risk?.props['color']).toBe(palette.stellar);
+			expect(await reads(ui, /Renderer/)).toBe(true);
+			expect(await reads(ui, /1 test · 3 production/)).toBe(true);
+			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
+
+			// A class has no call graph: core refuses getCallGraph for it, so it is neither asked for nor offered.
+			expect(await ui.find({ type: 'Button', key: 'section-calls' })).toBeUndefined();
+
+			await ui.press({ key: 'section-details' });
+			await settle();
+			expect(await reads(ui, /^Kind: class$/)).toBe(true);
+		});
+
+		test(`back restores the results and the search field without a new search on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await focus(ui);
+			const sent = codes.length;
+			expect((await ui.find({ key: 'back' }))?.props['hotkey']).toBe('b');
+			await ui.press({ key: 'back' });
+			await settle();
+			expect(codes).toHaveLength(sent);
+			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeDefined();
+			expect(await ui.find({ type: 'Button', key: 'hit:s1' })).toBeDefined();
+		});
+
+		test(`ask claude fills the prompt box with the symbol and closes the pane on ${surface}`, async ($, on) => {
+			const { events } = world(on, { surfaces: [surface] });
+			const { fills } = stubActions(on);
+			const ui = await openExplore($, surface);
+			await focus(ui);
+			await ui.press({ key: 'ask-claude' });
+			await settle();
+			expect(fills).toHaveLength(1);
+			expect(fills[0]).toContain('`Graph` (class) at src/graph.ts:10');
+			expect(events).toContain('close:constellation');
+		});
+
+		test(`copy location copies file and line on ${surface}`, async ($, on) => {
+			world(on, { surfaces: [surface] });
+			const { copies } = stubActions(on);
+			const ui = await openExplore($, surface);
+			await focus(ui);
+			await ui.press({ key: 'copy-location' });
+			await settle();
+			expect(copies).toEqual(['src/graph.ts:10']);
+			expect(await reads(ui, /^Copied$/)).toBe(true);
+		});
+
+		test(`the close and refresh buttons are in both views on ${surface}`, async ($, on) => {
+			world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+			await focus(ui);
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+		});
+
+		test(`refresh on a focused symbol returns to fresh results on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await focus(ui);
+			await ui.press({ key: 'refresh' });
+			await settle();
+			expect(codes.at(-1)).toBe(searchCode('Graph'));
+			expect(await ui.find({ type: 'Button', key: 'hit:s2' })).toBeDefined();
+			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeDefined();
+			expect(await reads(ui, /^Signature:/)).toBe(false);
+		});
+	}
+
+	test('submitting the search field runs a new search', async ($, on) => {
+		const { codes } = world(on);
+		const ui = await openExplore($, 'terminal', 'explore');
+		expect(codes).toEqual([]);
+		expect(await reads(ui, /Enter a symbol name/)).toBe(true);
+		await ui.input({ key: 'explore-query', text: ' Graph ' });
+		await settle();
+		expect(codes).toEqual([searchCode('Graph')]);
+		expect(await ui.find({ type: 'Button', key: 'hit:s2' })).toBeDefined();
+	});
+
+	test('a search with no matches says so', async ($, on) => {
+		world(on, { answer: () => success({ symbols: [] }) });
+		const ui = await openExplore($, 'terminal');
+		expect(await reads(ui, /^No symbols match$/)).toBe(true);
+	});
+
+	test('an error on the search draws the guidance', async ($, on) => {
+		world(on, { answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
+		const ui = await openExplore($, 'terminal');
+		expect(await reads(ui, /Your access key wasn't accepted/)).toBe(true);
+		expect(await exact(ui, 'constellation auth')).toBeDefined();
+	});
+
+	test('an error on the drill draws the guidance in the detail view', async ($, on) => {
+		world(on, { answer: (code) => (code.includes('impactAnalysis') ? failure('API_UNREACHABLE', 'down', ['Check the network']) : success(SEARCH)) });
+		const ui = await openExplore($, 'terminal');
+		await focus(ui);
+		expect(await ui.find({ type: 'Text', text: /\bAPI_UNREACHABLE\b/ })).toBeDefined();
+		expect(await ui.find({ key: 'section-details' })).toBeDefined();
 	});
 });
 

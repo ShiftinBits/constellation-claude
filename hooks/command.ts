@@ -2,8 +2,12 @@ import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } 
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
+import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
+import type { Hit } from './explore';
+import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
+import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
-import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
+import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -16,7 +20,7 @@ export const COMMAND = 'constellation';
 /** The id of the pane the command opens; the `requestId` its tree is drawn under. */
 const PANE = 'constellation';
 
-const TABS = ['status', 'diagnose', 'deps', 'unused'] as const;
+const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore'] as const;
 export type Tab = (typeof TABS)[number];
 type Direction = 'dependencies' | 'dependents';
 
@@ -25,6 +29,7 @@ const TAB_LABEL: Readonly<Record<Tab, string>> = {
 	diagnose: 'Diagnose',
 	deps: 'Deps',
 	unused: 'Unused',
+	explore: 'Explore',
 };
 
 /** One line under the tab row saying what the tab shows. */
@@ -33,6 +38,7 @@ const TAB_HINT: Readonly<Record<Tab, string>> = {
 	diagnose: 'What the Constellation index holds for this project.',
 	deps: 'What a file imports, or what imports it.',
 	unused: 'Exports nothing imports. Verify each one before deleting it.',
+	explore: 'Search the graph and drill into a symbol without a Claude turn.',
 };
 
 /** The column a labeled row's value starts in. */
@@ -41,6 +47,9 @@ const LABEL_WIDTH = 13;
 /** Rows a tab draws before it ends with a "+N more" line, and lines the text fallback keeps. */
 const MAX_ROWS = 15;
 const MAX_TEXT_LINES = 6;
+/** Hits the explorer lists in the pane, and the fewer the text fallback keeps. */
+const EXPLORE_ROWS = 20;
+const EXPLORE_TEXT_HITS = 5;
 
 /** One thing a tab shows: a line of text, optionally led by a status or kind badge, or a labeled value. */
 export type Item = {
@@ -71,19 +80,29 @@ export type SummaryOptions = {
 	direction?: Direction;
 	path?: string;
 	project?: string;
+	/** The symbol the explorer searched for, which ranks its exact matches first. */
+	query?: string;
 };
 
 /**
- * The tab and file path a command's arguments select: the first word names
- * the tab (default status) and, for deps, the rest is the file path.
+ * The tab, file path and kind a command's arguments select: the first word
+ * names the tab (default status), for deps the rest is the file path, and for
+ * unused the next word (or `--kind <k>`) is the kind to list, and for explore the
+ * rest is the symbol to search for.
  */
-export function parseArgs(args: string): { tab: Tab; path?: string } {
+export function parseArgs(args: string): { tab: Tab; path?: string; kind?: string; query?: string } {
 	const trimmed = args.trim();
 	const split = trimmed.search(/\s/);
 	const word = (split === -1 ? trimmed : trimmed.slice(0, split)).toLowerCase();
 	const tab = TABS.find((t) => t === word);
 	if (tab === undefined) return { tab: 'status' };
 	const rest = split === -1 ? '' : trimmed.slice(split).trim();
+	if (tab === 'unused') {
+		// `unused function` and `unused --kind function` both name a kind.
+		const kind = rest.replace(/^--kind(?:\s+|=)/, '').split(/\s+/)[0]?.toLowerCase();
+		return kind === undefined || kind === '' ? { tab } : { tab, kind };
+	}
+	if (tab === 'explore') return rest === '' ? { tab } : { tab, query: rest };
 	return tab === 'deps' && rest !== '' ? { tab, path: rest } : { tab };
 }
 
@@ -219,6 +238,13 @@ function unusedItems(result: unknown): Item[] {
 	return capped(items);
 }
 
+/** The top matches of a symbol search as plain lines, exact name first. */
+function exploreItems(result: unknown, query: string | undefined): Item[] {
+	const found = rankExact(query ?? '', hits(result)).slice(0, EXPLORE_TEXT_HITS);
+	if (found.length === 0) return [{ text: 'No symbols match', dim: true }];
+	return found.map((h): Item => ({ text: `${kind(h.kind).word} ${h.name} ${where(h)}` }));
+}
+
 /**
  * The facts of one tab from its code_intel envelope, shared by the pane and
  * the text fallback: `items` carry the badges and rows the pane draws and
@@ -238,6 +264,8 @@ export function summarize(tab: Tab, envelope: CodeIntelEnvelope, options: Summar
 			return fromItems(depsItems(result, options.direction ?? 'dependencies', options.path));
 		case 'unused':
 			return fromItems(unusedItems(result));
+		case 'explore':
+			return fromItems(exploreItems(result, options.query));
 	}
 }
 
@@ -283,6 +311,11 @@ export function projectDetail(envelope: CodeIntelEnvelope | undefined): string {
 	return parts.length === 0 ? 'indexed' : parts.join(' · ');
 }
 
+/** The `findOrphanedCode` filter for the kind the command named, if any. */
+function unusedFilter(): { filterByKind?: string[] } {
+	return unusedKind === undefined ? {} : { filterByKind: [unusedKind] };
+}
+
 function codeFor(tab: Tab, direction: Direction, path: string): string {
 	switch (tab) {
 		case 'status':
@@ -292,7 +325,9 @@ function codeFor(tab: Tab, direction: Direction, path: string): string {
 		case 'deps':
 			return `return await api.${direction === 'dependencies' ? 'getDependencies' : 'getDependents'}({ filePath: ${JSON.stringify(path)} })`;
 		case 'unused':
-			return 'return await api.findOrphanedCode({})';
+			return orphanCode(unusedFilter());
+		case 'explore':
+			return searchCode(exploreQuery);
 	}
 }
 
@@ -315,6 +350,23 @@ const generations = new Map<Tab, number>();
 /** The picker's per-project `getCapabilities` envelopes, by project root. */
 const details = new Map<string, CodeIntelEnvelope>();
 const detailsPending = new Set<string>();
+/** The kind `/constellation unused <kind>` asked for. Cleared by `reset()` only. */
+let unusedKind: string | undefined;
+// The unused picker's state, cleared with the tab by `drop('unused')`.
+const picked = new Set<string>();
+let morePages: OrphanRow[] = [];
+let nextOffset: number | undefined;
+let loadingMore = false;
+let handoffNote: string | undefined;
+/** The symbol the explorer searches for. Cleared by `reset()` only, since the search field sets it and then drops the tab. */
+let exploreQuery = '';
+// The explorer's state, cleared with the tab by `drop('explore')`.
+let focusHit: Hit | undefined;
+type Section = 'details' | 'usages' | 'impact' | 'calls';
+let section: Section = 'details';
+const drill = new Map<string, CodeIntelEnvelope>();
+const drillPending = new Set<string>();
+let exploreNote: string | undefined;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
 function pickKey(from: string): string {
@@ -325,10 +377,26 @@ function drop(tab: Tab): void {
 	cache.delete(tab);
 	pending.delete(tab);
 	generations.set(tab, (generations.get(tab) ?? 0) + 1);
+	if (tab === 'unused') {
+		picked.clear();
+		morePages = [];
+		nextOffset = undefined;
+		loadingMore = false;
+		handoffNote = undefined;
+	}
+	if (tab === 'explore') {
+		focusHit = undefined;
+		section = 'details';
+		drill.clear();
+		drillPending.clear();
+		exploreNote = undefined;
+	}
 }
 
 function reset(): void {
 	for (const tab of TABS) drop(tab);
+	unusedKind = undefined;
+	exploreQuery = '';
 	selected = 'status';
 	depsPath = '';
 	depsDirection = 'dependencies';
@@ -365,6 +433,48 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	if ((generations.get(tab) ?? 0) !== generation) return;
 	pending.delete(tab);
 	cache.set(tab, envelope);
+	if (tab === 'unused' && envelope.success) nextOffset = orphanPage(envelope.result).nextOffset;
+	$.ui.invalidate('ui.render');
+}
+
+/** Reads one symbol's details, usages, impact and call graph; a result that lands after the explorer was dropped is discarded. */
+async function runDrill($: EngineInterface, id: string, symbolKind: string): Promise<void> {
+	drillPending.add(id);
+	let envelope: CodeIntelEnvelope;
+	try {
+		const cwd = sessionCwd ?? target(await $.session.cwd());
+		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, drillCode(id, symbolKind), { cwd });
+	} catch (error) {
+		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+	}
+	if (!drillPending.delete(id)) return;
+	drill.set(id, envelope);
+	$.ui.invalidate('ui.render');
+}
+
+/** Reads the next page of unused exports; a page that lands after the tab was dropped is discarded. */
+async function loadMore($: EngineInterface): Promise<void> {
+	if (loadingMore || nextOffset === undefined) return;
+	const generation = generations.get('unused') ?? 0;
+	const code = orphanCode({ ...unusedFilter(), limit: 50, offset: nextOffset });
+	loadingMore = true;
+	$.ui.invalidate('ui.render');
+	let envelope: CodeIntelEnvelope;
+	try {
+		const cwd = sessionCwd ?? target(await $.session.cwd());
+		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, code, { cwd });
+	} catch (error) {
+		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+	}
+	if ((generations.get('unused') ?? 0) !== generation) return;
+	loadingMore = false;
+	if (envelope.success) {
+		const page = orphanPage(envelope.result);
+		morePages = [...morePages, ...page.rows];
+		nextOffset = page.nextOffset;
+	} else {
+		handoffNote = 'Could not load more. Try again.';
+	}
 	$.ui.invalidate('ui.render');
 }
 
@@ -440,8 +550,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		try {
 			await $.command.register({
 				name: COMMAND,
-				description: 'Constellation status, diagnose, deps and unused code',
-				argumentHint: '[status|diagnose|deps <file>|unused]',
+				description: 'Constellation status, diagnose, deps, unused code and symbol explorer',
+				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]]',
 				immediate: true,
 			});
 		} catch {
@@ -451,7 +561,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 	});
 
 	on('command.run', { command: COMMAND }, async ($, e) => {
-		const { tab, path } = parseArgs(e.args);
+		const { tab, path, kind, query } = parseArgs(e.args);
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
 			try {
@@ -462,20 +572,25 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}
 		}
 		const dir = target(cwd);
+		unusedKind = kind;
+		exploreQuery = query ?? '';
 		if (!canDraw(await $.session.surfaces())) {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
+			if (tab === 'explore' && query === undefined) return { text: 'Usage: /constellation explore <symbol>' };
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 				codeFor(tab, 'dependencies', path ?? ''),
 				{ cwd: dir },
 			);
-			const summary = summarize(tab, envelope, { path, project: projectName(dir) });
+			const summary = summarize(tab, envelope, { path, project: projectName(dir), query });
 			const meta = metadata(envelope);
 			if (summary.explanation !== undefined) return { text: [`${PROMPT} ${tab}`, ...summary.lines].join('\n') };
 			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
 			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
 		reset();
+		unusedKind = kind;
+		exploreQuery = query ?? '';
 		selected = tab;
 		depsPath = path ?? '';
 		sessionCwd = dir;
@@ -495,10 +610,15 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const el = $.ui.resolve(e);
 		const envelope = cache.get(selected);
 		const needsPath = selected === 'deps' && depsPath === '';
-		if (envelope === undefined && !pending.has(selected) && !needsPath) void runQuery($, selected);
+		const needsQuery = selected === 'explore' && exploreQuery === '';
+		if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
 		const isPending = pending.has(selected);
 
 		const redraw = (): void => $.ui.invalidate('ui.render');
+		// In a row that may be wider than the pane, the name and kind keep their width and a long location
+		// shortens in the middle, instead of every item shrinking and wrapping onto a second line.
+		const fixed = (children: RenderElement[]): RenderElement => el.Box({ flexDirection: 'row', columnGap: 1, flexShrink: 0, children });
+		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
 		const showDeps = (path: string): void => {
 			depsPath = path;
 			drop('deps');
@@ -529,7 +649,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				// A pick left in the store is offered again and can be switched again.
 			}
 		};
-		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd) });
+		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
 
 		const body: RenderElement[] = [];
 		if (selected === 'deps') {
@@ -554,7 +674,234 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				}),
 			);
 		}
-		if (summary?.explanation !== undefined && !summary.items.some((i) => i.project !== undefined)) {
+		const hit = focusHit;
+		if (selected === 'explore' && hit === undefined) {
+			body.push(
+				el.Input({
+					key: 'explore-query',
+					label: 'Symbol',
+					value: exploreQuery,
+					placeholder: 'name',
+					submitLabel: 'search',
+					autoFocus: true,
+					onSubmit: (value) => {
+						exploreQuery = value.trim();
+						drop('explore');
+						redraw();
+					},
+				}),
+			);
+		}
+		const firstPage = selected === 'unused' && envelope?.success === true ? orphanPage(envelope.result) : undefined;
+		const loaded = firstPage === undefined ? [] : [...firstPage.rows, ...morePages];
+		const pickedRows = loaded.filter((r) => picked.has(r.symbolId));
+		const toggle = (ids: readonly string[], select: boolean): void => {
+			for (const id of ids) {
+				if (select) picked.add(id);
+				else picked.delete(id);
+			}
+			redraw();
+		};
+		if (firstPage !== undefined) {
+			if (loaded.length === 0) {
+				const color = paint(palette.cosmic, tint);
+				body.push(el.Text({ ...(color === undefined ? {} : { color }), children: '✦ No unused exports found' }));
+			} else {
+				const nebula = paint(palette.nebula, tint);
+				body.push(
+					el.Box({
+						flexDirection: 'column',
+						children: [
+							el.Box({
+								flexDirection: 'row',
+								columnGap: 2,
+								children: [
+									el.Text({ ...(nebula === undefined ? {} : { color: nebula }), children: `${picked.size} selected` }),
+									el.Text({ dimColor: true, children: `of ${grouped(firstPage.total ?? loaded.length)} unused exports` }),
+									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
+								],
+							}),
+							// The list's keys sit here, not in the footer: a long list scrolls the footer out of view.
+							el.Text({ dimColor: true, children: `tab/shift+tab move · enter toggle${picked.size > 0 ? ' · h hand off' : ''}` }),
+							...(handoffNote === undefined ? [] : [el.Text({ dimColor: true, children: handoffNote })]),
+						],
+					}),
+				);
+				for (const [file, rows] of byFile(loaded)) {
+					const ids = rows.map((r) => r.symbolId);
+					const all = ids.every((id) => picked.has(id));
+					body.push(
+						el.Button({ key: `orphan-file:${file}`, label: `${all ? '[x]' : '[ ]'} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
+						...rows.map((row) =>
+							el.Box({
+								key: `row:${row.symbolId}`,
+								flexDirection: 'row',
+								columnGap: 1,
+								paddingLeft: 2,
+								children: [
+									fixed([
+										el.Button({
+											key: `orphan:${row.symbolId}`,
+											label: picked.has(row.symbolId) ? '[x]' : '[ ]',
+											plain: true,
+											onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
+										}),
+										el.Text({ children: row.name }),
+										badge(el, '', forTheme(kind(row.kind), tint)),
+									]),
+									place(location(row)),
+								],
+							}),
+						),
+					);
+				}
+				if (nextOffset !== undefined && !loadingMore) {
+					body.push(el.Button({ key: 'load-more', label: 'Load more', plain: true, onPress: () => loadMore($) }));
+				}
+				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
+			}
+		} else if (selected === 'explore' && summary !== undefined && summary.explanation === undefined) {
+			const labeled = (label: string, value: string): RenderElement =>
+				el.Box({ flexDirection: 'row', children: [el.Text({ dimColor: true, children: label.padEnd(LABEL_WIDTH) }), el.Text({ children: value })] });
+			const stamp = (from: CodeIntelEnvelope | undefined): RenderElement[] => {
+				const parts: string[] = [];
+				if (from?.time !== undefined) parts.push(`${from.time} ms`);
+				if (from?.asOfCommit) parts.push(`as of ${from.asOfCommit.slice(0, 7)}`);
+				return parts.length === 0 ? [] : [el.Text({ dimColor: true, children: parts.join(' · ') })];
+			};
+			if (hit === undefined) {
+				const found = rankExact(exploreQuery, hits(envelope?.result)).slice(0, EXPLORE_ROWS);
+				if (found.length === 0) body.push(el.Text({ dimColor: true, children: 'No symbols match' }));
+				for (const h of found) {
+					body.push(
+						el.Box({
+							key: `row:${h.id}`,
+							flexDirection: 'row',
+							columnGap: 1,
+							children: [
+								fixed([
+									el.Button({
+										key: `hit:${h.id}`,
+										label: h.name,
+										plain: true,
+										onPress: () => {
+											focusHit = h;
+											section = 'details';
+											if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id, h.kind);
+											redraw();
+										},
+									}),
+									badge(el, '', forTheme(kind(h.kind), tint)),
+								]),
+								place(where(h)),
+							],
+						}),
+					);
+				}
+				body.push(...stamp(envelope));
+			} else {
+				const drilled = drill.get(hit.id);
+				const result = isRecord(drilled?.result) ? drilled.result : {};
+				const aliasNote = el.Text({ dimColor: true, children: 'Callers importing through path aliases or export * barrels may be missing.' });
+				const sections: [Section, string][] = [
+					['details', 'Details'],
+					['usages', 'Usages'],
+					['impact', 'Impact'],
+					// Only a kind with a call graph offers it; core refuses the read for any other.
+					...(hasCallGraph(hit.kind) ? [['calls', 'Call graph'] as [Section, string]] : []),
+				];
+				body.push(
+					el.Box({
+						flexDirection: 'column',
+						gap: 1,
+						children: [
+							el.Box({
+								flexDirection: 'column',
+								children: [
+									el.Text({ dimColor: true, children: `results for ${exploreQuery}` }),
+									el.Box({
+										flexDirection: 'row',
+										columnGap: 1,
+										children: [
+											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ bold: true, children: hit.name })]),
+											place(where(hit)),
+											fixed([
+												el.Button({
+													key: 'copy-location',
+													label: 'copy location',
+													plain: true,
+													dimColor: true,
+													onPress: async (press) => {
+														const { isCopied } = await $.ui.copy({ text: where(hit), surface: press.surface });
+														exploreNote = isCopied ? 'Copied' : 'Could not copy';
+														redraw();
+													},
+												}),
+											]),
+										],
+									}),
+									...(exploreNote === undefined ? [] : [el.Text({ dimColor: true, children: exploreNote })]),
+								],
+							}),
+							el.Box({
+								flexDirection: 'row',
+								columnGap: 2,
+								children: sections.map(([name, label]) =>
+									el.Button({
+										key: `section-${name}`,
+										label: name === section ? `▸ ${label}` : label,
+										plain: true,
+										onPress: () => {
+											section = name;
+											redraw();
+										},
+									}),
+								),
+							}),
+							drilled === undefined
+								? badge(el, 'querying Constellation', forTheme(status('pending'), tint))
+								: !drilled.success
+									? errorView(el, summarize('explore', drilled).explanation ?? explain({ code: 'UNKNOWN', message: 'The request failed' }), tint)
+									: el.Box({
+											flexDirection: 'column',
+											children: (() => {
+												if (section === 'details') {
+													const lines = detailLines(result['details']);
+													return lines.length === 0 ? [el.Text({ dimColor: true, children: 'No details returned' })] : lines.map((l) => el.Text({ children: l }));
+												}
+												if (section === 'usages') {
+													const lines = usageLines(result['usages']);
+													return [
+														...(lines.length === 0 ? [el.Text({ dimColor: true, children: 'No usages found' })] : lines.map((l) => el.Text({ children: l }))),
+														aliasNote,
+													];
+												}
+												if (section === 'impact') {
+													const view = impactView(result['impact']);
+													return [
+														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
+														...(view.files === undefined ? [] : [labeled('Files', String(view.files))]),
+														...(view.direct === undefined ? [] : [labeled('Direct', String(view.direct))]),
+														...(view.transitive === undefined ? [] : [labeled('Transitive', String(view.transitive))]),
+														...(view.tests === undefined && view.production === undefined
+															? []
+															: [labeled('Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`)]),
+														...view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint))),
+														aliasNote,
+													];
+												}
+												const tree = callTree(result['calls']);
+												return tree.length === 0
+													? [el.Text({ dimColor: true, children: 'No callers or callees found' })]
+													: tree.map((l) => el.Text({ ...(l.depth === 0 ? { bold: true } : {}), children: `${'  '.repeat(l.depth)}${l.text}` }));
+											})(),
+										}),
+						],
+					}),
+					...stamp(drilled),
+				);
+			}
+		} else if (summary?.explanation !== undefined && !summary.items.some((i) => i.project !== undefined)) {
 			body.push(errorView(el, summary.explanation, tint));
 		} else if (summary !== undefined) {
 			let row = 0;
@@ -612,6 +959,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			body.push(badge(el, 'querying Constellation', forTheme(status('pending'), tint)));
 		} else if (needsPath) {
 			body.push(el.Text({ dimColor: true, children: 'Enter a file path to see its dependencies.' }));
+		} else if (needsQuery) {
+			body.push(el.Text({ dimColor: true, children: 'Enter a symbol name to search the graph.' }));
 		}
 
 		const meta = metadata(envelope);
@@ -650,7 +999,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
-			: `1-4 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
+			: selected === 'explore'
+					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
+					: `1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
 
 		return el.Box({
 			flexDirection: 'column',
@@ -687,6 +1038,70 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				el.Box({
 					flexDirection: 'column',
 					children: [
+						...(pickedRows.length === 0
+							? []
+							: [
+									buttonRow(
+										el,
+										{
+											key: 'clear',
+											label: 'Clear',
+											onPress: () => {
+												picked.clear();
+												handoffNote = undefined;
+												redraw();
+											},
+										},
+										{
+											key: 'handoff',
+											label: `Hand ${pickedRows.length} removal${pickedRows.length === 1 ? '' : 's'} to Claude`,
+											hotkey: 'h',
+											onPress: async () => {
+												const text = removalPrompt(pickedRows, envelope?.asOfCommit);
+												const { isFilled } = await $.prompt.fill({ text });
+												if (isFilled) {
+													await $.ui.close({ id: PANE });
+													reset();
+												} else {
+													handoffNote = 'Could not fill the prompt box (a dialog may be open). Close it and try again.';
+													redraw();
+												}
+											},
+										},
+									),
+								]),
+						...(selected === 'explore' && hit !== undefined
+							? [
+									buttonRow(
+										el,
+										{
+											key: 'back',
+											label: 'Back',
+											hotkey: 'b',
+											onPress: () => {
+												focusHit = undefined;
+												section = 'details';
+												exploreNote = undefined;
+												redraw();
+											},
+										},
+										{
+											key: 'ask-claude',
+											label: 'Ask Claude',
+											onPress: async () => {
+												const { isFilled } = await $.prompt.fill({ text: askText(hit) });
+												if (isFilled) {
+													await $.ui.close({ id: PANE });
+													reset();
+												} else {
+													exploreNote = 'Could not fill the prompt box (a dialog may be open). Close it and try again.';
+													redraw();
+												}
+											},
+										},
+									),
+								]
+							: []),
 						picking
 							? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(close)] })
 							: buttonRow(el, close, {
