@@ -717,6 +717,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
 								],
 							}),
+							// The list's keys sit here, not in the footer: a long list scrolls the footer out of view.
+							el.Text({ dimColor: true, children: `tab/shift+tab move · enter toggle${picked.size > 0 ? ' · h hand off' : ''}` }),
 							...(handoffNote === undefined ? [] : [el.Text({ dimColor: true, children: handoffNote })]),
 						],
 					}),
@@ -987,9 +989,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
-			: firstPage !== undefined
-				? `a select all · h hand off · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
-				: selected === 'explore'
+			: selected === 'explore'
 					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
 					: `1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
 

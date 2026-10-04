@@ -463,6 +463,16 @@ describe('the pane', () => {
 				expect(await reads(ui, /^0 selected$/)).toBe(true);
 			});
 
+			test(`the list's keys sit by the count, where a long list keeps them in view, and the hand-off joins them once something is checked, on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle$/ })).toBeDefined();
+				expect(await ui.find({ type: 'Text', text: /^1-5 switch tabs · r refresh · esc close$/ })).toBeDefined();
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle · h hand off$/ })).toBeDefined();
+			});
+
 			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
 				world(on, { surfaces: [surface] });
 				const ui = await openUnused($, surface);
