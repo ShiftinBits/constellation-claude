@@ -1,5 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
 import { stringArg } from './lib';
+import { noteCodeIntel } from './risk';
 
 /** How many nudges one agent gets when the option is unset. */
 const DEFAULT_NUDGE_LIMIT = 3;
@@ -94,7 +95,10 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		const key = agentKey(e);
 		const turn = turnOf(key);
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
-		return next(e);
+		const r = await next(e);
+		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis.
+		if (next.origin.plugin === 'engine') noteCodeIntel(key, e, r);
+		return r;
 	});
 
 	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async (_$, e, next) => {

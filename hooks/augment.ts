@@ -1,7 +1,8 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { agentKey, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
-import { codeIntel, isConfigured, projectRoot } from './lib';
+import { codeIntel, isConfigured, projectRoot, withinDeadline } from './lib';
+import { PROMPT } from './theme';
 
 /**
  * How long a finished search waits for its code_intel lookup before it returns
@@ -94,7 +95,7 @@ function foundOf(value: unknown): Found | null {
 export function augmentLine({ name, kind, filePath, line, usages, definitions }: Found): string {
 	const others = definitions > 1 ? `, the most used of ${definitions} symbols with that name` : '';
 	const count = `${usages} ${usages === 1 ? 'usage' : 'usages'}`;
-	return `✦ code_intel: ${name} (${kind}) is defined at ${filePath}:${line}${others}, with ${count}. Use code_intel for references, callers, and impact.`;
+	return `${PROMPT} ${name} (${kind}) is defined at ${filePath}:${line}${others}, with ${count}. Use code_intel for references, callers, and impact.`;
 }
 
 /** The lookup for `name` in the project at `root`, shared with any already in flight or settled. */
@@ -120,24 +121,6 @@ function lookup($: EngineInterface, root: string, name: string): Promise<Found |
 	return pending;
 }
 
-/** `pending` if it settles within `SOFT_DEADLINE_MS` (and before `signal` aborts), else undefined. */
-async function withinDeadline(
-	$: EngineInterface,
-	pending: Promise<Found | null | undefined>,
-	signal: AbortSignal,
-): Promise<Found | null | undefined> {
-	const stop = new AbortController();
-	const deadline = $.clock.sleep(SOFT_DEADLINE_MS, { signal: AbortSignal.any([signal, stop.signal]) }).then(
-		() => undefined,
-		() => undefined,
-	);
-	try {
-		return await Promise.race([pending, deadline]);
-	} finally {
-		stop.abort();
-	}
-}
-
 export function registerAugment(on: On, options: PluginOptions): void {
 	lookups.clear();
 	shown.clear();
@@ -159,7 +142,7 @@ export function registerAugment(on: On, options: PluginOptions): void {
 			shown.delete(seen);
 			return r;
 		}
-		const found = await withinDeadline($, pending, next.signal);
+		const found = await withinDeadline((ms, o) => $.clock.sleep(ms, o), pending, SOFT_DEADLINE_MS, next.signal);
 		if (found === null || found === undefined) {
 			shown.delete(seen);
 			return r;

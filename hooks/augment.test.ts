@@ -76,7 +76,7 @@ describe('search result augment', () => {
 		const r = await $.tool.call(SEARCH);
 		expect(r).toEqual({ ...BENEATH, context: [LINE] });
 		expect(LINE).toBe(
-			'✦ code_intel: AuthService (class) is defined at src/auth/auth.service.ts:12, with 4 usages. Use code_intel for references, callers, and impact.',
+			'>_CONSTELLATION:// AuthService (class) is defined at src/auth/auth.service.ts:12, with 4 usages. Use code_intel for references, callers, and impact.',
 		);
 		expect(codes.length).toBe(1);
 		expect(String(codes[0])).toContain('(api, "AuthService");');

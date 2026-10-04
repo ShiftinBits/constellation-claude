@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import type { ElementTable, On, RenderElement } from 'claude-code';
-import { BANNER_WIDTH, BOX_WIDTH, MARK, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, header, kind, paint, palette, rgb, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, BOX_WIDTH, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, header, kind, paint, palette, rgb, risk, scheme, status } from './theme';
 import type { Tone } from './theme';
 
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -204,15 +204,11 @@ describe('buttonRow', () => {
 	}
 });
 
-describe('rgb and MARK', () => {
+describe('rgb', () => {
 	test('rgb equals the matching palette hex', () => {
 		for (const name of Object.keys(rgb) as (keyof typeof rgb)[]) {
 			expect(rgb[name]).toBe(parseInt(palette[name].slice(1), 16));
 		}
-	});
-
-	test('MARK is the single brand mark', () => {
-		expect(MARK).toBe('✦');
 	});
 });
 

@@ -35,9 +35,6 @@ export const rgb = {
 	stellar: 0xe74c3c,
 } as const;
 
-/** The one brand mark a tree may draw. */
-export const MARK = '✦';
-
 /**
  * The Text props of a tone plus the word and glyph every colored badge must
  * carry, so color is never the only signal.

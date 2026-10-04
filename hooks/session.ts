@@ -1,6 +1,8 @@
 import type { On } from 'claude-code';
 import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
+import { forgetAgentImpact, resetImpact } from './impact';
+import { resetRiskCache } from './risk';
 
 /**
  * Session lifecycle for the module's state, in one place: a new conversation
@@ -11,6 +13,8 @@ export function registerSession(on: On): void {
 	on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async (_$, e, next) => {
 		resetBudgets();
 		resetAugment();
+		resetRiskCache();
+		resetImpact();
 		return next(e);
 	});
 
@@ -18,6 +22,7 @@ export function registerSession(on: On): void {
 		if (e.agentId !== undefined) {
 			forgetAgentBudget(e.agentId);
 			forgetAgentLines(e.agentId);
+			forgetAgentImpact(e.agentId);
 		}
 		return next(e);
 	});

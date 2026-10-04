@@ -3,6 +3,7 @@ import { registerAugment } from './augment';
 import { registerBudget } from './budget';
 import { registerCommand } from './command';
 import { registerDescribe } from './describe';
+import { registerImpactGate } from './impact';
 import { registerNudges } from './nudge';
 import { registerSession } from './session';
 
@@ -13,4 +14,5 @@ export const register: Register = (on, options) => {
 	registerAugment(on, options);
 	registerSession(on);
 	registerCommand(on, options);
+	registerImpactGate(on, options);
 };

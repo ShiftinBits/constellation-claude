@@ -1,6 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
+import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerSession } from './session';
 
@@ -8,9 +9,15 @@ const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
-type Answer = { additionalContext?: string[]; deny?: string };
-type Next = (e: object) => Promise<Answer>;
+type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string };
+type Bottom = (e: object) => Promise<Answer>;
+/** Who raised the dispatch, as `next.origin` holds it. */
+type Origin = { plugin: string; tier: string };
+type Next = Bottom & { origin: Origin };
 type Handler = ($: object, e: object, next: Next) => Promise<Answer>;
+
+/** The model's own call: the engine raises it. */
+const ENGINE: Origin = { plugin: 'engine', tier: 'core' };
 type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
 
 /** True when the event `e` satisfies a matcher: a pattern, a list of values, or a value per field. */
@@ -42,6 +49,7 @@ const $ = {
  * directly: the test kit does not surface a PreToolUse handler's added context.
  */
 function load(options: PluginOptions) {
+	resetRiskCache();
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -54,16 +62,18 @@ function load(options: PluginOptions) {
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
-	 * what sits beneath them is `bottom`.
+	 * what sits beneath them is `bottom`, and `origin` is who raised it.
 	 */
-	const raise = (event: string, e: object, bottom: Next = async () => ({})): Promise<Answer> => {
+	const raise = (event: string, e: object, bottom: Bottom = async () => ({}), origin = ENGINE): Promise<Answer> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
-		const step =
-			(i: number): Next =>
-			(input) => {
-				const hook = chain[i];
-				return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
-			};
+		const step = (i: number): Next =>
+			Object.assign(
+				(input: object) => {
+					const hook = chain[i];
+					return hook === undefined ? bottom(input) : hook.handler($, input, step(i + 1));
+				},
+				{ origin },
+			);
 		return step(0)(e);
 	};
 
@@ -74,6 +84,9 @@ function load(options: PluginOptions) {
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
+		/** A code_intel call running `code` for `agentId`, raised by `origin`, over a bottom that answers `answer`. */
+		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
+			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
@@ -228,6 +241,61 @@ describe('nudge budget', () => {
 		expect(existsCalls).toBe(0);
 	});
 
+	test('a SessionStart clear empties the risk cache', async () => {
+		let calls = 0;
+		const mcp: RiskPort = {
+			after: () => {},
+			connect: async () => ({ isConnected: true, server: 's' }),
+			call: async () => {
+				calls += 1;
+				return { content: [{ type: 'text', text: JSON.stringify({ success: true, result: { dependents: [], used: [] } }) }], isError: false };
+			},
+		};
+		const m = load({});
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		expect(calls).toBe(1);
+		await m.sessionStart('clear');
+		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
+		expect(calls).toBe(2);
+	});
+
+	test('a code_intel call records evidence for its agent only, while collection is on', async () => {
+		const m = load({});
+		collectEvidence(true);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' });
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(true);
+		expect(hasEvidence('agent-2', ['src/core.ts'], [])).toBe(false);
+		expect(hasEvidence('main', ['src/core.ts'], [])).toBe(false);
+		collectEvidence(false);
+	});
+
+	test('with the gate off a code_intel call records no evidence', async () => {
+		const m = load({});
+		collectEvidence(false);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' });
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(false);
+	});
+
+	test('a denied code_intel call records no evidence', async () => {
+		const m = load({});
+		collectEvidence(true);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { deny: 'x' });
+		expect(hasEvidence('agent-1', ['src/core.ts'], [])).toBe(false);
+		collectEvidence(false);
+	});
+
+	test("a plugin's own code_intel call is not evidence but still counts as the turn's code_intel use", async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		const plugin = { plugin: 'constellation', tier: 'user' };
+		collectEvidence(true);
+		await m.program('agent-1', 'api.getDependents({ filePath: "src/core.ts" })', { result: {}, text: '{"success":true}' }, plugin);
+		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
+		collectEvidence(false);
+		expect(await m.search('agent-1')).toBeUndefined();
+	});
+
 	test('a SessionStart reset clears subagent budgets too', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
@@ -246,6 +314,7 @@ describe('budget hooks as a loaded plugin', () => {
 		expect(await $.turn.start({ text: 'hi', turnId: 't1' })).toEqual({ turnId: 't1' });
 		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 		expect(call).toEqual({ result: 'beneath' });
+		expect(await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' })).toEqual({ result: 'beneath' });
 		const start = await $.classic.SessionStart({ source: 'clear' });
 		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
 	});
