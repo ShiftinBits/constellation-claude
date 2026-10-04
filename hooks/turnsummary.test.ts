@@ -42,6 +42,8 @@ type World = {
 	failure?: 'error' | 'unsuccessful';
 	/** When true, code_intel never answers and the deadline passes at once. */
 	slow?: boolean;
+	/** When set, `$.fs.exists` rejects when asked about a `constellation.json`, or `$.env.get` rejects. */
+	rejects?: 'exists' | 'env';
 };
 
 /** What the fake `$` recorded. */
@@ -86,9 +88,19 @@ function load(options: PluginOptions = {}, world: World = {}) {
 	const graph = world.dependents ?? {};
 	const exists = world.exists ?? ((p: string) => p === `${PROJECT}/constellation.json` || isSource(p));
 	const $ = {
-		env: { get: async () => world.key ?? KEY },
+		env: {
+			get: async () => {
+				if (world.rejects === 'env') throw new Error('env unavailable');
+				return world.key ?? KEY;
+			},
+		},
 		session: { cwd: async () => PROJECT },
-		fs: { exists: async (path: string) => exists(path) },
+		fs: {
+			exists: async (path: string) => {
+				if (world.rejects === 'exists' && path.endsWith('/constellation.json')) throw new Error('fs unavailable');
+				return exists(path);
+			},
+		},
 		mcp: {
 			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
 			call: async (_server: string, _tool: string, args: { code: string; cwd: string }): Promise<McpToolResult> => {
@@ -328,6 +340,16 @@ describe('turn summary line', () => {
 			await m.edit(`${PROJECT}/src/a.ts`);
 			expect(await m.complete()).toBe(ANSWER);
 			expect(m.calls.queried).toEqual([['src/a.ts']]);
+		});
+	}
+
+	for (const rejects of ['exists', 'env'] as const) {
+		test(`a rejected ${rejects === 'exists' ? 'constellation.json check' : 'access key read'} shows no line and returns the answer unchanged`, async () => {
+			const m = load({}, { rejects });
+			await m.turn();
+			await m.edit(`${PROJECT}/src/a.ts`);
+			expect(await m.complete()).toBe(ANSWER);
+			expect(m.calls.queried).toEqual([]);
 		});
 	}
 
