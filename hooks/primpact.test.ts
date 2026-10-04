@@ -74,6 +74,9 @@ const DIFF_MAIN = `${GIT} diff --no-ext-diff --no-renames --name-only -z --relat
 const DIFF_DEV = `${GIT} diff --no-ext-diff --no-renames --name-only -z --relative origin/dev...HEAD`;
 const SYMBOLIC_REF = `${GIT} symbolic-ref refs/remotes/origin/HEAD`;
 const REV_PARSE = `${GIT} rev-parse --abbrev-ref HEAD`;
+const VERIFY_MAIN = `${GIT} rev-parse --verify --quiet refs/remotes/origin/main`;
+const VERIFY_MASTER = `${GIT} rev-parse --verify --quiet refs/remotes/origin/master`;
+const DIFF_MASTER = `${GIT} diff --no-ext-diff --no-renames --name-only -z --relative origin/master...HEAD`;
 
 /** Reads the files, the symbols flag and the page size back out of a serialized `probe` program. */
 function probeArgs(code: string): { files: string[]; exports: boolean; page: number } {
@@ -355,10 +358,21 @@ describe('PR impact in require mode', () => {
 		expect(denyOf(r)).toContain(INSTRUCTION);
 	});
 
-	test('lets a --body-file that cannot be read run', async () => {
-		const { bash, calls } = load(REQUIRE, GRAPH);
-		expect((await bash('gh pr create --title t --body-file missing.md')).ran).toBe(true);
-		expect(calls.runs).toEqual([]);
+	test('refuses a --body-file that cannot be read, as a body with no heading', async () => {
+		const { bash } = load(REQUIRE, GRAPH);
+		const { r, ran } = await bash('gh pr create --title t --body-file missing.md');
+		expect(ran).toBe(false);
+		expect(r.deny).toContain('## Impact');
+	});
+
+	test('checks a body file the command itself writes through the command line, not the file', async () => {
+		const stale = { [`${PROJECT}/body.md`]: '## Impact\nfrom an earlier attempt\n' };
+		const write = "cat > body.md <<'EOF'\nAdds x.\nEOF\ngh pr create --title t --body-file body.md";
+		const refused = load(REQUIRE, { ...GRAPH, files: stale });
+		expect((await refused.bash(write)).ran).toBe(false);
+		expect(refused.calls.reads).toEqual([]);
+		const passed = load(REQUIRE, { ...GRAPH, files: stale });
+		expect((await passed.bash(write.replace('Adds x.', '## Impact\nAdds x.'))).ran).toBe(true);
 	});
 
 	test('lets --body-file - (standard input) run without reading or running git', async () => {
@@ -414,7 +428,12 @@ describe('PR impact in require mode', () => {
 
 	test('a PR for another branch or repository passes untouched without running git', async () => {
 		const { bash, calls } = load(REQUIRE, GRAPH);
-		for (const line of ['gh pr create --head feat/y --title t --body x', 'gh pr create -R owner/repo --title t --body x']) {
+		for (const line of [
+			'gh pr create --head feat/y --title t --body x',
+			'gh pr create -R owner/repo --title t --body x',
+			'GH_REPO=owner/repo gh pr create --title t --body x',
+			'gh pr create \\\n  --base dev \\\n  --head feat/y \\\n  --body x',
+		]) {
 			expect((await bash(line)).ran).toBe(true);
 		}
 		expect(calls.runs).toEqual([]);
@@ -428,7 +447,13 @@ describe('PR impact in require mode', () => {
 
 	test('a cd out of the session directory passes untouched without running git', async () => {
 		const { bash, calls } = load(REQUIRE, { ...GRAPH, exists: () => true });
-		for (const line of ['cd .. && gh pr create --title t --body x', 'cd /tmp/other && gh pr create --title t --body x']) {
+		for (const line of [
+			'cd .. && gh pr create --title t --body x',
+			'cd /tmp/other && gh pr create --title t --body x',
+			'cd ~/other && gh pr create --title t --body x',
+			'cd $REPO && gh pr create --title t --body x',
+			'cd - && gh pr create --title t --body x',
+		]) {
 			const { ran } = await bash(line);
 			expect(ran).toBe(true);
 		}
@@ -469,10 +494,17 @@ describe('PR impact in require mode', () => {
 		});
 	}
 
-	test('never guesses main when symbolic-ref fails', async () => {
-		const { bash, calls } = load(REQUIRE, { ...GRAPH, git: { [SYMBOLIC_REF]: { exitCode: 1, stdout: '' } } });
-		await bash(PLAIN);
-		expect(calls.runs.map((run) => run.argv)).toEqual([REV_PARSE, SYMBOLIC_REF]);
+	test('without origin/HEAD, falls back to origin/main or origin/master only when that ref exists', async () => {
+		const noHead = { [SYMBOLIC_REF]: { exitCode: 1, stdout: '' } };
+		const none = load(REQUIRE, { ...GRAPH, git: noHead });
+		expect((await none.bash(PLAIN)).ran).toBe(true);
+		expect(none.calls.runs.map((run) => run.argv)).toEqual([REV_PARSE, SYMBOLIC_REF, VERIFY_MAIN, VERIFY_MASTER]);
+		const master = load(REQUIRE, {
+			...GRAPH,
+			git: { ...noHead, [VERIFY_MASTER]: { exitCode: 0, stdout: '' }, [DIFF_MASTER]: { exitCode: 0, stdout: 'src/a.ts\0' } },
+		});
+		expect((await master.bash(PLAIN)).ran).toBe(false);
+		expect(master.calls.runs.map((run) => run.argv)).toEqual([REV_PARSE, SYMBOLIC_REF, VERIFY_MAIN, VERIFY_MASTER, DIFF_MASTER]);
 	});
 
 	test('a failed lookup leaves the branch unrefused, so the next attempt is still checked', async () => {

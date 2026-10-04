@@ -190,6 +190,10 @@ describe('ghPrCreate', () => {
 		['gh pr create --head feat/y', { head: 'feat/y' }],
 		['gh pr create -H feat/y -R owner/repo', { head: 'feat/y', repo: 'owner/repo' }],
 		['gh pr create --repo=owner/repo', { repo: 'owner/repo' }],
+		['GH_REPO=owner/repo gh pr create', { repo: 'owner/repo' }],
+		['gh pr create \\\n  --base develop \\\n  --head feat/x \\\n  --body-file body.md', { base: 'develop', head: 'feat/x', bodyFile: 'body.md' }],
+		["cat > /tmp/b.md <<'EOF'\n## Summary\nIt doesn't break\nEOF\ngh pr create --body-file /tmp/b.md", { bodyFile: '/tmp/b.md' }],
+		['git push <<-END\n\tit\'s\n\tEND\ngh pr create -B dev', { base: 'dev' }],
 	];
 	for (const [line, expected] of matches) {
 		test(`matches ${line}`, () => {
@@ -203,6 +207,9 @@ describe('ghPrCreate', () => {
 		'echo gh pr create',
 		'git status',
 		'ls | gh pr create',
+		'cd ~/other && gh pr create',
+		'cd $REPO && gh pr create',
+		'cd - && gh pr create',
 	];
 	for (const line of misses) {
 		test(`does not match ${line}`, () => {

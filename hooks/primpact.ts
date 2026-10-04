@@ -80,6 +80,28 @@ export function buildImpactSection(changed: string[], blast: Blast): string {
 	return lines.join('\n');
 }
 
+/** True when `line` writes `path` (`> path`, `>> path`, `tee path`): the file is not there yet, or is stale, until the command runs. */
+function writes(line: string, path: string): boolean {
+	const name = path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	return new RegExp(`(?:>>?|\\btee(?:\\s+-a)?)\\s*['"]?${name}['"]?(?=[\\s;&|)]|$)`).test(line);
+}
+
+/**
+ * The remote's default branch: `origin/HEAD`, which only a clone or
+ * `git remote set-head` sets, else `origin/main` or `origin/master` when that
+ * ref exists. Undefined when none does; nothing is guessed.
+ */
+async function defaultBase($: EngineInterface, root: string): Promise<string | undefined> {
+	const head = await $.process.run([...GIT, 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
+	const ref = head.stdout.trim();
+	if (head.exitCode === 0 && ref.startsWith('refs/remotes/') && ref.length > 'refs/remotes/'.length) return ref.slice('refs/remotes/'.length);
+	for (const name of ['main', 'master']) {
+		const found = await $.process.run([...GIT, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
+		if (found.exitCode === 0) return `origin/${name}`;
+	}
+	return undefined;
+}
+
 /** The branch checked out in `root`, or undefined when git fails. */
 async function branchOf($: EngineInterface, root: string): Promise<string | undefined> {
 	const head = await $.process.run([...GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
@@ -94,16 +116,8 @@ async function branchOf($: EngineInterface, root: string): Promise<string | unde
  * `PR_DEADLINE_MS`. Rejects when a git command cannot start or times out.
  */
 async function impactSection($: EngineInterface, pr: GhPrCreate, root: string, signal: AbortSignal): Promise<string | undefined> {
-	let base: string;
-	if (pr.base !== undefined && pr.base !== '') {
-		base = `origin/${pr.base}`;
-	} else {
-		const head = await $.process.run([...GIT, 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
-		const ref = head.stdout.trim();
-		if (head.exitCode !== 0 || !ref.startsWith('refs/remotes/')) return undefined;
-		base = ref.slice('refs/remotes/'.length);
-		if (base === '') return undefined;
-	}
+	const base = pr.base !== undefined && pr.base !== '' ? `origin/${pr.base}` : await defaultBase($, root);
+	if (base === undefined) return undefined;
 	// `-z` gives each path as is, NUL-terminated; without it git quotes unusual names.
 	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', '--relative', `${base}...HEAD`], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
 	if (diff.exitCode !== 0) return undefined;
@@ -152,7 +166,12 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 			if (HEADING.test(raw) || (pr.body !== undefined && HEADING.test(pr.body))) return next(e);
 			// A body on standard input cannot be read here.
 			if (pr.bodyFile === '-') return next(e);
-			if (pr.bodyFile !== undefined && HEADING.test(await $.fs.read(absolute(pr.bodyFile, cwd)))) return next(e);
+			// A body file this command writes is checked through the command line above. A file that cannot be
+			// read has no heading: gh would fail on it too, so the refusal costs nothing.
+			if (pr.bodyFile !== undefined && !writes(raw, pr.bodyFile)) {
+				const text = await $.fs.read(absolute(pr.bodyFile, cwd)).catch(() => '');
+				if (HEADING.test(text)) return next(e);
+			}
 			const branch = await branchOf($, root);
 			if (branch === undefined) return next(e);
 			const key = `${root}\0${branch}`;
@@ -163,7 +182,7 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 			refused.add(key);
 			return { deny: `${section}\n\n${INSTRUCTION}` };
 		} catch {
-			// A body file that cannot be read, or a git command that cannot start or times out.
+			// A git command that cannot start or times out.
 			return next(e);
 		}
 	});

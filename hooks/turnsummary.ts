@@ -42,8 +42,9 @@ function summaryLine(n: number, k: number, queried: number, blast: Blast): strin
 }
 
 /**
- * One line on the files this turn changed and how many files depend on them,
- * then a fresh record for the next turn. Undefined when the summary is off,
+ * One line on the files this turn changed in one project and how many files
+ * depend on them, then a fresh record for the next turn. Files outside that
+ * project (a plan, a scratch file, a sibling project) are left out of both. Undefined when the summary is off,
  * nothing changed, no changed file is in a Constellation project, or
  * the lookup failed or missed `TURN_SUMMARY_DEADLINE_MS`.
  */
@@ -60,7 +61,9 @@ export async function summarizeTurn(port: TurnSummaryPort, signal: AbortSignal):
 	}
 	if (root === null) return undefined;
 	const inside = root;
-	const queried = files.flatMap((path) => {
+	const inProject = files.filter((path) => relativeTo(inside, path) !== null);
+	const added = inProject.filter((path) => fresh.has(path)).length;
+	const queried = inProject.flatMap((path) => {
 		const rel = fresh.has(path) ? null : relativeTo(inside, path);
 		return rel === null ? [] : [rel];
 	});
@@ -68,7 +71,7 @@ export async function summarizeTurn(port: TurnSummaryPort, signal: AbortSignal):
 		queried.length === 0
 			? { dependents: [], tests: 0, exports: [] }
 			: await withinDeadline(port.sleep, blastRadius(port.mcp, root, queried, { exports: false }), TURN_SUMMARY_DEADLINE_MS, signal);
-	return blast === undefined ? undefined : summaryLine(files.length, fresh.size, queried.length, blast);
+	return blast === undefined ? undefined : summaryLine(inProject.length, added, queried.length, blast);
 }
 
 export function registerTurnSummary(on: On, options: PluginOptions): void {

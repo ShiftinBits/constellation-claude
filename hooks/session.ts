@@ -51,6 +51,9 @@ export function registerSession(on: On): void {
 			return { ...r, text: r.text !== undefined && r.text !== e.answer ? `${r.text}\n${line}` : line };
 		} catch {
 			return r;
+		} finally {
+			// Every main-loop turn ends here, so the next one starts with an empty record, whatever happened above.
+			resetTurnSummary();
 		}
 	});
 }

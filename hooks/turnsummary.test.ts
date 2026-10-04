@@ -32,8 +32,8 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 }
 
 type World = {
-	/** The access key; `KEY` when not given. */
-	key?: string;
+	/** The access key, or a function read on each call; `KEY` when not given. */
+	key?: string | (() => string);
 	/** Paths that exist; `constellation.json` at the root and every source file under `src/` when not given. */
 	exists?: (path: string) => boolean;
 	/** Direct dependents per project-relative file, as the graph holds them. */
@@ -91,7 +91,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		env: {
 			get: async () => {
 				if (world.rejects === 'env') throw new Error('env unavailable');
-				return world.key ?? KEY;
+				return typeof world.key === 'function' ? world.key() : (world.key ?? KEY);
 			},
 		},
 		session: { cwd: async () => PROJECT },
@@ -230,12 +230,12 @@ describe('turn summary line', () => {
 		expect(m.calls.sleeps).toEqual([]);
 	});
 
-	test('a file outside the project counts as changed but is not queried', async () => {
+	test('a file outside the project is neither counted nor queried', async () => {
 		const m = load({}, { dependents: { 'src/a.ts': ['src/x.ts'] }, exists: (p) => p === `${PROJECT}/constellation.json` || isSource(p) || p === '/elsewhere/notes.ts' });
 		await m.turn();
 		await m.edit(`${PROJECT}/src/a.ts`);
 		await m.edit('/elsewhere/notes.ts');
-		expect(await m.complete()).toEqual({ text: `${LINE} 2 files changed · 1 downstream dependent (0 test files) · as of 0123456` });
+		expect(await m.complete()).toEqual({ text: `${LINE} 1 file changed · 1 downstream dependent (0 test files) · as of 0123456` });
 		expect(m.calls.queried).toEqual([['src/a.ts']]);
 	});
 
@@ -244,7 +244,7 @@ describe('turn summary line', () => {
 		await m.turn();
 		await m.edit('/elsewhere/plan.md');
 		await m.edit(`${PROJECT}/src/a.ts`);
-		expect(await m.complete()).toEqual({ text: `${LINE} 2 files changed · 1 downstream dependent (0 test files) · as of 0123456` });
+		expect(await m.complete()).toEqual({ text: `${LINE} 1 file changed · 1 downstream dependent (0 test files) · as of 0123456` });
 		expect(m.calls.queried).toEqual([['src/a.ts']]);
 	});
 
@@ -351,12 +351,18 @@ describe('turn summary line', () => {
 		expect(m.calls.queried).toEqual([]);
 	});
 
-	test('no access key shows no line and asks code_intel nothing', async () => {
-		const m = load({}, { key: '' });
+	test('no access key shows no line, asks code_intel nothing and drops the edits', async () => {
+		let key = '';
+		const m = load({}, { key: () => key });
 		await m.turn();
 		await m.edit(`${PROJECT}/src/a.ts`);
 		expect(await m.complete()).toBe(ANSWER);
 		expect(m.calls.queried).toEqual([]);
+		key = KEY;
+		await m.turn('t2');
+		await m.edit(`${PROJECT}/src/b.ts`);
+		await m.complete();
+		expect(m.calls.queried).toEqual([['src/b.ts']]);
 	});
 
 	for (const failure of ['error', 'unsuccessful'] as const) {
@@ -387,10 +393,11 @@ describe('turn summary line', () => {
 		expect(m.calls.sleeps).toEqual([TURN_SUMMARY_DEADLINE_MS]);
 	});
 
-	test('turn.start starts the record over', async () => {
+	test('each turn ends with an empty record, a turn with no line too', async () => {
 		const m = load();
 		await m.turn('t1');
 		await m.edit(`${PROJECT}/src/a.ts`);
+		expect(await m.complete('aborted', true)).toBe(ANSWER);
 		await m.turn('t2');
 		expect(await m.complete()).toBe(ANSWER);
 		await m.edit(`${PROJECT}/src/b.ts`);

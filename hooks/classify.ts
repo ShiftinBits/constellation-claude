@@ -89,6 +89,10 @@ function shellCommands(line: string, lines = false): ShellCommand[] {
 			i++;
 		} else if (c === '|' || c === ';') {
 			endCommand(c);
+		} else if (lines && pair === '\\\n') {
+			// A backslash before the newline continues the command on the next line.
+			endWord();
+			i++;
 		} else if (lines && c === '\n') {
 			endCommand(';');
 		} else if (/\s/.test(c)) {
@@ -204,12 +208,29 @@ const GH_FLAGS: ReadonlyArray<{ key: 'base' | 'body' | 'bodyFile' | 'head' | 're
 	{ key: 'repo', names: ['--repo', '-R'] },
 ];
 
+/** `line` without the bodies of its here-documents, whose text is not shell syntax (an apostrophe there opens no quote). */
+function withoutHeredocs(line: string): string {
+	const rows: string[] = [];
+	let end: string | undefined;
+	for (const row of line.split('\n')) {
+		if (end !== undefined) {
+			if (row.trim() === end) end = undefined;
+			continue;
+		}
+		rows.push(row);
+		end = /<<-?\s*(['"]?)([A-Za-z_]\w*)\1/.exec(row)?.[2];
+	}
+	return rows.join('\n');
+}
+
 /**
  * The `gh pr create` (or its alias `gh pr new`) a shell line runs, or null
  * when it runs none. Any command before it may run first (`git push &&
  * gh pr create`, or on an earlier line), and a `cd <dir>`
  * joined by `&&` or `;` sets the directory it runs in. A command after a pipe
- * only filters output, so it never counts.
+ * only filters output, so it never counts. A `cd` the shell expands (`~`,
+ * `$VAR`, `-`) cannot be resolved here, so that line counts as none.
+ * `GH_REPO=<repo>` before the command reads as `--repo`.
  *
  * Only `--base`, `--body`, `--body-file`, `--head` and `--repo` (and their short forms, and the
  * `--flag=value` spelling) are read; the body may be garbled when it holds
@@ -218,17 +239,20 @@ const GH_FLAGS: ReadonlyArray<{ key: 'base' | 'body' | 'bodyFile' | 'head' | 're
 export function ghPrCreate(line: string): GhPrCreate | null {
 	let dir: string | undefined;
 	let previousSep = '';
-	for (const command of shellCommands(line, true)) {
+	for (const command of shellCommands(withoutHeredocs(line), true)) {
 		const piped = previousSep === '|';
 		previousSep = command.sep;
 		if (piped) continue;
 		const words = withoutAssignments(command.words);
 		if (words[0] === 'cd' && words.length === 2 && (command.sep === '&&' || command.sep === ';')) {
+			if (/^[~$-]|[$`]/.test(words[1] ?? '')) return null;
 			dir = under(dir, words[1]);
 			continue;
 		}
 		if (words[0] !== 'gh' || words[1] !== 'pr' || (words[2] !== 'create' && words[2] !== 'new')) continue;
 		const result: GhPrCreate = { dir, base: undefined, body: undefined, bodyFile: undefined, head: undefined, repo: undefined };
+		const repoVar = command.words.find((word) => word.startsWith('GH_REPO='));
+		if (repoVar !== undefined) result.repo = repoVar.slice('GH_REPO='.length);
 		const args = words.slice(3);
 		for (let i = 0; i < args.length; i++) {
 			const arg = args[i] ?? '';

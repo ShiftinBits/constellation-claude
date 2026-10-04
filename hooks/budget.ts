@@ -1,7 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
 import { stringArg } from './lib';
 import { noteCodeIntel } from './risk';
-import { resetTurnSummary } from './turnsummary';
 
 /** How many nudges one agent gets when the option is unset. */
 const DEFAULT_NUDGE_LIMIT = 3;
@@ -89,7 +88,6 @@ export function registerBudget(on: On, options: PluginOptions): void {
 
 	on('turn.start', async (_$, e, next) => {
 		mainTurn = e.turnId;
-		resetTurnSummary();
 		return next(e);
 	});
 
