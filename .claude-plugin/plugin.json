@@ -74,6 +74,17 @@
 			"title": "Turn impact summary",
 			"description": "After a turn that changed files, show one line under the answer with how many files changed and how many files depend on them (from the last indexed commit).",
 			"default": true
+		},
+		"prImpact": {
+			"type": "string",
+			"title": "PR impact section",
+			"description": "Before Claude runs gh pr create, compute the branch's impact (changed files, downstream dependents, affected tests, exported symbols in changed files). require refuses the first attempt per branch once, with the section, until the PR body has an ## Impact heading; inform lets the command run and logs the section; off does nothing.",
+			"options": [
+				"require",
+				"inform",
+				"off"
+			],
+			"default": "inform"
 		}
 	}
 }

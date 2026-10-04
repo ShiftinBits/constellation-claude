@@ -3,6 +3,7 @@ import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
 import { forgetAgentImpact, resetImpact } from './impact';
 import { isConfigured } from './lib';
+import { resetPrImpact } from './primpact';
 import { resetRiskCache } from './risk';
 import { resetTurnSummary, startTurnSummary, summarizeTurn } from './turnsummary';
 
@@ -19,6 +20,7 @@ export function registerSession(on: On): void {
 		resetRiskCache();
 		resetImpact();
 		resetTurnSummary();
+		resetPrImpact();
 		return next(e);
 	});
 
