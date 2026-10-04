@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { bashSearch, bashSearchPattern, ghPrCreate, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
+import { bashSearch, bashSearchPattern, type GhPrCreate, ghPrCreate, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
 
 describe('symbolOf', () => {
 	const rows: ReadonlyArray<readonly [string, string | null]> = [
@@ -165,9 +165,9 @@ describe('bashSearch path', () => {
 });
 
 describe('ghPrCreate', () => {
-	const none = { dir: undefined, base: undefined, body: undefined, bodyFile: undefined };
+	const none: GhPrCreate = { dir: undefined, base: undefined, body: undefined, bodyFile: undefined };
 
-	const matches: [string, Partial<typeof none>][] = [
+	const matches: [string, Partial<GhPrCreate>][] = [
 		['gh pr create --title t --body "a\nb"', { body: 'a\nb' }],
 		['gh pr create -b text', { body: 'text' }],
 		['gh pr create --body=text', { body: 'text' }],
