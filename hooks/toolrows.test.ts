@@ -2,6 +2,7 @@ import type { On, RenderPropsOf } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine, Mounted } from 'claude-code/testing';
 import { palette } from './theme';
+import { registerSession } from './session';
 import { methodsOf, outputText, projectName, registerToolRows, resetToolRows } from './toolrows';
 
 const TOOL = 'mcp__plugin_constellation_constellation__code_intel';
@@ -377,28 +378,72 @@ describe('colors', () => {
 	});
 });
 
+type Handler = (...args: unknown[]) => Promise<unknown>;
+type Registered = { event: string; matcher: Record<string, unknown>; handler: Handler };
+
+/** True when the event `e` satisfies a matcher: a list of values, or a value per field. */
+function matches(matcher: Record<string, unknown>, e: object): boolean {
+	return Object.entries(matcher).every(([field, want]) => {
+		const got: unknown = Reflect.get(e, field);
+		return Array.isArray(want) ? want.includes(got) : want === got;
+	});
+}
+
+type Element = { type: string; props: Record<string, unknown>; children: unknown[] };
+
+/** The first element in `node`'s tree whose only child is exactly `text`. */
+function within(node: unknown, text: string): Element | undefined {
+	if (typeof node !== 'object' || node === null) return undefined;
+	const element = node as Element;
+	if (element.children.length === 1 && element.children[0] === text) return element;
+	for (const child of element.children) {
+		const found = within(child, text);
+		if (found !== undefined) return found;
+	}
+	return undefined;
+}
+
+const element =
+	(type: string) =>
+	({ children, ...props }: Record<string, unknown>): Element => ({ type, props, children: Array.isArray(children) ? children : [children] });
+
+/** A plain element table. */
+const TABLE = { Text: element('Text'), Box: element('Box') };
+
 /**
- * The rows hook as the hooks module registers it, raised directly with a plain
- * element table, so the test shares the module's cache that `resetToolRows`
- * clears (the plugin the kit loads is a separate module instance).
+ * The rows and session hooks as the hooks module registers them, raised
+ * directly with a plain element table, so the test shares the module's cache
+ * that `resetToolRows` clears (the plugin the kit loads is a separate module
+ * instance). `el` and `list` stand in for `$.ui.resolve(e)` and `$.config.list()`.
  */
-function direct() {
-	let hook: ((...args: unknown[]) => Promise<unknown>) | undefined;
-	const capture = (...args: unknown[]): void => {
-		hook = args[args.length - 1] as typeof hook;
+function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () => Promise<unknown[]> } = {}) {
+	const registered: Registered[] = [];
+	const capture = (event: string, ...rest: unknown[]): void => {
+		const handler = rest[rest.length - 1] as Handler;
+		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
+		registered.push({ event, matcher, handler });
 	};
 	registerToolRows(capture as unknown as On, {});
-	const element =
-		(type: string) =>
-		({ children, ...props }: Record<string, unknown>) => ({ type, props, children: Array.isArray(children) ? children : [children] });
-	const el = { Text: element('Text'), Box: element('Box') };
-	const $ = { ui: { resolve: () => el }, config: { list: async () => [] } };
-	const next = async () => 'fallthrough';
-	const render = async (component: string, requestId: string, props: unknown) =>
-		flat(await hook?.($, { surface: 'terminal', component, requestId, props }, next));
+	registerSession(capture as unknown as On);
+	const $ = { ui: { resolve: () => el }, config: { list } };
+	const raise = async (event: string, e: object, bottom: () => Promise<unknown>): Promise<unknown> => {
+		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
+		const step =
+			(i: number) =>
+			(input: object): Promise<unknown> => {
+				const hook = chain[i];
+				return hook === undefined ? bottom() : hook.handler($, input, step(i + 1));
+			};
+		return step(0)(e);
+	};
+	const draw = (component: string, requestId: string, props: unknown) =>
+		raise('ui.render', { surface: 'terminal', component, requestId, props }, async () => 'fallthrough');
 	return {
-		use: (id: string, cwd: string) => render('ToolUse', id, useProps(id, { code: 'return await api.ping()', cwd })),
-		result: (id: string) => render('ToolResult', id, resultProps(id, reply(PING))),
+		use: async (id: string, cwd: string) => flat(await draw('ToolUse', id, useProps(id, { code: 'return await api.ping()', cwd }))),
+		result: async (id: string) => flat(await draw('ToolResult', id, resultProps(id, reply(PING)))),
+		/** The result row's drawn tree, not flattened. */
+		drawn: (id: string) => draw('ToolResult', id, resultProps(id, reply(PING))),
+		sessionStart: (source: string) => raise('classic.SessionStart', { source }, async () => ({})),
 	};
 }
 
@@ -418,6 +463,26 @@ describe('cache', () => {
 		expect(await rows.result('reset')).toBe('✓ connected · 140 ms · as of 0123456');
 	});
 
+	for (const source of ['clear', 'resume', 'fork']) {
+		test(`SessionStart from ${source} forgets the project`, async () => {
+			resetToolRows();
+			const rows = direct();
+			await rows.use(`session-${source}`, '/x/app');
+			await rows.sessionStart(source);
+			expect(await rows.result(`session-${source}`)).toBe('✓ connected · 140 ms · as of 0123456');
+		});
+	}
+
+	for (const source of ['startup', 'compact']) {
+		test(`SessionStart from ${source} keeps the project`, async () => {
+			resetToolRows();
+			const rows = direct();
+			await rows.use(`session-${source}`, '/x/app');
+			await rows.sessionStart(source);
+			expect(await rows.result(`session-${source}`)).toBe('✓ connected · app · 140 ms · as of 0123456');
+		});
+	}
+
 	test('holds at most 200 rows, dropping the oldest', async () => {
 		resetToolRows();
 		const rows = direct();
@@ -430,5 +495,33 @@ describe('cache', () => {
 	test('a result with no call row renders through the plugin', async ($, on) => {
 		world(on);
 		expect(await line(await mountResult($, 'terminal', 'never-called', reply(PING)))).toBe('✓ connected · 140 ms · as of 0123456');
+	});
+});
+
+describe('fail-safe', () => {
+	test('a drawing that throws keeps Claude Code row', async () => {
+		resetToolRows();
+		const broken = {
+			...TABLE,
+			Text: () => {
+				throw new Error('cannot draw');
+			},
+		};
+		const rows = direct({ el: broken });
+		expect(await rows.use('throws', '/x/app')).toBe('fallthrough');
+		expect(await rows.result('throws')).toBe('fallthrough');
+	});
+
+	test('a settings read that fails draws the summary in the default colors, with verbose off', async () => {
+		resetToolRows();
+		const rows = direct({
+			list: async () => {
+				throw new Error('config unavailable');
+			},
+		});
+		const tree = await rows.drawn('no-config');
+		expect((tree as Element).type).toBe('Text');
+		expect(flat(tree)).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(within(tree, '✓ connected')?.props['color']).toBe(palette.cosmic);
 	});
 });
