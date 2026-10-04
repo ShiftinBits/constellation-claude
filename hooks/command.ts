@@ -2,6 +2,8 @@ import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } 
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
+import { byFile, location, orphanPage, removalPrompt } from './unused';
+import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, scheme, status } from './theme';
 import type { Scheme } from './theme';
@@ -74,16 +76,22 @@ export type SummaryOptions = {
 };
 
 /**
- * The tab and file path a command's arguments select: the first word names
- * the tab (default status) and, for deps, the rest is the file path.
+ * The tab, file path and kind a command's arguments select: the first word
+ * names the tab (default status), for deps the rest is the file path, and for
+ * unused the next word (or `--kind <k>`) is the kind to list.
  */
-export function parseArgs(args: string): { tab: Tab; path?: string } {
+export function parseArgs(args: string): { tab: Tab; path?: string; kind?: string } {
 	const trimmed = args.trim();
 	const split = trimmed.search(/\s/);
 	const word = (split === -1 ? trimmed : trimmed.slice(0, split)).toLowerCase();
 	const tab = TABS.find((t) => t === word);
 	if (tab === undefined) return { tab: 'status' };
 	const rest = split === -1 ? '' : trimmed.slice(split).trim();
+	if (tab === 'unused') {
+		// `unused function` and `unused --kind function` both name a kind.
+		const kind = rest.replace(/^--kind(?:\s+|=)/, '').split(/\s+/)[0]?.toLowerCase();
+		return kind === undefined || kind === '' ? { tab } : { tab, kind };
+	}
 	return tab === 'deps' && rest !== '' ? { tab, path: rest } : { tab };
 }
 
@@ -283,6 +291,11 @@ export function projectDetail(envelope: CodeIntelEnvelope | undefined): string {
 	return parts.length === 0 ? 'indexed' : parts.join(' · ');
 }
 
+/** The `findOrphanedCode` filter for the kind the command named, if any. */
+function unusedFilter(): { filterByKind?: string[] } {
+	return unusedKind === undefined ? {} : { filterByKind: [unusedKind] };
+}
+
 function codeFor(tab: Tab, direction: Direction, path: string): string {
 	switch (tab) {
 		case 'status':
@@ -292,7 +305,7 @@ function codeFor(tab: Tab, direction: Direction, path: string): string {
 		case 'deps':
 			return `return await api.${direction === 'dependencies' ? 'getDependencies' : 'getDependents'}({ filePath: ${JSON.stringify(path)} })`;
 		case 'unused':
-			return 'return await api.findOrphanedCode({})';
+			return `return await api.findOrphanedCode(${JSON.stringify(unusedFilter())})`;
 	}
 }
 
@@ -315,6 +328,14 @@ const generations = new Map<Tab, number>();
 /** The picker's per-project `getCapabilities` envelopes, by project root. */
 const details = new Map<string, CodeIntelEnvelope>();
 const detailsPending = new Set<string>();
+/** The kind `/constellation unused <kind>` asked for. Cleared by `reset()` only. */
+let unusedKind: string | undefined;
+// The unused picker's state, cleared with the tab by `drop('unused')`.
+const picked = new Set<string>();
+let morePages: OrphanRow[] = [];
+let nextOffset: number | undefined;
+let loadingMore = false;
+let handoffNote: string | undefined;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
 function pickKey(from: string): string {
@@ -325,10 +346,18 @@ function drop(tab: Tab): void {
 	cache.delete(tab);
 	pending.delete(tab);
 	generations.set(tab, (generations.get(tab) ?? 0) + 1);
+	if (tab === 'unused') {
+		picked.clear();
+		morePages = [];
+		nextOffset = undefined;
+		loadingMore = false;
+		handoffNote = undefined;
+	}
 }
 
 function reset(): void {
 	for (const tab of TABS) drop(tab);
+	unusedKind = undefined;
 	selected = 'status';
 	depsPath = '';
 	depsDirection = 'dependencies';
@@ -365,6 +394,33 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	if ((generations.get(tab) ?? 0) !== generation) return;
 	pending.delete(tab);
 	cache.set(tab, envelope);
+	if (tab === 'unused' && envelope.success) nextOffset = orphanPage(envelope.result).nextOffset;
+	$.ui.invalidate('ui.render');
+}
+
+/** Reads the next page of unused exports; a page that lands after the tab was dropped is discarded. */
+async function loadMore($: EngineInterface): Promise<void> {
+	if (loadingMore || nextOffset === undefined) return;
+	const generation = generations.get('unused') ?? 0;
+	const code = `return await api.findOrphanedCode(${JSON.stringify({ ...unusedFilter(), limit: 50, offset: nextOffset })})`;
+	loadingMore = true;
+	$.ui.invalidate('ui.render');
+	let envelope: CodeIntelEnvelope;
+	try {
+		const cwd = sessionCwd ?? target(await $.session.cwd());
+		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, code, { cwd });
+	} catch (error) {
+		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+	}
+	if ((generations.get('unused') ?? 0) !== generation) return;
+	loadingMore = false;
+	if (envelope.success) {
+		const page = orphanPage(envelope.result);
+		morePages = [...morePages, ...page.rows];
+		nextOffset = page.nextOffset;
+	} else {
+		handoffNote = 'Could not load more. Try again.';
+	}
 	$.ui.invalidate('ui.render');
 }
 
@@ -440,8 +496,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		try {
 			await $.command.register({
 				name: COMMAND,
-				description: 'Constellation status, diagnose, deps and unused code',
-				argumentHint: '[status|diagnose|deps <file>|unused]',
+				description: 'Constellation status, diagnose, deps, unused code and symbol explorer',
+				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]]',
 				immediate: true,
 			});
 		} catch {
@@ -451,7 +507,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 	});
 
 	on('command.run', { command: COMMAND }, async ($, e) => {
-		const { tab, path } = parseArgs(e.args);
+		const { tab, path, kind } = parseArgs(e.args);
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
 			try {
@@ -462,6 +518,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}
 		}
 		const dir = target(cwd);
+		unusedKind = kind;
 		if (!canDraw(await $.session.surfaces())) {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
 			const envelope = await codeIntel(
@@ -476,6 +533,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
 		reset();
+		unusedKind = kind;
 		selected = tab;
 		depsPath = path ?? '';
 		sessionCwd = dir;
@@ -554,7 +612,71 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				}),
 			);
 		}
-		if (summary?.explanation !== undefined && !summary.items.some((i) => i.project !== undefined)) {
+		const firstPage = selected === 'unused' && envelope?.success === true ? orphanPage(envelope.result) : undefined;
+		const loaded = firstPage === undefined ? [] : [...firstPage.rows, ...morePages];
+		const pickedRows = loaded.filter((r) => picked.has(r.symbolId));
+		const toggle = (ids: readonly string[], select: boolean): void => {
+			for (const id of ids) {
+				if (select) picked.add(id);
+				else picked.delete(id);
+			}
+			redraw();
+		};
+		if (firstPage !== undefined) {
+			if (loaded.length === 0) {
+				const color = paint(palette.cosmic, tint);
+				body.push(el.Text({ ...(color === undefined ? {} : { color }), children: '✦ No unused exports found' }));
+			} else {
+				const nebula = paint(palette.nebula, tint);
+				body.push(
+					el.Box({
+						flexDirection: 'column',
+						children: [
+							el.Box({
+								flexDirection: 'row',
+								columnGap: 2,
+								children: [
+									el.Text({ ...(nebula === undefined ? {} : { color: nebula }), children: `${picked.size} selected` }),
+									el.Text({ dimColor: true, children: `of ${grouped(firstPage.total ?? loaded.length)} unused exports` }),
+									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
+								],
+							}),
+							...(handoffNote === undefined ? [] : [el.Text({ dimColor: true, children: handoffNote })]),
+						],
+					}),
+				);
+				for (const [file, rows] of byFile(loaded)) {
+					const ids = rows.map((r) => r.symbolId);
+					const all = ids.every((id) => picked.has(id));
+					body.push(
+						el.Button({ key: `orphan-file:${file}`, label: `${all ? '[x]' : '[ ]'} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
+						...rows.map((row) =>
+							el.Box({
+								key: `row:${row.symbolId}`,
+								flexDirection: 'row',
+								columnGap: 1,
+								paddingLeft: 2,
+								children: [
+									el.Button({
+										key: `orphan:${row.symbolId}`,
+										label: picked.has(row.symbolId) ? '[x]' : '[ ]',
+										plain: true,
+										onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
+									}),
+									el.Text({ children: row.name }),
+									badge(el, '', forTheme(kind(row.kind), tint)),
+									el.Text({ dimColor: true, children: location(row) }),
+								],
+							}),
+						),
+					);
+				}
+				if (nextOffset !== undefined && !loadingMore) {
+					body.push(el.Button({ key: 'load-more', label: 'Load more', plain: true, onPress: () => loadMore($) }));
+				}
+				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
+			}
+		} else if (summary?.explanation !== undefined && !summary.items.some((i) => i.project !== undefined)) {
 			body.push(errorView(el, summary.explanation, tint));
 		} else if (summary !== undefined) {
 			let row = 0;
@@ -650,7 +772,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
-			: `1-4 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
+			: firstPage !== undefined
+				? `a select all · h hand off · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
+				: `1-4 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
 
 		return el.Box({
 			flexDirection: 'column',
@@ -687,6 +811,38 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				el.Box({
 					flexDirection: 'column',
 					children: [
+						...(pickedRows.length === 0
+							? []
+							: [
+									buttonRow(
+										el,
+										{
+											key: 'clear',
+											label: 'Clear',
+											onPress: () => {
+												picked.clear();
+												handoffNote = undefined;
+												redraw();
+											},
+										},
+										{
+											key: 'handoff',
+											label: `Hand ${pickedRows.length} removal${pickedRows.length === 1 ? '' : 's'} to Claude`,
+											hotkey: 'h',
+											onPress: async () => {
+												const text = removalPrompt(pickedRows, envelope?.asOfCommit);
+												const { isFilled } = await $.prompt.fill({ text });
+												if (isFilled) {
+													await $.ui.close({ id: PANE });
+													reset();
+												} else {
+													handoffNote = 'Could not fill the prompt box (a dialog may be open). Close it and try again.';
+													redraw();
+												}
+											},
+										},
+									),
+								]),
 						picking
 							? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(close)] })
 							: buttonRow(el, close, {

@@ -35,6 +35,13 @@ const UNUSED = {
 	orphanedFiles: [],
 	summary: { totalOrphanedSymbols: 2, totalOrphanedFiles: 0, potentialDeletions: 2 },
 };
+const UNUSED_PAGED = { ...UNUSED, pagination: { total: 3, hasMore: true, nextOffset: 50 }, summary: { ...UNUSED.summary, totalOrphanedSymbols: 3 } };
+const UNUSED_MORE = {
+	orphanedSymbols: [{ symbolId: 'c', name: 'Extra', kind: 'interface', filePath: 'src/more.ts', isExported: true, reason: 'x', confidence: 1, lineEnd: 9 }],
+	orphanedFiles: [],
+	summary: { totalOrphanedSymbols: 3, totalOrphanedFiles: 0, potentialDeletions: 3 },
+	pagination: { total: 3, hasMore: false },
+};
 
 /** A code_intel response whose envelope carries `result` and the graph's as-of metadata. */
 function success(result: unknown): McpToolResult {
@@ -52,7 +59,7 @@ function answer(code: string): McpToolResult {
 	if (code.includes('getCapabilities')) return success({ ping: PING, caps: CAPS });
 	if (code.includes('getDependencies')) return success(DEPS);
 	if (code.includes('getDependents')) return success(DEPENDENTS);
-	if (code.includes('findOrphanedCode')) return success(UNUSED);
+	if (code.includes('findOrphanedCode')) return success(code.includes('"offset":50') ? UNUSED_MORE : UNUSED);
 	return success(PING);
 }
 
@@ -163,6 +170,13 @@ describe('parseArgs', () => {
 		expect(parseArgs('diagnose')).toEqual({ tab: 'diagnose' });
 		expect(parseArgs('UNUSED')).toEqual({ tab: 'unused' });
 		expect(parseArgs('status extra words')).toEqual({ tab: 'status' });
+	});
+
+	test('unused takes an optional kind, bare or after --kind, lowercased', () => {
+		expect(parseArgs('unused')).toEqual({ tab: 'unused' });
+		expect(parseArgs('unused function')).toEqual({ tab: 'unused', kind: 'function' });
+		expect(parseArgs('unused --kind Class')).toEqual({ tab: 'unused', kind: 'class' });
+		expect(parseArgs('unused --kind=type')).toEqual({ tab: 'unused', kind: 'type' });
 	});
 
 	test('deps takes an optional file path', () => {
@@ -354,12 +368,175 @@ describe('the pane', () => {
 			await run($, 'unused');
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Text', text: 'src/util.ts' })).toMatchObject({ props: { dimColor: true } });
-			expect(await ui.find({ type: 'Text', text: /• function helper/ })).toBeDefined();
-			const kinds = await ui.findAll({ type: 'Text', text: /• class/ });
-			expect(kinds.length).toBeGreaterThan(0);
+			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[ ] src/util.ts' } });
+			expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
+			expect(await ui.find({ type: 'Button', key: 'orphan:b' })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /• function/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /• class/ })).toBeDefined();
 		});
 	}
+
+	describe('the unused picker', () => {
+		/** Records what `$.prompt.fill` was asked for and answers with `isFilled`. */
+		function stubFill(on: On, isFilled = true) {
+			const texts: string[] = [];
+			on('prompt.fill', (_, e) => {
+				texts.push(e.text);
+				return { isFilled };
+			});
+			return texts;
+		}
+
+		async function openUnused($: Engine, surface: (typeof SURFACES)[number], args = 'unused') {
+			await run($, args);
+			const ui = await mountPane($, surface);
+			await settle();
+			return ui;
+		}
+
+		for (const surface of SURFACES) {
+			test(`pressing a symbol toggles the selected count on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await reads(ui, /^1 selected$/)).toBe(true);
+				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: '[x]' } });
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+			});
+
+			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'orphan-file:src/util.ts' });
+				await settle();
+				expect(await reads(ui, /^2 selected$/)).toBe(true);
+				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[x] src/util.ts' } });
+				await ui.press({ key: 'orphan-file:src/util.ts' });
+				await settle();
+				expect(await reads(ui, /^0 selected$/)).toBe(true);
+			});
+
+			test(`select all picks every loaded symbol on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect((await ui.find({ key: 'select-all' }))?.props['hotkey']).toBe('a');
+				await ui.press({ key: 'select-all' });
+				await settle();
+				expect(await reads(ui, /^2 selected$/)).toBe(true);
+				expect(await reads(ui, /of 2 unused exports/)).toBe(true);
+			});
+
+			test(`load more asks for offset 50 and draws the appended rows on ${surface}`, async ($, on) => {
+				const { codes } = world(on, {
+					surfaces: [surface],
+					answer: (code) => success(code.includes('"offset":50') ? UNUSED_MORE : UNUSED_PAGED),
+				});
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'load-more' });
+				await settle();
+				expect(codes.at(-1)).toBe('return await api.findOrphanedCode({"limit":50,"offset":50})');
+				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
+				expect(await reads(ui, /src\/more\.ts:9/)).toBe(true);
+				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
+			});
+
+			test(`hand-off fills the prompt box with exactly the selected exports on ${surface}`, async ($, on) => {
+				const { events } = world(on, { surfaces: [surface] });
+				const texts = stubFill(on);
+				const ui = await openUnused($, surface);
+				await ui.press({ key: 'orphan:a' });
+				await settle();
+				await ui.press({ key: 'handoff' });
+				await settle();
+				expect(texts).toHaveLength(1);
+				expect(texts[0]).toContain('`helper` (function) in src/util.ts');
+				expect(texts[0]).not.toContain('Legacy');
+				expect(texts[0]).toContain('confirm it is unused with code_intel');
+				expect(texts[0]).toContain('Graph as of 0123456.');
+				expect(events).toContain('close:constellation');
+			});
+		}
+
+		test('the clear and hand-off buttons appear only with a selection, the footer always', async ($, on) => {
+			world(on);
+			const ui = await openUnused($, 'terminal');
+			expect(await ui.find({ key: 'clear' })).toBeUndefined();
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toMatchObject({ props: { label: 'Hand 1 removal to Claude', hotkey: 'h' } });
+			await ui.press({ key: 'select-all' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toMatchObject({ props: { label: 'Hand 2 removals to Claude' } });
+			expect(await ui.find({ key: 'close' })).toBeDefined();
+			expect(await ui.find({ key: 'refresh' })).toBeDefined();
+			await ui.press({ key: 'clear' });
+			await settle();
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+			expect(await reads(ui, /^0 selected$/)).toBe(true);
+		});
+
+		test('a hand-off the prompt box refuses keeps the selection and says why', async ($, on) => {
+			const { events } = world(on);
+			stubFill(on, false);
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			await ui.press({ key: 'handoff' });
+			await settle();
+			expect(events).not.toContain('close:constellation');
+			expect(await reads(ui, /Could not fill the prompt box/)).toBe(true);
+			expect(await reads(ui, /^1 selected$/)).toBe(true);
+		});
+
+		test('refresh clears the selection', async ($, on) => {
+			world(on);
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'orphan:a' });
+			await settle();
+			await ui.press({ key: 'refresh' });
+			await settle();
+			expect(await reads(ui, /^0 selected$/)).toBe(true);
+			expect(await ui.find({ key: 'handoff' })).toBeUndefined();
+		});
+
+		test('an empty answer draws the empty state', async ($, on) => {
+			world(on, { answer: () => success({ orphanedSymbols: [], orphanedFiles: [], summary: { totalOrphanedSymbols: 0 } }) });
+			const ui = await openUnused($, 'terminal');
+			expect((await exact(ui, '✦ No unused exports found'))?.props['color']).toBe(palette.cosmic);
+			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
+		});
+
+		test('an error answer draws the guidance, not the picker', async ($, on) => {
+			world(on, { answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
+			const ui = await openUnused($, 'terminal');
+			expect(await exact(ui, "Your access key wasn't accepted")).toBeDefined();
+			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
+		});
+
+		test('the kind reaches the query from both argument forms', async ($, on) => {
+			const { codes } = world(on);
+			const first = await openUnused($, 'terminal', 'unused function');
+			await first.unmount();
+			expect(codes[0]).toBe('return await api.findOrphanedCode({"filterByKind":["function"]})');
+			const second = await openUnused($, 'terminal', 'unused --kind class');
+			await second.unmount();
+			expect(codes.at(-1)).toBe('return await api.findOrphanedCode({"filterByKind":["class"]})');
+		});
+
+		test('the text fallback keeps the kind filter and still lists the exports', async ($, on) => {
+			const { codes } = world(on, { surfaces: ['vscode'] });
+			const r = await run($, 'unused class');
+			expect(codes).toEqual(['return await api.findOrphanedCode({"filterByKind":["class"]})']);
+			expect(r.text).toContain('helper (function)');
+		});
+	});
 
 	test('an error draws its code as an error badge with the guidance dim', async ($, on) => {
 		world(on, { answer: () => failure('PROJECT_NOT_INDEXED', 'Not indexed', ['Run constellation index']) });
@@ -534,7 +711,7 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Input', key: 'deps-path' })).toBeDefined();
 		await ui.press({ key: 'tab-unused' });
 		await settle();
-		expect(await ui.find({ type: 'Text', text: /• function helper/ })).toBeDefined();
+		expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
 		await ui.press({ key: 'tab-status' });
 		expect(await labels()).toContain('▸ Status');
 	});
