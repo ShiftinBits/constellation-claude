@@ -615,6 +615,10 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const isPending = pending.has(selected);
 
 		const redraw = (): void => $.ui.invalidate('ui.render');
+		// In a row that may be wider than the pane, the name and kind keep their width and a long location
+		// shortens in the middle, instead of every item shrinking and wrapping onto a second line.
+		const fixed = (children: RenderElement[]): RenderElement => el.Box({ flexDirection: 'row', columnGap: 1, flexShrink: 0, children });
+		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
 		const showDeps = (path: string): void => {
 			depsPath = path;
 			drop('deps');
@@ -735,15 +739,17 @@ export function registerCommand(on: On, options: PluginOptions): void {
 								columnGap: 1,
 								paddingLeft: 2,
 								children: [
-									el.Button({
-										key: `orphan:${row.symbolId}`,
-										label: picked.has(row.symbolId) ? '[x]' : '[ ]',
-										plain: true,
-										onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
-									}),
-									el.Text({ children: row.name }),
-									badge(el, '', forTheme(kind(row.kind), tint)),
-									el.Text({ dimColor: true, children: location(row) }),
+									fixed([
+										el.Button({
+											key: `orphan:${row.symbolId}`,
+											label: picked.has(row.symbolId) ? '[x]' : '[ ]',
+											plain: true,
+											onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
+										}),
+										el.Text({ children: row.name }),
+										badge(el, '', forTheme(kind(row.kind), tint)),
+									]),
+									place(location(row)),
 								],
 							}),
 						),
@@ -773,19 +779,21 @@ export function registerCommand(on: On, options: PluginOptions): void {
 							flexDirection: 'row',
 							columnGap: 1,
 							children: [
-								el.Button({
-									key: `hit:${h.id}`,
-									label: h.name,
-									plain: true,
-									onPress: () => {
-										focusHit = h;
-										section = 'details';
-										if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id, h.kind);
-										redraw();
-									},
-								}),
-								badge(el, '', forTheme(kind(h.kind), tint)),
-								el.Text({ dimColor: true, children: where(h) }),
+								fixed([
+									el.Button({
+										key: `hit:${h.id}`,
+										label: h.name,
+										plain: true,
+										onPress: () => {
+											focusHit = h;
+											section = 'details';
+											if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id, h.kind);
+											redraw();
+										},
+									}),
+									badge(el, '', forTheme(kind(h.kind), tint)),
+								]),
+								place(where(h)),
 							],
 						}),
 					);
@@ -815,20 +823,21 @@ export function registerCommand(on: On, options: PluginOptions): void {
 										flexDirection: 'row',
 										columnGap: 1,
 										children: [
-											badge(el, '', forTheme(kind(hit.kind), tint)),
-											el.Text({ bold: true, children: hit.name }),
-											el.Text({ dimColor: true, children: where(hit) }),
-											el.Button({
-												key: 'copy-location',
-												label: 'copy location',
-												plain: true,
-												dimColor: true,
-												onPress: async (press) => {
-													const { isCopied } = await $.ui.copy({ text: where(hit), surface: press.surface });
-													exploreNote = isCopied ? 'Copied' : 'Could not copy';
-													redraw();
-												},
-											}),
+											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ bold: true, children: hit.name })]),
+											place(where(hit)),
+											fixed([
+												el.Button({
+													key: 'copy-location',
+													label: 'copy location',
+													plain: true,
+													dimColor: true,
+													onPress: async (press) => {
+														const { isCopied } = await $.ui.copy({ text: where(hit), surface: press.surface });
+														exploreNote = isCopied ? 'Copied' : 'Could not copy';
+														redraw();
+													},
+												}),
+											]),
 										],
 									}),
 									...(exploreNote === undefined ? [] : [el.Text({ dimColor: true, children: exploreNote })]),

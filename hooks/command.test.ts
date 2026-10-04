@@ -474,6 +474,14 @@ describe('the pane', () => {
 				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle · h hand off$/ })).toBeDefined();
 			});
 
+			test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				const locations = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && String(t.children[0]).startsWith('src/util.ts'));
+				expect(locations.length).toBeGreaterThan(0);
+				for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
+			});
+
 			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
 				world(on, { surfaces: [surface] });
 				const ui = await openUnused($, surface);
@@ -1137,6 +1145,14 @@ describe('the symbol explorer', () => {
 			expect(await reads(ui, /^Exported: yes$/)).toBe(true);
 			expect(await reads(ui, /results for Graph/)).toBe(true);
 			expect(await ui.find({ type: 'Text', text: /b back · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+		});
+
+		test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
+			world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			expect((await exact(ui, 'src/graph.ts:10'))?.props['wrap']).toBe('truncate-middle');
+			await focus(ui);
+			expect((await exact(ui, 'src/graph.ts:10'))?.props['wrap']).toBe('truncate-middle');
 		});
 
 		test(`a function's drill asks for its call graph and draws the tree on ${surface}`, async ($, on) => {
