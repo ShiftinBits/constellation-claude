@@ -535,6 +535,34 @@ describe('the pane', () => {
 			expect(await reads(ui, /^0 selected$/)).toBe(true);
 		});
 
+		test('a failed load more says so and keeps the button to try again', async ($, on) => {
+			world(on, { answer: (code) => (code.includes('"offset":50') ? failure('X', 'boom') : success(UNUSED_PAGED)) });
+			const ui = await openUnused($, 'terminal');
+			await ui.press({ key: 'load-more' });
+			await settle();
+			expect(await reads(ui, /Could not load more/)).toBe(true);
+			expect(await ui.find({ key: 'load-more' })).toBeDefined();
+			expect(await ui.find({ key: 'orphan:c' })).toBeUndefined();
+		});
+
+		test('a page that lands after refresh is discarded', async ($, on) => {
+			let release: (value: McpToolResult) => void = () => undefined;
+			const late = new Promise<McpToolResult>((resolve) => {
+				release = resolve;
+			});
+			world(on, { answer: (code) => (code.includes('"offset":50') ? late : success(UNUSED_PAGED)) });
+			const ui = await openUnused($, 'terminal');
+			const pressed = ui.press({ key: 'load-more' });
+			await settle();
+			await ui.press({ key: 'refresh' });
+			await settle();
+			release(success(UNUSED_MORE));
+			await pressed;
+			await settle();
+			expect(await ui.find({ key: 'orphan:c' })).toBeUndefined();
+			expect(await reads(ui, /src\/more\.ts/)).toBe(false);
+		});
+
 		test('a hand-off the prompt box refuses keeps the selection and says why', async ($, on) => {
 			const { events } = world(on);
 			stubFill(on, false);
@@ -1060,6 +1088,17 @@ describe('the symbol explorer', () => {
 		await ui.press({ key: 'hit:s2' });
 		await settle();
 	}
+
+	test('an ask claude the prompt box refuses keeps the pane open and says why', async ($, on) => {
+		const { events } = world(on);
+		on('prompt.fill', () => ({ isFilled: false }));
+		const ui = await openExplore($, 'terminal');
+		await focus(ui);
+		await ui.press({ key: 'ask-claude' });
+		await settle();
+		expect(events).not.toContain('close:constellation');
+		expect(await reads(ui, /Could not fill the prompt box/)).toBe(true);
+	});
 
 	for (const surface of SURFACES) {
 		test(`the search sends searchSymbols and ranks the exact match first on ${surface}`, async ($, on) => {
