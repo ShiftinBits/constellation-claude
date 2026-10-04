@@ -39,7 +39,7 @@
 		"colors": {
 			"type": "string",
 			"title": "Colors",
-			"description": "How the /constellation pane is colored: brand uses the Constellation palette (switching to Claude Code's theme colors on light, ANSI and color-blind themes), theme uses only Claude Code's theme colors, none draws no color (words and symbols still show each status).",
+			"description": "How the /constellation pane and code_intel tool rows are colored: brand uses the Constellation palette (switching to Claude Code's theme colors on light, ANSI and color-blind themes), theme uses only Claude Code's theme colors, none draws no color (words and symbols still show each status).",
 			"options": [
 				"brand",
 				"theme",

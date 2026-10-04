@@ -5,6 +5,7 @@ import { forgetAgentImpact, resetImpact } from './impact';
 import { isConfigured } from './lib';
 import { resetPrImpact } from './primpact';
 import { resetRiskCache } from './risk';
+import { resetToolRows } from './toolrows';
 import { resetTurnSummary, summarizeTurn } from './turnsummary';
 
 /**
@@ -21,6 +22,7 @@ export function registerSession(on: On): void {
 		resetImpact();
 		resetTurnSummary();
 		resetPrImpact();
+		resetToolRows();
 		return next(e);
 	});
 
