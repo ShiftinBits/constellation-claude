@@ -69,9 +69,9 @@ type Calls = {
 	envReads: number;
 };
 
-const GIT = 'git -c core.fsmonitor=false -c core.hooksPath=/dev/null';
-const DIFF_MAIN = `${GIT} diff --no-ext-diff --name-only --relative origin/main...HEAD`;
-const DIFF_DEV = `${GIT} diff --no-ext-diff --name-only --relative origin/dev...HEAD`;
+const GIT = 'git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.allow=never';
+const DIFF_MAIN = `${GIT} diff --no-ext-diff --no-renames --name-only --relative origin/main...HEAD`;
+const DIFF_DEV = `${GIT} diff --no-ext-diff --no-renames --name-only --relative origin/dev...HEAD`;
 const SYMBOLIC_REF = `${GIT} symbolic-ref refs/remotes/origin/HEAD`;
 const REV_PARSE = `${GIT} rev-parse --abbrev-ref HEAD`;
 
@@ -127,8 +127,9 @@ function load(options: PluginOptions = {}, world: World = {}) {
 			},
 		},
 		process: {
-			run: async (argv: readonly string[], init?: { cwd?: string }) => {
+			run: async (argv: readonly string[], init?: { cwd?: string; env?: Record<string, string> }) => {
 				const key = argv.join(' ');
+				if (init?.env?.GIT_NO_LAZY_FETCH !== '1') throw new Error('git ran with lazy fetch on');
 				calls.runs.push({ argv: key, cwd: init?.cwd });
 				calls.order.push('git');
 				const answer = git()[key] ?? { exitCode: 128, stdout: '' };

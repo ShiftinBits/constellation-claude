@@ -20,10 +20,13 @@ export const PR_DEADLINE_MS = 8000;
 const GIT_TIMEOUT_MS = 5000;
 
 /**
- * git with the repository's fsmonitor and hooks turned off, since the command
- * runs before Claude Code asks about the Bash call it guards.
+ * git with the repository's fsmonitor, hooks and network transports turned
+ * off, since the command runs before Claude Code asks about the Bash call it
+ * guards. The diff skips rename detection, which is what would fetch missing
+ * objects in a partial clone, and `GIT_NO_LAZY_FETCH` stops any other fetch.
  */
-const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null'];
+const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never'];
+const GIT_ENV = { GIT_NO_LAZY_FETCH: '1' };
 
 /** An `## Impact` heading at a line start or after whitespace or a quote (`--body "## Impact`). */
 const HEADING = /(^|[\s"'])##\s+Impact\b/m;
@@ -82,7 +85,7 @@ export function buildImpactSection(changed: string[], blast: Blast): string {
 
 /** The branch checked out in `root`, or undefined when git fails. */
 async function branchOf($: EngineInterface, root: string): Promise<string | undefined> {
-	const head = await $.process.run([...GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+	const head = await $.process.run([...GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
 	const branch = head.stdout.trim();
 	return head.exitCode === 0 && branch !== '' ? branch : undefined;
 }
@@ -98,13 +101,13 @@ async function impactSection($: EngineInterface, pr: GhPrCreate, root: string, s
 	if (pr.base !== undefined && pr.base !== '') {
 		base = `origin/${pr.base}`;
 	} else {
-		const head = await $.process.run([...GIT, 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+		const head = await $.process.run([...GIT, 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
 		const ref = head.stdout.trim();
 		if (head.exitCode !== 0 || !ref.startsWith('refs/remotes/')) return undefined;
 		base = ref.slice('refs/remotes/'.length);
 		if (base === '') return undefined;
 	}
-	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--name-only', '--relative', `${base}...HEAD`], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--no-renames', '--name-only', '--relative', `${base}...HEAD`], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
 	if (diff.exitCode !== 0) return undefined;
 	const changed = diff.stdout
 		.split('\n')
