@@ -89,10 +89,26 @@ export function searchCode(query: string): string {
 	return `return await (${searchQuery.toString()})(api, ${JSON.stringify(query)});`;
 }
 
-/** The code one drill-down sends: all four reads in one run. */
-export function drillCode(id: string): string {
+/**
+ * The kinds that have a call graph. Core refuses `getCallGraph` for any other
+ * kind (a constant, class or variable), and a function assigned to a constant
+ * is indexed as a function, so it is not left out.
+ */
+const CALLABLE: ReadonlySet<string> = new Set(['function', 'method', 'generator']);
+
+/** True when a symbol of `kind` has a call graph to show. */
+export function hasCallGraph(kind: string): boolean {
+	return CALLABLE.has(kind);
+}
+
+/**
+ * The code one drill-down sends: the reads in one run, the call graph only for
+ * a kind that has one, since one refused read fails the whole run.
+ */
+export function drillCode(id: string, kind: string): string {
 	const symbolId = JSON.stringify(id);
-	return `const symbolId = ${symbolId}; const [details, usages, impact, calls] = await Promise.all([api.getSymbolDetails({ symbolId }), api.traceSymbolUsage({ symbolId, limit: 20 }), api.impactAnalysis({ symbolId }), api.getCallGraph({ symbolId, depth: 2 })]); return { details, usages, impact, calls }`;
+	const calls = hasCallGraph(kind) ? 'api.getCallGraph({ symbolId, depth: 2 })' : 'null';
+	return `const symbolId = ${symbolId}; const [details, usages, impact, calls] = await Promise.all([api.getSymbolDetails({ symbolId }), api.traceSymbolUsage({ symbolId, limit: 20 }), api.impactAnalysis({ symbolId }), ${calls}]); return { details, usages, impact, calls }`;
 }
 
 /** The signature, kind, whether it is exported and its complexity, from a `getSymbolDetails` result. */

@@ -57,11 +57,21 @@ describe('query code', () => {
 		expect(searchCode('a"b')).toBe(`return await (${searchQuery.toString()})(api, "a\\"b");`);
 	});
 
-	test('the drill sends all four reads with the escaped id', () => {
-		const code = drillCode('id"1');
-		for (const method of ['getSymbolDetails', 'traceSymbolUsage', 'impactAnalysis', 'getCallGraph']) expect(code).toContain(`api.${method}(`);
-		expect(code).toContain('"id\\"1"');
-		expect(code).toContain('Promise.all');
+	test('the drill of a function, method or generator sends all four reads with the escaped id', () => {
+		for (const kind of ['function', 'method', 'generator']) {
+			const code = drillCode('id"1', kind);
+			for (const method of ['getSymbolDetails', 'traceSymbolUsage', 'impactAnalysis', 'getCallGraph']) expect(code).toContain(`api.${method}(`);
+			expect(code).toContain('"id\\"1"');
+			expect(code).toContain('Promise.all');
+		}
+	});
+
+	test('the drill of any other kind asks for no call graph, which core refuses for it', () => {
+		for (const kind of ['constant', 'variable', 'class', 'interface', 'property', 'type']) {
+			const code = drillCode('id1', kind);
+			for (const method of ['getSymbolDetails', 'traceSymbolUsage', 'impactAnalysis']) expect(code).toContain(`api.${method}(`);
+			expect(code).not.toContain('getCallGraph');
+		}
 	});
 });
 

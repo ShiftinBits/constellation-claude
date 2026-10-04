@@ -42,6 +42,7 @@ const SEARCH = {
 		{ id: 's1', name: 'GraphService', qualifiedName: 'GraphService', kind: 'class', filePath: 'src/service.ts', line: 3, isExported: true },
 		{ id: 's2', name: 'Graph', qualifiedName: 'Graph', kind: 'class', filePath: 'src/graph.ts', line: 10, isExported: true },
 		{ id: 's3', name: 'GraphNode', qualifiedName: 'GraphNode', kind: 'interface', filePath: 'src/node.ts', line: 1, isExported: true },
+		{ id: 's4', name: 'graphOf', qualifiedName: 'graphOf', kind: 'function', filePath: 'src/of.ts', line: 7, isExported: true },
 	],
 };
 const DRILL = {
@@ -1119,7 +1120,7 @@ describe('the symbol explorer', () => {
 			expect(codes).toEqual([searchCode('Graph')]);
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toMatchObject({ props: { value: 'Graph' } });
 			const keys = (await ui.findAll({ type: 'Button' })).map((b) => b.key).filter((k) => k?.startsWith('hit:'));
-			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3']);
+			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3', 'hit:s4']);
 			expect(await ui.find({ type: 'Text', text: /esc leaves the search field · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456/ })).toBeDefined();
 		});
@@ -1130,12 +1131,25 @@ describe('the symbol explorer', () => {
 			await focus(ui);
 			const drill = codes.at(-1) ?? '';
 			expect(drill).toContain('"s2"');
-			expect(drill).toContain('api.getCallGraph(');
+			expect(drill).not.toContain('getCallGraph');
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeUndefined();
 			expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
 			expect(await reads(ui, /^Exported: yes$/)).toBe(true);
 			expect(await reads(ui, /results for Graph/)).toBe(true);
 			expect(await ui.find({ type: 'Text', text: /b back · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+		});
+
+		test(`a function's drill asks for its call graph and draws the tree on ${surface}`, async ($, on) => {
+			const { codes } = world(on, { surfaces: [surface] });
+			const ui = await openExplore($, surface);
+			await ui.press({ key: 'hit:s4' });
+			await settle();
+			expect(codes.at(-1)).toContain('api.getCallGraph(');
+			await ui.press({ key: 'section-calls' });
+			await settle();
+			expect(await exact(ui, '  outer  src/outer.ts:2')).toBeDefined();
+			expect(await exact(ui, 'Graph')).toBeDefined();
+			expect(await exact(ui, '  inner  src/inner.ts:9')).toBeDefined();
 		});
 
 		test(`each section press draws its section on ${surface}`, async ($, on) => {
@@ -1158,11 +1172,8 @@ describe('the symbol explorer', () => {
 			expect(await reads(ui, /1 test · 3 production/)).toBe(true);
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
 
-			await ui.press({ key: 'section-calls' });
-			await settle();
-			expect(await exact(ui, '  outer  src/outer.ts:2')).toBeDefined();
-			expect(await exact(ui, 'Graph')).toBeDefined();
-			expect(await exact(ui, '  inner  src/inner.ts:9')).toBeDefined();
+			// A class has no call graph: core refuses getCallGraph for it, so it is neither asked for nor offered.
+			expect(await ui.find({ type: 'Button', key: 'section-calls' })).toBeUndefined();
 
 			await ui.press({ key: 'section-details' });
 			await settle();

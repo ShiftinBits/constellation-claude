@@ -2,7 +2,7 @@ import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } 
 import { canDraw, codeIntel } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
-import { askText, callTree, detailLines, drillCode, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
+import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
 import type { Hit } from './explore';
 import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
@@ -438,12 +438,12 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 }
 
 /** Reads one symbol's details, usages, impact and call graph; a result that lands after the explorer was dropped is discarded. */
-async function runDrill($: EngineInterface, id: string): Promise<void> {
+async function runDrill($: EngineInterface, id: string, symbolKind: string): Promise<void> {
 	drillPending.add(id);
 	let envelope: CodeIntelEnvelope;
 	try {
 		const cwd = sessionCwd ?? target(await $.session.cwd());
-		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, drillCode(id), { cwd });
+		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, drillCode(id, symbolKind), { cwd });
 	} catch (error) {
 		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
 	}
@@ -780,7 +780,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 									onPress: () => {
 										focusHit = h;
 										section = 'details';
-										if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id);
+										if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id, h.kind);
 										redraw();
 									},
 								}),
@@ -799,7 +799,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					['details', 'Details'],
 					['usages', 'Usages'],
 					['impact', 'Impact'],
-					['calls', 'Call graph'],
+					// Only a kind with a call graph offers it; core refuses the read for any other.
+					...(hasCallGraph(hit.kind) ? [['calls', 'Call graph'] as [Section, string]] : []),
 				];
 				body.push(
 					el.Box({
