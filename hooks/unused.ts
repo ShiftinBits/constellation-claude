@@ -21,6 +21,30 @@ function num(value: unknown): number | undefined {
 }
 
 /**
+ * Runs inside code_intel: `orphanCode` sends its source, so it may use only
+ * its arguments. It returns only the fields the pane reads: each row's source
+ * snippet would make a page of a large project too big for Claude Code's MCP
+ * output limit, which then hands back a note instead of the JSON.
+ */
+export async function orphanQuery(
+	api: { findOrphanedCode: (params: object) => Promise<{ orphanedSymbols?: unknown; summary?: unknown; pagination?: unknown }> },
+	params: object,
+) {
+	const found = await api.findOrphanedCode(params);
+	const rows: ReadonlyArray<Record<string, unknown>> = Array.isArray(found.orphanedSymbols) ? found.orphanedSymbols : [];
+	return {
+		orphanedSymbols: rows.map((s) => ({ symbolId: s.symbolId, name: s.name, kind: s.kind, filePath: s.filePath, lineEnd: s.lineEnd })),
+		summary: found.summary,
+		pagination: found.pagination,
+	};
+}
+
+/** The code one page of unused exports sends, with the kind filter and paging in `params`. */
+export function orphanCode(params: object): string {
+	return `return await (${orphanQuery.toString()})(api, ${JSON.stringify(params)});`;
+}
+
+/**
  * One page of a `findOrphanedCode` result: its rows, the total the graph
  * reports, and the offset of the next page when there is one. The result is
  * untyped, so every field is narrowed before it is read.

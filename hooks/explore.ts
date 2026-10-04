@@ -72,9 +72,21 @@ export function where(hit: Hit): string {
 	return hit.line === undefined ? hit.filePath : `${hit.filePath}:${hit.line}`;
 }
 
+/**
+ * Runs inside code_intel: `searchCode` sends its source, so it may use only
+ * its arguments. It returns only the fields the explorer reads: each match's
+ * source snippet would make a full page too big for Claude Code's MCP output
+ * limit, which then hands back a note instead of the JSON.
+ */
+export async function searchQuery(api: { searchSymbols: (params: { query: string; limit: number }) => Promise<{ symbols?: unknown }> }, query: string) {
+	const found = await api.searchSymbols({ query, limit: 100 });
+	const symbols: ReadonlyArray<Record<string, unknown>> = Array.isArray(found.symbols) ? found.symbols : [];
+	return { symbols: symbols.map((s) => ({ id: s.id, name: s.name, kind: s.kind, filePath: s.filePath, line: s.line })) };
+}
+
 /** The code the search sends. */
 export function searchCode(query: string): string {
-	return `return await api.searchSymbols({ query: ${JSON.stringify(query)}, limit: 100 })`;
+	return `return await (${searchQuery.toString()})(api, ${JSON.stringify(query)});`;
 }
 
 /** The code one drill-down sends: all four reads in one run. */

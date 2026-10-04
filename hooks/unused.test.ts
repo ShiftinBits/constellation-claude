@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { byFile, location, orphanPage, removalPrompt } from './unused';
+import { byFile, location, orphanCode, orphanPage, orphanQuery, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 
 const ROWS: OrphanRow[] = [
@@ -61,5 +61,40 @@ describe('removalPrompt', () => {
 
 	test('names the commit by its first seven characters', () => {
 		expect(removalPrompt(ROWS, '0123456789abcdef')).toContain('\nGraph as of 0123456.\n');
+	});
+});
+
+describe('orphanQuery', () => {
+	test('passes the filter and paging through', async () => {
+		const asked: unknown[] = [];
+		await orphanQuery({ findOrphanedCode: async (p) => (asked.push(p), {}) }, { filterByKind: ['class'], limit: 50, offset: 50 });
+		expect(asked).toEqual([{ filterByKind: ['class'], limit: 50, offset: 50 }]);
+	});
+
+	test('sends back only the fields the pane reads, so a full page stays small', async () => {
+		const symbol = { symbolId: 'o1', name: 'IndexApiModule', kind: 'class', filePath: 'apps/a.ts', isExported: true, reason: 'No external references', confidence: 0.9, lineEnd: 267, sourceSnippet: 'x'.repeat(2000) };
+		const page = {
+			orphanedSymbols: Array.from({ length: 50 }, () => symbol),
+			orphanedFiles: Array.from({ length: 50 }, () => ({ filePath: 'apps/b.ts', sourceSnippet: 'y'.repeat(500) })),
+			summary: { totalOrphanedSymbols: 173 },
+			pagination: { total: 173, hasMore: true, nextOffset: 50 },
+		};
+		const result = await orphanQuery({ findOrphanedCode: async () => page }, {});
+		expect(orphanPage(result)).toEqual({
+			rows: Array.from({ length: 50 }, () => ({ symbolId: 'o1', name: 'IndexApiModule', kind: 'class', filePath: 'apps/a.ts', lineEnd: 267 })),
+			total: 173,
+			nextOffset: 50,
+		});
+		expect(JSON.stringify(result).length).toBeLessThan(20_000);
+	});
+
+	test('a result without rows is still a page', async () => {
+		expect(orphanPage(await orphanQuery({ findOrphanedCode: async () => ({}) }, {}))).toEqual({ rows: [] });
+	});
+
+	test('orphanCode sends the function with the escaped parameters', () => {
+		const code = orphanCode({ filterByKind: ['a"b'] });
+		expect(code).toStartWith(`return await (${orphanQuery.toString()})(api, `);
+		expect(code).toEndWith(`, ${JSON.stringify({ filterByKind: ['a"b'] })});`);
 	});
 });

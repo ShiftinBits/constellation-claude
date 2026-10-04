@@ -4,7 +4,7 @@ import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, drillCode, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
 import type { Hit } from './explore';
-import { byFile, location, orphanPage, removalPrompt } from './unused';
+import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
@@ -325,7 +325,7 @@ function codeFor(tab: Tab, direction: Direction, path: string): string {
 		case 'deps':
 			return `return await api.${direction === 'dependencies' ? 'getDependencies' : 'getDependents'}({ filePath: ${JSON.stringify(path)} })`;
 		case 'unused':
-			return `return await api.findOrphanedCode(${JSON.stringify(unusedFilter())})`;
+			return orphanCode(unusedFilter());
 		case 'explore':
 			return searchCode(exploreQuery);
 	}
@@ -456,7 +456,7 @@ async function runDrill($: EngineInterface, id: string): Promise<void> {
 async function loadMore($: EngineInterface): Promise<void> {
 	if (loadingMore || nextOffset === undefined) return;
 	const generation = generations.get('unused') ?? 0;
-	const code = `return await api.findOrphanedCode(${JSON.stringify({ ...unusedFilter(), limit: 50, offset: nextOffset })})`;
+	const code = orphanCode({ ...unusedFilter(), limit: 50, offset: nextOffset });
 	loadingMore = true;
 	$.ui.invalidate('ui.render');
 	let envelope: CodeIntelEnvelope;

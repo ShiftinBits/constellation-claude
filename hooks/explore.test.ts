@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { askText, callTree, detailLines, drillCode, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
+import { askText, callTree, detailLines, drillCode, hits, impactView, rankExact, searchCode, searchQuery, usageLines, where } from './explore';
 import type { Hit } from './explore';
 
 const HITS: Hit[] = [
@@ -39,8 +39,22 @@ describe('where', () => {
 });
 
 describe('query code', () => {
-	test('the search escapes the query and asks for a full page', () => {
-		expect(searchCode('a"b')).toBe('return await api.searchSymbols({ query: "a\\"b", limit: 100 })');
+	test('the search asks for a full page of the query', async () => {
+		const asked: unknown[] = [];
+		await searchQuery({ searchSymbols: async (p) => (asked.push(p), { symbols: [] }) }, 'a"b');
+		expect(asked).toEqual([{ query: 'a"b', limit: 100 }]);
+	});
+
+	test('the search sends back only the fields the pane reads, so a full page stays small', async () => {
+		const symbol = { id: 's1', name: 'Graph', qualifiedName: 'a.Graph', kind: 'class', filePath: 'src/g.ts', line: 3, signature: 'class Graph', isExported: true, sourceSnippet: 'x'.repeat(2000) };
+		const result = await searchQuery({ searchSymbols: async () => ({ symbols: Array.from({ length: 100 }, () => symbol), resultContext: {} }) }, 'Graph');
+		expect(hits(result)).toHaveLength(100);
+		expect(result.symbols[0]).toEqual({ id: 's1', name: 'Graph', kind: 'class', filePath: 'src/g.ts', line: 3 });
+		expect(JSON.stringify(result).length).toBeLessThan(20_000);
+	});
+
+	test('searchCode sends the function with the escaped query', () => {
+		expect(searchCode('a"b')).toBe(`return await (${searchQuery.toString()})(api, "a\\"b");`);
 	});
 
 	test('the drill sends all four reads with the escaped id', () => {

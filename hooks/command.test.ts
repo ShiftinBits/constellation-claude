@@ -3,7 +3,9 @@ import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { COMMAND, parseArgs, summarize } from './command';
 import type { Tab } from './command';
+import { searchCode } from './explore';
 import { palette } from './theme';
+import { orphanCode } from './unused';
 
 const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -343,7 +345,7 @@ describe('command.run without a pane', () => {
 		const many = { symbols: Array.from({ length: 8 }, (_, i) => ({ id: `m${i}`, name: i === 7 ? 'Graph' : `Graph${i}`, kind: 'function', filePath: `src/f${i}.ts`, line: i + 1 })) };
 		const { codes } = world(on, { surfaces: ['vscode'], answer: () => success(many) });
 		const r = await run($, 'explore Graph');
-		expect(codes).toEqual(['return await api.searchSymbols({ query: "Graph", limit: 100 })']);
+		expect(codes).toEqual([searchCode('Graph')]);
 		const lines = (r.text ?? '').split('\n');
 		expect(lines[0]).toBe('>_CONSTELLATION:// explore');
 		expect(lines.filter((l) => l.startsWith('- function'))).toHaveLength(5);
@@ -491,7 +493,7 @@ describe('the pane', () => {
 				const ui = await openUnused($, surface);
 				await ui.press({ key: 'load-more' });
 				await settle();
-				expect(codes.at(-1)).toBe('return await api.findOrphanedCode({"limit":50,"offset":50})');
+				expect(codes.at(-1)).toBe(orphanCode({ limit: 50, offset: 50 }));
 				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
 				expect(await reads(ui, /src\/more\.ts:9/)).toBe(true);
 				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
@@ -605,16 +607,16 @@ describe('the pane', () => {
 			const { codes } = world(on);
 			const first = await openUnused($, 'terminal', 'unused function');
 			await first.unmount();
-			expect(codes[0]).toBe('return await api.findOrphanedCode({"filterByKind":["function"]})');
+			expect(codes[0]).toBe(orphanCode({ filterByKind: ['function'] }));
 			const second = await openUnused($, 'terminal', 'unused --kind class');
 			await second.unmount();
-			expect(codes.at(-1)).toBe('return await api.findOrphanedCode({"filterByKind":["class"]})');
+			expect(codes.at(-1)).toBe(orphanCode({ filterByKind: ['class'] }));
 		});
 
 		test('the text fallback keeps the kind filter and still lists the exports', async ($, on) => {
 			const { codes } = world(on, { surfaces: ['vscode'] });
 			const r = await run($, 'unused class');
-			expect(codes).toEqual(['return await api.findOrphanedCode({"filterByKind":["class"]})']);
+			expect(codes).toEqual([orphanCode({ filterByKind: ['class'] })]);
 			expect(r.text).toContain('helper (function)');
 		});
 	});
@@ -1104,7 +1106,7 @@ describe('the symbol explorer', () => {
 		test(`the search sends searchSymbols and ranks the exact match first on ${surface}`, async ($, on) => {
 			const { codes } = world(on, { surfaces: [surface] });
 			const ui = await openExplore($, surface);
-			expect(codes).toEqual(['return await api.searchSymbols({ query: "Graph", limit: 100 })']);
+			expect(codes).toEqual([searchCode('Graph')]);
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toMatchObject({ props: { value: 'Graph' } });
 			const keys = (await ui.findAll({ type: 'Button' })).map((b) => b.key).filter((k) => k?.startsWith('hit:'));
 			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3']);
@@ -1209,7 +1211,7 @@ describe('the symbol explorer', () => {
 			await focus(ui);
 			await ui.press({ key: 'refresh' });
 			await settle();
-			expect(codes.at(-1)).toBe('return await api.searchSymbols({ query: "Graph", limit: 100 })');
+			expect(codes.at(-1)).toBe(searchCode('Graph'));
 			expect(await ui.find({ type: 'Button', key: 'hit:s2' })).toBeDefined();
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeDefined();
 			expect(await reads(ui, /^Signature:/)).toBe(false);
@@ -1223,7 +1225,7 @@ describe('the symbol explorer', () => {
 		expect(await reads(ui, /Enter a symbol name/)).toBe(true);
 		await ui.input({ key: 'explore-query', text: ' Graph ' });
 		await settle();
-		expect(codes).toEqual(['return await api.searchSymbols({ query: "Graph", limit: 100 })']);
+		expect(codes).toEqual([searchCode('Graph')]);
 		expect(await ui.find({ type: 'Button', key: 'hit:s2' })).toBeDefined();
 	});
 
