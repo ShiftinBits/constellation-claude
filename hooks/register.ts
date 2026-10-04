@@ -6,6 +6,7 @@ import { registerDescribe } from './describe';
 import { registerImpactGate } from './impact';
 import { registerNudges } from './nudge';
 import { registerSession } from './session';
+import { registerTurnSummary } from './turnsummary';
 
 export const register: Register = (on, options) => {
 	registerBudget(on, options);
@@ -15,4 +16,5 @@ export const register: Register = (on, options) => {
 	registerSession(on);
 	registerCommand(on, options);
 	registerImpactGate(on, options);
+	registerTurnSummary(on, options);
 };

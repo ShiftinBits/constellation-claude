@@ -68,6 +68,12 @@
 				"critical"
 			],
 			"default": "high"
+		},
+		"turnSummary": {
+			"type": "boolean",
+			"title": "Turn impact summary",
+			"description": "After a turn that changed files, show one line under the answer with how many files changed and how many files depend on them (from the last indexed commit).",
+			"default": true
 		}
 	}
 }
