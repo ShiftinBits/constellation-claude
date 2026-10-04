@@ -178,6 +178,63 @@ export function bashSearchPattern(line: string): string | null {
 	return bashSearch(line)?.pattern ?? null;
 }
 
+/** What a `gh pr create` command line asks for. */
+export type GhPrCreate = {
+	/** The directory it runs in after any `cd <dir> &&` (or `;`); undefined means the working directory. */
+	dir: string | undefined;
+	/** The value of `--base` / `-B`. */
+	base: string | undefined;
+	/** The value of `--body` / `-b`, quotes removed. */
+	body: string | undefined;
+	/** The value of `--body-file` / `-F`. */
+	bodyFile: string | undefined;
+};
+
+const GH_FLAGS: ReadonlyArray<{ key: 'base' | 'body' | 'bodyFile'; names: readonly string[] }> = [
+	{ key: 'base', names: ['--base', '-B'] },
+	{ key: 'body', names: ['--body', '-b'] },
+	{ key: 'bodyFile', names: ['--body-file', '-F'] },
+];
+
+/**
+ * The `gh pr create` a shell line runs, or null when it runs none. Any command
+ * before it may run first (`git push && gh pr create`), and a `cd <dir>`
+ * joined by `&&` or `;` sets the directory it runs in. A command after a pipe
+ * only filters output, so it never counts.
+ *
+ * Only `--base`, `--body` and `--body-file` (and their short forms, and the
+ * `--flag=value` spelling) are read; the body may be garbled when it holds
+ * quotes or separators.
+ */
+export function ghPrCreate(line: string): GhPrCreate | null {
+	let dir: string | undefined;
+	let previousSep = '';
+	for (const command of shellCommands(line)) {
+		const piped = previousSep === '|';
+		previousSep = command.sep;
+		if (piped) continue;
+		const words = withoutAssignments(command.words);
+		if (words[0] === 'cd' && words.length === 2 && (command.sep === '&&' || command.sep === ';')) {
+			dir = under(dir, words[1]);
+			continue;
+		}
+		if (words[0] !== 'gh' || words[1] !== 'pr' || words[2] !== 'create') continue;
+		const result: GhPrCreate = { dir, base: undefined, body: undefined, bodyFile: undefined };
+		const args = words.slice(3);
+		for (let i = 0; i < args.length; i++) {
+			const arg = args[i] ?? '';
+			for (const { key, names } of GH_FLAGS) {
+				if (names.includes(arg)) result[key] = args[++i];
+				else if (arg.startsWith('--') && names.some((name) => arg.startsWith(`${name}=`))) {
+					result[key] = arg.slice(arg.indexOf('=') + 1);
+				}
+			}
+		}
+		return result;
+	}
+	return null;
+}
+
 /**
  * True when a segment of `glob` that names what it matches has a stem (the
  * part before the first `*` or `.`) holding a PascalCase or camelCase token,
