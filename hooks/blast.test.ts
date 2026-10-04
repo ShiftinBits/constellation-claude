@@ -128,6 +128,11 @@ describe('blastRadius', () => {
 		expect(programs[0]).not.toContain('"f50.ts"');
 		expect(programs[0]).toMatch(/, true\);$/);
 	});
+	test('a changed file past the cap is not a dependent, and the skipped count is reported', async () => {
+		const files = Array.from({ length: 51 }, (_, i) => `f${i}.ts`);
+		const blast = await blastRadius(port(ok({ dependents: ['f50.ts', 'x.test.ts'], exports: [] })), '/r', files, { exports: false });
+		expect(blast).toEqual({ dependents: ['x.test.ts'], tests: 1, exports: [], skipped: 1 });
+	});
 });
 
 describe('relativeTo', () => {

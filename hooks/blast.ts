@@ -9,6 +9,8 @@ export type Blast = {
 	exports: string[];
 	/** The first 7 characters of the commit the graph was indexed at. */
 	asOfCommit?: string;
+	/** How many files past the cap were not looked up; absent when all were. */
+	skipped?: number;
 };
 
 /** Most files one lookup inspects. */
@@ -105,7 +107,11 @@ export async function blastRadius(
 		const dependents = strings(body?.dependents);
 		const names = strings(body?.exports);
 		if (!envelope.success || dependents === undefined || names === undefined) return undefined;
-		const blast: Blast = { dependents, tests: dependents.filter(isTestFile).length, exports: names };
+		// The probe excludes only the files it was sent; a file past the cap is still a changed file, not a dependent.
+		const changed = new Set(files);
+		const reach = dependents.filter((d) => !changed.has(d));
+		const blast: Blast = { dependents: reach, tests: reach.filter(isTestFile).length, exports: names };
+		if (files.length > sent.length) blast.skipped = files.length - sent.length;
 		const commit = envelope.asOfCommit?.slice(0, 7);
 		if (commit !== undefined) blast.asOfCommit = commit;
 		return blast;

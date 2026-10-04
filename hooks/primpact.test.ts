@@ -69,10 +69,11 @@ type Calls = {
 	envReads: number;
 };
 
-const DIFF_MAIN = 'git diff --name-only --relative origin/main...HEAD';
-const DIFF_DEV = 'git diff --name-only --relative origin/dev...HEAD';
-const SYMBOLIC_REF = 'git symbolic-ref refs/remotes/origin/HEAD';
-const REV_PARSE = 'git rev-parse --abbrev-ref HEAD';
+const GIT = 'git -c core.fsmonitor=false -c core.hooksPath=/dev/null';
+const DIFF_MAIN = `${GIT} diff --no-ext-diff --name-only --relative origin/main...HEAD`;
+const DIFF_DEV = `${GIT} diff --no-ext-diff --name-only --relative origin/dev...HEAD`;
+const SYMBOLIC_REF = `${GIT} symbolic-ref refs/remotes/origin/HEAD`;
+const REV_PARSE = `${GIT} rev-parse --abbrev-ref HEAD`;
 
 /** Reads the files and the exports flag back out of a serialized `probe` program. */
 function probeArgs(code: string): { files: string[]; exports: boolean } {
@@ -270,6 +271,13 @@ describe('buildImpactSection', () => {
 		expect(section).toContain('_From the code graph; imports through');
 		expect(section).not.toContain('\u2014');
 	});
+
+	test('says which files the dependents came from when some were past the cap', () => {
+		const changed = Array.from({ length: 60 }, (_, i) => `f${i}.ts`);
+		const section = buildImpactSection(changed, blast({ skipped: 10 }));
+		expect(section).toContain('- **Changed files:** 60');
+		expect(section).toContain(', of the first 50 changed files');
+	});
 });
 
 describe('PR impact in require mode', () => {
@@ -399,6 +407,15 @@ describe('PR impact in require mode', () => {
 		expect(calls.exists[0]).toBe(`${sub}/constellation.json`);
 		expect(calls.reads).toEqual([`${sub}/notes.md`]);
 		expect(calls.runs.every((run) => run.cwd === sub)).toBe(true);
+	});
+
+	test('a cd out of the session directory passes untouched without running git', async () => {
+		const { bash, calls } = load(REQUIRE, { ...GRAPH, exists: () => true });
+		for (const line of ['cd .. && gh pr create --title t --body x', 'cd /tmp/other && gh pr create --title t --body x']) {
+			const { ran } = await bash(line);
+			expect(ran).toBe(true);
+		}
+		expect(calls.runs).toEqual([]);
 	});
 
 	test('passes other Bash commands untouched without running anything', async () => {

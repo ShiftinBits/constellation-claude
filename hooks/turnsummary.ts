@@ -41,12 +41,13 @@ function plural(count: number, word: string): string {
 	return `${count} ${word}${count === 1 ? '' : 's'}`;
 }
 
-/** The summary line for `n` changed files, `k` of them new, and their blast radius. */
-function summaryLine(n: number, k: number, blast: Blast): string {
+/** The summary line for `n` changed files, `k` of them new, `queried` of them looked up, and their blast radius. */
+function summaryLine(n: number, k: number, queried: number, blast: Blast): string {
 	const fresh = k > 0 ? ` (${k} new)` : '';
 	const tests = plural(blast.tests, 'test file');
 	const commit = blast.asOfCommit === undefined ? '' : ` · as of ${blast.asOfCommit}`;
-	return `${PROMPT} ${plural(n, 'file')} changed${fresh} · ${plural(blast.dependents.length, 'downstream dependent')} (${tests})${commit}`;
+	const of = blast.skipped === undefined ? '' : ` of the first ${queried - blast.skipped} files`;
+	return `${PROMPT} ${plural(n, 'file')} changed${fresh} · ${plural(blast.dependents.length, 'downstream dependent')}${of} (${tests})${commit}`;
 }
 
 /**
@@ -72,7 +73,7 @@ export async function summarizeTurn(port: TurnSummaryPort, signal: AbortSignal):
 		queried.length === 0
 			? { dependents: [], tests: 0, exports: [] }
 			: await withinDeadline(port.sleep, blastRadius(port.mcp, root, queried, { exports: false }), TURN_SUMMARY_DEADLINE_MS, signal);
-	return blast === undefined ? undefined : summaryLine(files.length, fresh.size, blast);
+	return blast === undefined ? undefined : summaryLine(files.length, fresh.size, queried.length, blast);
 }
 
 export function registerTurnSummary(on: On, options: PluginOptions): void {

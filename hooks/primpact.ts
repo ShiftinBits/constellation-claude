@@ -1,5 +1,5 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code';
-import { type Blast, blastRadius } from './blast';
+import { type Blast, blastRadius, relativeTo } from './blast';
 import { type GhPrCreate, ghPrCreate } from './classify';
 import { absolute, isConfigured, projectRoot, stringArg, withinDeadline } from './lib';
 
@@ -18,6 +18,12 @@ export const PR_DEADLINE_MS = 8000;
 
 /** How long each git command may run. */
 const GIT_TIMEOUT_MS = 5000;
+
+/**
+ * git with the repository's fsmonitor and hooks turned off, since the command
+ * runs before Claude Code asks about the Bash call it guards.
+ */
+const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null'];
 
 /** An `## Impact` heading at a line start or after whitespace or a quote (`--body "## Impact`). */
 const HEADING = /(^|[\s"'])##\s+Impact\b/m;
@@ -54,7 +60,9 @@ export function buildImpactSection(changed: string[], blast: Blast): string {
 		'## Impact',
 		'',
 		`- **Changed files:** ${changed.length}`,
-		`- **Downstream dependents:** ${blast.dependents.length} (${plural(blast.tests, 'test file')})`,
+		`- **Downstream dependents:** ${blast.dependents.length} (${plural(blast.tests, 'test file')})${
+			blast.skipped === undefined ? '' : `, of the first ${changed.length - blast.skipped} changed files`
+		}`,
 	];
 	if (blast.dependents.length > 0) {
 		lines.push(`- **Most affected:** ${quoted(blast.dependents.slice(0, MOST_AFFECTED))}`);
@@ -74,7 +82,7 @@ export function buildImpactSection(changed: string[], blast: Blast): string {
 
 /** The branch checked out in `root`, or undefined when git fails. */
 async function branchOf($: EngineInterface, root: string): Promise<string | undefined> {
-	const head = await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+	const head = await $.process.run([...GIT, 'rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
 	const branch = head.stdout.trim();
 	return head.exitCode === 0 && branch !== '' ? branch : undefined;
 }
@@ -90,13 +98,13 @@ async function impactSection($: EngineInterface, pr: GhPrCreate, root: string, s
 	if (pr.base !== undefined && pr.base !== '') {
 		base = `origin/${pr.base}`;
 	} else {
-		const head = await $.process.run(['git', 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+		const head = await $.process.run([...GIT, 'symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
 		const ref = head.stdout.trim();
 		if (head.exitCode !== 0 || !ref.startsWith('refs/remotes/')) return undefined;
 		base = ref.slice('refs/remotes/'.length);
 		if (base === '') return undefined;
 	}
-	const diff = await $.process.run(['git', 'diff', '--name-only', '--relative', `${base}...HEAD`], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
+	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--name-only', '--relative', `${base}...HEAD`], { cwd: root, timeoutMs: GIT_TIMEOUT_MS });
 	if (diff.exitCode !== 0) return undefined;
 	const changed = diff.stdout
 		.split('\n')
@@ -122,7 +130,10 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 		const pr = ghPrCreate(raw);
 		if (pr === null) return next(e);
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return next(e);
-		const cwd = absolute(pr.dir ?? '.', await $.session.cwd());
+		const session = absolute('.', await $.session.cwd());
+		const cwd = absolute(pr.dir ?? '.', session);
+		// git runs only under the session's directory, never one a `cd` in the command leads out to.
+		if (cwd !== session && relativeTo(session, cwd) === null) return next(e);
 		const root = await projectRoot(cwd, (p) => $.fs.exists(p));
 		if (root === null) return next(e);
 
