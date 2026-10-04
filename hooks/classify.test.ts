@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { bashSearch, bashSearchPattern, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
+import { bashSearch, bashSearchPattern, type GhPrCreate, ghPrCreate, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
 
 describe('symbolOf', () => {
 	const rows: ReadonlyArray<readonly [string, string | null]> = [
@@ -160,6 +160,60 @@ describe('bashSearch path', () => {
 	for (const [command, expected] of rows) {
 		test(`${JSON.stringify(command)} searches ${JSON.stringify(expected)}`, () => {
 			expect(bashSearch(command)?.path).toBe(expected);
+		});
+	}
+});
+
+describe('ghPrCreate', () => {
+	const none: GhPrCreate = { dir: undefined, base: undefined, body: undefined, bodyFile: undefined, head: undefined, repo: undefined };
+
+	const matches: [string, Partial<GhPrCreate>][] = [
+		['gh pr create --title t --body "a\nb"', { body: 'a\nb' }],
+		['gh pr create -b text', { body: 'text' }],
+		['gh pr create --body=text', { body: 'text' }],
+		['gh pr create --body-file notes.md', { bodyFile: 'notes.md' }],
+		['gh pr create -F notes.md', { bodyFile: 'notes.md' }],
+		['gh pr create --body-file=notes.md', { bodyFile: 'notes.md' }],
+		['gh pr create --base dev', { base: 'dev' }],
+		['gh pr create -B dev', { base: 'dev' }],
+		['gh pr create --base=dev', { base: 'dev' }],
+		['cd sub && gh pr create --title t', { dir: 'sub' }],
+		['FOO=1 gh pr create', {}],
+		['git push -u origin HEAD && gh pr create --base dev', { base: 'dev' }],
+		['git push; gh pr create -b x', { body: 'x' }],
+		['cd x && git push && gh pr create', { dir: 'x' }],
+		['gh pr create --body x | cat', { body: 'x' }],
+		['gh pr new -b x', { body: 'x' }],
+		['git push -u origin HEAD\ngh pr create --base dev', { base: 'dev' }],
+		['cd x\ngh pr create', { dir: 'x' }],
+		['gh pr create --body "line one\nline two"', { body: 'line one\nline two' }],
+		['gh pr create --head feat/y', { head: 'feat/y' }],
+		['gh pr create -H feat/y -R owner/repo', { head: 'feat/y', repo: 'owner/repo' }],
+		['gh pr create --repo=owner/repo', { repo: 'owner/repo' }],
+		['GH_REPO=owner/repo gh pr create', { repo: 'owner/repo' }],
+		['gh pr create \\\n  --base develop \\\n  --head feat/x \\\n  --body-file body.md', { base: 'develop', head: 'feat/x', bodyFile: 'body.md' }],
+		["cat > /tmp/b.md <<'EOF'\n## Summary\nIt doesn't break\nEOF\ngh pr create --body-file /tmp/b.md", { bodyFile: '/tmp/b.md' }],
+		['git push <<-END\n\tit\'s\n\tEND\ngh pr create -B dev', { base: 'dev' }],
+	];
+	for (const [line, expected] of matches) {
+		test(`matches ${line}`, () => {
+			expect(ghPrCreate(line)).toEqual({ ...none, ...expected });
+		});
+	}
+
+	const misses = [
+		'gh pr view',
+		'gh pr list',
+		'echo gh pr create',
+		'git status',
+		'ls | gh pr create',
+		'cd ~/other && gh pr create',
+		'cd $REPO && gh pr create',
+		'cd - && gh pr create',
+	];
+	for (const line of misses) {
+		test(`does not match ${line}`, () => {
+			expect(ghPrCreate(line)).toBeNull();
 		});
 	}
 });
