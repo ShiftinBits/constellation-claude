@@ -165,7 +165,7 @@ describe('bashSearch path', () => {
 });
 
 describe('ghPrCreate', () => {
-	const none: GhPrCreate = { dir: undefined, base: undefined, body: undefined, bodyFile: undefined };
+	const none: GhPrCreate = { dir: undefined, base: undefined, body: undefined, bodyFile: undefined, head: undefined, repo: undefined };
 
 	const matches: [string, Partial<GhPrCreate>][] = [
 		['gh pr create --title t --body "a\nb"', { body: 'a\nb' }],
@@ -183,6 +183,13 @@ describe('ghPrCreate', () => {
 		['git push; gh pr create -b x', { body: 'x' }],
 		['cd x && git push && gh pr create', { dir: 'x' }],
 		['gh pr create --body x | cat', { body: 'x' }],
+		['gh pr new -b x', { body: 'x' }],
+		['git push -u origin HEAD\ngh pr create --base dev', { base: 'dev' }],
+		['cd x\ngh pr create', { dir: 'x' }],
+		['gh pr create --body "line one\nline two"', { body: 'line one\nline two' }],
+		['gh pr create --head feat/y', { head: 'feat/y' }],
+		['gh pr create -H feat/y -R owner/repo', { head: 'feat/y', repo: 'owner/repo' }],
+		['gh pr create --repo=owner/repo', { repo: 'owner/repo' }],
 	];
 	for (const [line, expected] of matches) {
 		test(`matches ${line}`, () => {

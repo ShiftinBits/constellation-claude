@@ -58,8 +58,8 @@ export function isSymbolLike(pattern: string): boolean {
 /** One command of a shell line: its words, quotes removed, and the separator after it (`|`, `||`, `;`, `&&`, or `''` at the end). */
 type ShellCommand = { words: string[]; sep: string };
 
-/** Splits a shell line into commands at each unquoted `|`, `||`, `;` and `&&`. */
-function shellCommands(line: string): ShellCommand[] {
+/** Splits a shell line into commands at each unquoted `|`, `||`, `;` and `&&`, and with `lines` at each unquoted newline too. */
+function shellCommands(line: string, lines = false): ShellCommand[] {
 	const commands: ShellCommand[] = [];
 	let words: string[] = [];
 	let word = '';
@@ -89,6 +89,8 @@ function shellCommands(line: string): ShellCommand[] {
 			i++;
 		} else if (c === '|' || c === ';') {
 			endCommand(c);
+		} else if (lines && c === '\n') {
+			endCommand(';');
 		} else if (/\s/.test(c)) {
 			endWord();
 		} else {
@@ -188,28 +190,35 @@ export type GhPrCreate = {
 	body: string | undefined;
 	/** The value of `--body-file` / `-F`. */
 	bodyFile: string | undefined;
+	/** The value of `--head` / `-H`: a branch other than the checked-out one. */
+	head: string | undefined;
+	/** The value of `--repo` / `-R`: another repository. */
+	repo: string | undefined;
 };
 
-const GH_FLAGS: ReadonlyArray<{ key: 'base' | 'body' | 'bodyFile'; names: readonly string[] }> = [
+const GH_FLAGS: ReadonlyArray<{ key: 'base' | 'body' | 'bodyFile' | 'head' | 'repo'; names: readonly string[] }> = [
 	{ key: 'base', names: ['--base', '-B'] },
 	{ key: 'body', names: ['--body', '-b'] },
 	{ key: 'bodyFile', names: ['--body-file', '-F'] },
+	{ key: 'head', names: ['--head', '-H'] },
+	{ key: 'repo', names: ['--repo', '-R'] },
 ];
 
 /**
- * The `gh pr create` a shell line runs, or null when it runs none. Any command
- * before it may run first (`git push && gh pr create`), and a `cd <dir>`
+ * The `gh pr create` (or its alias `gh pr new`) a shell line runs, or null
+ * when it runs none. Any command before it may run first (`git push &&
+ * gh pr create`, or on an earlier line), and a `cd <dir>`
  * joined by `&&` or `;` sets the directory it runs in. A command after a pipe
  * only filters output, so it never counts.
  *
- * Only `--base`, `--body` and `--body-file` (and their short forms, and the
+ * Only `--base`, `--body`, `--body-file`, `--head` and `--repo` (and their short forms, and the
  * `--flag=value` spelling) are read; the body may be garbled when it holds
  * quotes or separators.
  */
 export function ghPrCreate(line: string): GhPrCreate | null {
 	let dir: string | undefined;
 	let previousSep = '';
-	for (const command of shellCommands(line)) {
+	for (const command of shellCommands(line, true)) {
 		const piped = previousSep === '|';
 		previousSep = command.sep;
 		if (piped) continue;
@@ -218,8 +227,8 @@ export function ghPrCreate(line: string): GhPrCreate | null {
 			dir = under(dir, words[1]);
 			continue;
 		}
-		if (words[0] !== 'gh' || words[1] !== 'pr' || words[2] !== 'create') continue;
-		const result: GhPrCreate = { dir, base: undefined, body: undefined, bodyFile: undefined };
+		if (words[0] !== 'gh' || words[1] !== 'pr' || (words[2] !== 'create' && words[2] !== 'new')) continue;
+		const result: GhPrCreate = { dir, base: undefined, body: undefined, bodyFile: undefined, head: undefined, repo: undefined };
 		const args = words.slice(3);
 		for (let i = 0; i < args.length; i++) {
 			const arg = args[i] ?? '';

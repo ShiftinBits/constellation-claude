@@ -1,7 +1,7 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code';
-import { type Blast, blastRadius, relativeTo } from './blast';
+import { type Blast, blastRadius } from './blast';
 import { type GhPrCreate, ghPrCreate } from './classify';
-import { absolute, isConfigured, projectRoot, stringArg, withinDeadline } from './lib';
+import { absolute, isConfigured, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
 
 /** What happens before `gh pr create`. */
 type Mode = 'require' | 'inform' | 'off';
@@ -45,25 +45,22 @@ function modeOf(value: unknown): Mode {
 	return MODES.find((m) => m === value) ?? 'inform';
 }
 
-function plural(count: number, word: string): string {
-	return `${count} ${word}${count === 1 ? '' : 's'}`;
-}
-
 function quoted(names: readonly string[]): string {
 	return names.map((n) => `\`${n}\``).join(', ');
 }
 
 /**
  * The PR body's `## Impact` section for the `changed` project-relative files
- * and their blast radius: the counts, up to five dependents, up to ten
- * exported symbols, and where the numbers come from.
+ * and their blast radius: the counts, the five dependents that import the
+ * most changed files, up to ten of the changed files' symbols other files
+ * import, and where the numbers come from.
  */
 export function buildImpactSection(changed: string[], blast: Blast): string {
 	const lines = [
 		'## Impact',
 		'',
 		`- **Changed files:** ${changed.length}`,
-		`- **Downstream dependents:** ${blast.dependents.length} (${plural(blast.tests, 'test file')})${
+		`- **Downstream dependents:** ${blast.dependents.length}${blast.atLimit === undefined ? '' : '+'} (${plural(blast.tests, 'test file')})${
 			blast.skipped === undefined ? '' : `, of the first ${changed.length - blast.skipped} changed files`
 		}`,
 	];
@@ -73,7 +70,7 @@ export function buildImpactSection(changed: string[], blast: Blast): string {
 	if (blast.exports.length > 0) {
 		const more = blast.exports.length - MAX_EXPORTS;
 		const shown = quoted(blast.exports.slice(0, MAX_EXPORTS));
-		lines.push(`- **Exported symbols in changed files:** ${more > 0 ? `${shown}, +${more} more` : shown}`);
+		lines.push(`- **Exported symbols in use:** ${more > 0 ? `${shown}, +${more} more` : shown}`);
 	}
 	const asOf = blast.asOfCommit === undefined ? '' : ` as of ${blast.asOfCommit}`;
 	lines.push(
@@ -107,12 +104,10 @@ async function impactSection($: EngineInterface, pr: GhPrCreate, root: string, s
 		base = ref.slice('refs/remotes/'.length);
 		if (base === '') return undefined;
 	}
-	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--no-renames', '--name-only', '--relative', `${base}...HEAD`], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
+	// `-z` gives each path as is, NUL-terminated; without it git quotes unusual names.
+	const diff = await $.process.run([...GIT, 'diff', '--no-ext-diff', '--no-renames', '--name-only', '-z', '--relative', `${base}...HEAD`], { cwd: root, env: GIT_ENV, timeoutMs: GIT_TIMEOUT_MS });
 	if (diff.exitCode !== 0) return undefined;
-	const changed = diff.stdout
-		.split('\n')
-		.map((line) => line.trim())
-		.filter((line) => line !== '');
+	const changed = diff.stdout.split('\0').filter((path) => path !== '');
 	if (changed.length === 0) return undefined;
 	const blast = await withinDeadline(
 		(ms, o) => $.clock.sleep(ms, o),
@@ -131,7 +126,8 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 	on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
 		const raw = stringArg(e, 'command') ?? '';
 		const pr = ghPrCreate(raw);
-		if (pr === null) return next(e);
+		// A PR for another branch or repository is not the checkout's to describe.
+		if (pr === null || pr.head !== undefined || pr.repo !== undefined) return next(e);
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return next(e);
 		const session = absolute('.', await $.session.cwd());
 		const cwd = absolute(pr.dir ?? '.', session);
@@ -141,15 +137,13 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 		if (root === null) return next(e);
 
 		if (mode === 'inform') {
+			// The lookup runs while the command does, so the command's result waits for it as little as possible.
+			// A git command that cannot start or times out shows no section.
+			const pending = impactSection($, pr, root, next.signal).catch(() => undefined);
 			const r = await next(e);
 			if (r.deny !== undefined || r.isError) return r;
-			try {
-				const branch = await branchOf($, root);
-				const section = branch === undefined ? undefined : await impactSection($, pr, root, next.signal);
-				if (section !== undefined) $.ui.log(section);
-			} catch {
-				// A git command that cannot start or times out shows no section.
-			}
+			const section = await pending;
+			if (section !== undefined) $.ui.log(section);
 			return r;
 		}
 

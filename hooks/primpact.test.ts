@@ -70,16 +70,16 @@ type Calls = {
 };
 
 const GIT = 'git -c core.fsmonitor=false -c core.hooksPath=/dev/null -c protocol.allow=never';
-const DIFF_MAIN = `${GIT} diff --no-ext-diff --no-renames --name-only --relative origin/main...HEAD`;
-const DIFF_DEV = `${GIT} diff --no-ext-diff --no-renames --name-only --relative origin/dev...HEAD`;
+const DIFF_MAIN = `${GIT} diff --no-ext-diff --no-renames --name-only -z --relative origin/main...HEAD`;
+const DIFF_DEV = `${GIT} diff --no-ext-diff --no-renames --name-only -z --relative origin/dev...HEAD`;
 const SYMBOLIC_REF = `${GIT} symbolic-ref refs/remotes/origin/HEAD`;
 const REV_PARSE = `${GIT} rev-parse --abbrev-ref HEAD`;
 
-/** Reads the files and the exports flag back out of a serialized `probe` program. */
-function probeArgs(code: string): { files: string[]; exports: boolean } {
-	const m = /\(api, (\[.*\]), (true|false)\);$/.exec(code);
+/** Reads the files, the symbols flag and the page size back out of a serialized `probe` program. */
+function probeArgs(code: string): { files: string[]; exports: boolean; page: number } {
+	const m = /\(api, (\[.*\]), (true|false), (\d+)\);$/.exec(code);
 	if (m === null) throw new Error(`not a probe program: ${code}`);
-	return { files: JSON.parse(m[1] ?? '[]') as string[], exports: m[2] === 'true' };
+	return { files: JSON.parse(m[1] ?? '[]') as string[], exports: m[2] === 'true', page: Number(m[3]) };
 }
 
 /**
@@ -102,8 +102,8 @@ function load(options: PluginOptions = {}, world: World = {}) {
 	const git = (): Record<string, GitAnswer> => ({
 		[REV_PARSE]: { exitCode: 0, stdout: `${world.branch ?? 'feat/x'}\n` },
 		[SYMBOLIC_REF]: { exitCode: 0, stdout: 'refs/remotes/origin/main\n' },
-		[DIFF_MAIN]: { exitCode: 0, stdout: 'src/a.ts\nsrc/b.ts\n' },
-		[DIFF_DEV]: { exitCode: 0, stdout: 'src/a.ts\n' },
+		[DIFF_MAIN]: { exitCode: 0, stdout: 'src/a.ts\0src/b.ts\0' },
+		[DIFF_DEV]: { exitCode: 0, stdout: 'src/a.ts\0' },
 		...world.git,
 	});
 	const $ = {
@@ -140,7 +140,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		mcp: {
 			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
 			call: async (_server: string, _tool: string, args: { code: string; cwd: string }): Promise<McpToolResult> => {
-				const { files, exports } = probeArgs(args.code);
+				const { files, exports, page } = probeArgs(args.code);
 				calls.queried.push(files);
 				if (world.slow) return new Promise<McpToolResult>(() => {});
 				if (world.failure === 'error') throw new Error('server down');
@@ -151,14 +151,12 @@ function load(options: PluginOptions = {}, world: World = {}) {
 				const result = await probe(
 					{
 						getDependents: async ({ filePath }) => ({
-							directDependents: (world.dependents?.[filePath] ?? []).map((f) => ({ filePath: f })),
-						}),
-						searchSymbols: async ({ filterByFile }) => ({
-							symbols: (world.exports?.[filterByFile] ?? []).map((name) => ({ name, filePath: filterByFile })),
+							directDependents: (world.dependents?.[filePath] ?? []).map((f) => ({ filePath: f, usedSymbols: world.exports?.[filePath] ?? [] })),
 						}),
 					},
 					files,
 					exports,
+					page,
 				);
 				const body = { success: true, result, asOfCommit: COMMIT };
 				return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
@@ -246,7 +244,7 @@ describe('buildImpactSection', () => {
 				'- **Changed files:** 2',
 				'- **Downstream dependents:** 2 (1 test file)',
 				'- **Most affected:** `src/use.ts`, `src/a.test.ts`',
-				'- **Exported symbols in changed files:** `makeA`',
+				'- **Exported symbols in use:** `makeA`',
 				'',
 				'_From the code graph as of 0123456; imports through tsconfig path aliases or export * barrels may be undercounted._',
 			].join('\n'),
@@ -271,6 +269,10 @@ describe('buildImpactSection', () => {
 		expect(section).not.toContain('Exported symbols');
 		expect(section).toContain('_From the code graph; imports through');
 		expect(section).not.toContain('\u2014');
+	});
+
+	test('a count from a full page reads as a floor', () => {
+		expect(buildImpactSection(['src/a.ts'], blast({ dependents: ['src/x.ts'], atLimit: true }))).toContain('- **Downstream dependents:** 1+ (0 test files)');
 	});
 
 	test('says which files the dependents came from when some were past the cap', () => {
@@ -410,6 +412,20 @@ describe('PR impact in require mode', () => {
 		expect(calls.runs.every((run) => run.cwd === sub)).toBe(true);
 	});
 
+	test('a PR for another branch or repository passes untouched without running git', async () => {
+		const { bash, calls } = load(REQUIRE, GRAPH);
+		for (const line of ['gh pr create --head feat/y --title t --body x', 'gh pr create -R owner/repo --title t --body x']) {
+			expect((await bash(line)).ran).toBe(true);
+		}
+		expect(calls.runs).toEqual([]);
+	});
+
+	test('a changed file with an unusual name reaches the lookup as is', async () => {
+		const { bash, calls } = load(REQUIRE, { ...GRAPH, git: { [DIFF_MAIN]: { exitCode: 0, stdout: 'docs/caf\u00e9 "x".ts\0' } } });
+		await bash(PLAIN);
+		expect(calls.queried).toEqual([['docs/caf\u00e9 "x".ts']]);
+	});
+
 	test('a cd out of the session directory passes untouched without running git', async () => {
 		const { bash, calls } = load(REQUIRE, { ...GRAPH, exists: () => true });
 		for (const line of ['cd .. && gh pr create --title t --body x', 'cd /tmp/other && gh pr create --title t --body x']) {
@@ -437,7 +453,7 @@ describe('PR impact in require mode', () => {
 		['an empty branch', { ...GRAPH, git: { [REV_PARSE]: { exitCode: 0, stdout: '\n' } } }],
 		['git symbolic-ref exits nonzero', { ...GRAPH, git: { [SYMBOLIC_REF]: { exitCode: 1, stdout: '' } } }],
 		['git diff exits nonzero', { ...GRAPH, git: { [DIFF_MAIN]: { exitCode: 128, stdout: '' } } }],
-		['git diff lists nothing', { ...GRAPH, git: { [DIFF_MAIN]: { exitCode: 0, stdout: '\n' } } }],
+		['git diff lists nothing', { ...GRAPH, git: { [DIFF_MAIN]: { exitCode: 0, stdout: '' } } }],
 		['git cannot start', { ...GRAPH, git: { [REV_PARSE]: new Error('spawn git ENOENT') } }],
 		['git times out', { ...GRAPH, git: { [DIFF_MAIN]: new Error('timed out') } }],
 		['code_intel throws', { ...GRAPH, failure: 'error' }],
@@ -482,13 +498,15 @@ describe('PR impact in require mode', () => {
 });
 
 describe('PR impact in inform mode', () => {
-	test('runs the command first, then logs the section', async () => {
+	test('looks up the impact while the command runs, then logs the section', async () => {
 		const { bash, calls } = load({ prImpact: 'inform' }, GRAPH);
 		const { r, ran } = await bash(PLAIN);
 		expect(ran).toBe(true);
 		expect(r).toEqual({ result: 'ran' });
-		expect(calls.order[0]).toBe('run');
+		expect(calls.order).toContain('run');
 		expect(calls.order[calls.order.length - 1]).toBe('log');
+		// The branch is only for require mode's once-per-branch rule.
+		expect(calls.runs.map((run) => run.argv)).not.toContain(REV_PARSE);
 		expect(calls.logs).toHaveLength(1);
 		expect(calls.logs[0]).toStartWith('## Impact\n');
 		expect(calls.logs[0]).toContain('- **Changed files:** 2');
@@ -499,13 +517,12 @@ describe('PR impact in inform mode', () => {
 			const { bash, calls } = load({ prImpact: 'inform' }, GRAPH);
 			const { r } = await bash(PLAIN, answer);
 			expect(r).toEqual(answer);
-			expect(calls.runs).toEqual([]);
 			expect(calls.logs).toEqual([]);
 		}
 	});
 
 	test('logs nothing and keeps the result when the lookup fails', async () => {
-		for (const world of [{ ...GRAPH, failure: 'error' as const }, { ...GRAPH, git: { [REV_PARSE]: new Error('spawn git ENOENT') } }]) {
+		for (const world of [{ ...GRAPH, failure: 'error' as const }, { ...GRAPH, git: { [SYMBOLIC_REF]: new Error('spawn git ENOENT') } }]) {
 			const { bash, calls } = load({ prImpact: 'inform' }, world);
 			const { r, ran } = await bash(PLAIN);
 			expect(ran).toBe(true);

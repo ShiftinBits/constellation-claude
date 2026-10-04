@@ -1,4 +1,4 @@
-import { absolute, codeIntel, type McpPort, parseEnvelope, stringArg } from './lib';
+import { absolute, codeIntel, type McpPort, parseEnvelope, relativeTo, stringArg, strings } from './lib';
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
@@ -43,12 +43,6 @@ function levelOf(dependents: number): RiskLevel {
 	return 'low';
 }
 
-/** `path` (absolute, normalized) relative to `root` in POSIX form, or null when it is outside the root. */
-function relativeTo(root: string, path: string): string | null {
-	const base = absolute(root, root).replace(/\/+$/, '');
-	return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : null;
-}
-
 /**
  * Runs inside code_intel: `probeCode` sends its source, so it may use only its
  * arguments. One query gives both the dependents and, exactly, which of the
@@ -68,10 +62,6 @@ async function probe(api: {
 
 function probeCode(rel: string): string {
 	return `return await (${probe.toString()})(api, ${JSON.stringify(rel)});`;
-}
-
-function strings(value: unknown): string[] | undefined {
-	return Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : undefined;
 }
 
 /** Settled or in-flight risk by `${root}\0${rel}`; undefined when the lookup failed. */

@@ -61,11 +61,11 @@ function isSource(path: string): boolean {
 	return path.startsWith(`${PROJECT}/src/`) && !path.endsWith('/constellation.json');
 }
 
-/** Reads the files and the exports flag back out of a serialized `probe` program. */
-function probeArgs(code: string): { files: string[]; exports: boolean } {
-	const m = /\(api, (\[.*\]), (true|false)\);$/.exec(code);
+/** Reads the files, the symbols flag and the page size back out of a serialized `probe` program. */
+function probeArgs(code: string): { files: string[]; exports: boolean; page: number } {
+	const m = /\(api, (\[.*\]), (true|false), (\d+)\);$/.exec(code);
 	if (m === null) throw new Error(`not a probe program: ${code}`);
-	return { files: JSON.parse(m[1] ?? '[]') as string[], exports: m[2] === 'true' };
+	return { files: JSON.parse(m[1] ?? '[]') as string[], exports: m[2] === 'true', page: Number(m[3]) };
 }
 
 /**
@@ -104,7 +104,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		mcp: {
 			connect: async () => ({ isConnected: true, server: 'plugin:constellation:constellation' }),
 			call: async (_server: string, _tool: string, args: { code: string; cwd: string }): Promise<McpToolResult> => {
-				const { files, exports } = probeArgs(args.code);
+				const { files, exports, page } = probeArgs(args.code);
 				calls.queried.push(files);
 				calls.cwds.push(args.cwd);
 				if (world.slow) return new Promise<McpToolResult>(() => {});
@@ -116,10 +116,10 @@ function load(options: PluginOptions = {}, world: World = {}) {
 				const result = await probe(
 					{
 						getDependents: async ({ filePath }) => ({ directDependents: (graph[filePath] ?? []).map((f) => ({ filePath: f })) }),
-						searchSymbols: async () => ({ symbols: [] }),
 					},
 					files,
 					exports,
+					page,
 				);
 				const body = { success: true, result, asOfCommit: COMMIT };
 				return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
@@ -163,9 +163,9 @@ function load(options: PluginOptions = {}, world: World = {}) {
 			const e = { tool, [field]: path, tool_use_id: 'u1', ...extra } as unknown as ToolCallArgs;
 			return raise('tool.call', e, async () => answer);
 		},
-		/** The main loop's turn ending for `reason`, over a bottom that answers `ANSWER`. */
-		complete: (reason = 'answer', isAborted = false) =>
-			raise('turn.complete', { answer: 'Done.', durationMs: 1, isAborted, turnId: 't1', reason }, async () => ANSWER),
+		/** The main loop's turn ending for `reason`, over a bottom that answers `beneath` (`ANSWER` by default). */
+		complete: (reason = 'answer', isAborted = false, beneath: Answer = ANSWER) =>
+			raise('turn.complete', { answer: 'Done.', durationMs: 1, isAborted, turnId: 't1', reason }, async () => beneath),
 		/** A subagent's run ending. */
 		runEnds: (agentId: string) =>
 			raise('turn.complete', { answer: '', durationMs: 1, isAborted: false, turnId: 'r1', reason: 'answer', agentId }, async () => ({ text: '' })),
@@ -237,6 +237,32 @@ describe('turn summary line', () => {
 		await m.edit('/elsewhere/notes.ts');
 		expect(await m.complete()).toEqual({ text: `${LINE} 2 files changed · 1 downstream dependent (0 test files) · as of 0123456` });
 		expect(m.calls.queried).toEqual([['src/a.ts']]);
+	});
+
+	test('a file outside any project edited first does not hide the line', async () => {
+		const m = load({}, { dependents: { 'src/a.ts': ['src/x.ts'] }, exists: (p) => p === `${PROJECT}/constellation.json` || isSource(p) || p === '/elsewhere/plan.md' });
+		await m.turn();
+		await m.edit('/elsewhere/plan.md');
+		await m.edit(`${PROJECT}/src/a.ts`);
+		expect(await m.complete()).toEqual({ text: `${LINE} 2 files changed · 1 downstream dependent (0 test files) · as of 0123456` });
+		expect(m.calls.queried).toEqual([['src/a.ts']]);
+	});
+
+	test('a file that fills its page of dependents shows the count as a floor', async () => {
+		const many = Array.from({ length: 100 }, (_, i) => `src/d${i}.ts`);
+		const m = load({}, { dependents: { 'src/a.ts': many } });
+		await m.turn();
+		await m.edit(`${PROJECT}/src/a.ts`);
+		expect(await m.complete()).toEqual({ text: `${LINE} 1 file changed · 100+ downstream dependents (0 test files) · as of 0123456` });
+	});
+
+	test('a line another hook set stays, with this one under it', async () => {
+		const m = load({}, { dependents: { 'src/a.ts': ['src/x.ts'] } });
+		await m.turn();
+		await m.edit(`${PROJECT}/src/a.ts`);
+		expect(await m.complete('answer', false, { text: 'tests: 3 failed' })).toEqual({
+			text: `tests: 3 failed\n${LINE} 1 file changed · 1 downstream dependent (0 test files) · as of 0123456`,
+		});
 	});
 
 	test('a denied edit and a failed edit are not counted', async () => {

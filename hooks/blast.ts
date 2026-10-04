@@ -1,96 +1,85 @@
-import { absolute, codeIntel, type McpPort } from './lib';
+import { codeIntel, type McpPort, strings } from './lib';
 
 export type Blast = {
-	/** Project-relative files that depend on the inspected files, sorted, minus the inspected files. */
+	/** Project-relative files that depend on the inspected files, minus every inspected file, those importing the most of them first. */
 	dependents: string[];
 	/** How many of the dependents are test files. */
 	tests: number;
-	/** Exported symbol names of the inspected files; empty unless asked for. */
+	/** The inspected files' symbols the dependents import; empty unless asked for. */
 	exports: string[];
 	/** The first 7 characters of the commit the graph was indexed at. */
 	asOfCommit?: string;
 	/** How many files past the cap were not looked up; absent when all were. */
 	skipped?: number;
+	/** True when a file filled its page of dependents, so the count is a floor. */
+	atLimit?: true;
 };
 
-/** Most files one lookup inspects. */
+/**
+ * Most files one lookup inspects. code_intel allows 50 `api.*` calls per run
+ * and the probe makes one per file.
+ */
 const MAX_FILES = 50;
 
-/** True for test files: `*.test.*`, `*.spec.*`, a `__tests__`, `test` or `tests` directory, Go `_test.go`, Python `test_*.py`. */
+/** Most dependents read per file. */
+const PAGE = 100;
+
+/**
+ * True for test files: `*.test.*`, `*.spec.*`, a `__tests__`, `test` or `tests`
+ * directory (any case) or a `.Tests` project, Go `_test.go`, Python `test_*.py`
+ * and `*_test.py`, C# and Java `*Test` and `*Tests` classes.
+ */
 export function isTestFile(path: string): boolean {
 	const p = path.replace(/\\/g, '/');
 	const name = p.slice(p.lastIndexOf('/') + 1);
 	return (
 		/\.(?:test|spec)\./.test(name) ||
-		/(?:^|\/)(?:__tests__|tests?)\//.test(p) ||
+		/(?:^|\/)(?:__tests__|[Tt]ests?|[^/]+\.Tests?)\//.test(p) ||
 		name.endsWith('_test.go') ||
-		/^test_.*\.py$/.test(name)
+		/^test_.*\.py$/.test(name) ||
+		/_test\.py$/.test(name) ||
+		/[a-z0-9]Tests?\.(?:cs|java|kt)$/.test(name)
 	);
-}
-
-/** `path` (absolute, normalized) relative to `root` in POSIX form, or null when it is outside the root. */
-export function relativeTo(root: string, path: string): string | null {
-	const base = absolute(root, root).replace(/\/+$/, '');
-	return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : null;
 }
 
 /**
  * Runs inside code_intel: `blastRadius` sends its source, so it may use only
- * its arguments. A file that is new or not indexed has no dependents rather
- * than failing the call, and a failed export search keeps the dependents.
+ * its arguments. One `getDependents` per file, with the symbols each dependent
+ * imports. A file the graph does not know (new, or not indexed) has no
+ * dependents; any other failure (auth, the server, the call cap) fails the
+ * whole lookup rather than reading as zero.
  */
 export async function probe(
 	api: {
-		getDependents: (p: { filePath: string; limit: number }) => Promise<{
-			directDependents: ReadonlyArray<{ filePath: string }>;
+		getDependents: (p: { filePath: string; limit: number; includeSymbols: boolean }) => Promise<{
+			directDependents: ReadonlyArray<{ filePath: string; usedSymbols?: readonly string[] }>;
 		}>;
-		searchSymbols: (p: {
-			query: string;
-			isExported: boolean;
-			filterByFile: string;
-			limit: number;
-		}) => Promise<{ symbols: ReadonlyArray<{ name: string; filePath: string }> }>;
 	},
 	files: string[],
-	withExports: boolean,
+	withSymbols: boolean,
+	page: number,
 ) {
 	const perFile = await Promise.all(
-		files.map(async (file) => {
-			let dependents: string[] = [];
-			let exported: string[] = [];
+		files.map(async (filePath) => {
 			try {
-				const deps = await api.getDependents({ filePath: file, limit: 100 });
-				dependents = deps.directDependents.map((d) => d.filePath);
-			} catch {
-				dependents = [];
+				const found = await api.getDependents({ filePath, limit: page, includeSymbols: withSymbols });
+				return found.directDependents;
+			} catch (error) {
+				if (/File not found/.test(error instanceof Error ? error.message : String(error))) return [];
+				throw error;
 			}
-			// Core reads `*` and `?` in filterByFile as a glob, so such a path cannot name one file.
-			if (withExports && !/[*?]/.test(file)) {
-				try {
-					const found = await api.searchSymbols({ query: '', isExported: true, filterByFile: file, limit: 50 });
-					exported = found.symbols.filter((s) => s.filePath === file).map((s) => s.name);
-				} catch {
-					exported = [];
-				}
-			}
-			return { dependents, exported };
 		}),
 	);
-	const inputs = new Set(files);
 	return {
-		dependents: [...new Set(perFile.flatMap((f) => f.dependents))].filter((d) => !inputs.has(d)).sort(),
-		exports: [...new Set(perFile.flatMap((f) => f.exported))],
+		dependents: perFile.flat().map((d) => ({ filePath: d.filePath, symbols: [...(d.usedSymbols ?? [])] })),
+		atLimit: perFile.some((d) => d.length >= page),
 	};
-}
-
-function strings(value: unknown): string[] | undefined {
-	return Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : undefined;
 }
 
 /**
  * Who depends on `files` (project-relative, inside `root`) in the code graph,
- * and with `exports` which symbols they export. Undefined when the lookup
- * failed. Never throws.
+ * and with `exports` which of their symbols those dependents import.
+ * Undefined when the lookup failed. Never throws.
  */
 export async function blastRadius(
 	mcp: McpPort,
@@ -100,20 +89,30 @@ export async function blastRadius(
 ): Promise<Blast | undefined> {
 	try {
 		const sent = files.slice(0, MAX_FILES);
-		const code = `return await (${probe.toString()})(api, ${JSON.stringify(sent)}, ${JSON.stringify(exports)});`;
+		const code = `return await (${probe.toString()})(api, ${JSON.stringify(sent)}, ${JSON.stringify(exports)}, ${PAGE});`;
 		const envelope = await codeIntel(mcp, code, { cwd: root });
 		const result: unknown = envelope.result;
 		const body = typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : undefined;
-		const dependents = strings(body?.dependents);
-		const names = strings(body?.exports);
-		if (!envelope.success || dependents === undefined || names === undefined) return undefined;
-		// The probe excludes only the files it was sent; a file past the cap is still a changed file, not a dependent.
+		const edges = Array.isArray(body?.dependents) ? (body.dependents as unknown[]) : undefined;
+		if (!envelope.success || edges === undefined) return undefined;
+		// Every changed file is excluded, past the cap too: it is a changed file, not a dependent.
 		const changed = new Set(files);
-		const reach = dependents.filter((d) => !changed.has(d));
-		const blast: Blast = { dependents: reach, tests: reach.filter(isTestFile).length, exports: names };
-		if (files.length > sent.length) blast.skipped = files.length - sent.length;
+		const hits = new Map<string, number>();
+		const used = new Set<string>();
+		for (const edge of edges) {
+			const filePath: unknown = typeof edge === 'object' && edge !== null ? Reflect.get(edge, 'filePath') : undefined;
+			const symbols = strings(typeof edge === 'object' && edge !== null ? Reflect.get(edge, 'symbols') : undefined);
+			if (typeof filePath !== 'string' || symbols === undefined) return undefined;
+			if (changed.has(filePath)) continue;
+			hits.set(filePath, (hits.get(filePath) ?? 0) + 1);
+			for (const symbol of symbols) used.add(symbol);
+		}
+		const dependents = [...hits.keys()].sort((a, b) => (hits.get(b) ?? 0) - (hits.get(a) ?? 0) || (a < b ? -1 : a > b ? 1 : 0));
+		const blast: Blast = { dependents, tests: dependents.filter(isTestFile).length, exports: [...used] };
 		const commit = envelope.asOfCommit?.slice(0, 7);
 		if (commit !== undefined) blast.asOfCommit = commit;
+		if (files.length > sent.length) blast.skipped = files.length - sent.length;
+		if (body?.atLimit === true) blast.atLimit = true;
 		return blast;
 	} catch {
 		return undefined;

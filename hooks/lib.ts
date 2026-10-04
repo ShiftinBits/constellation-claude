@@ -68,6 +68,22 @@ export function absolute(path: string, cwd: string): string {
 	return root + segments.join('/');
 }
 
+/** `path` (absolute, normalized) relative to `root` in POSIX form, or null when it is outside the root. */
+export function relativeTo(root: string, path: string): string | null {
+	const base = absolute(root, root).replace(/\/+$/, '');
+	return path.startsWith(`${base}/`) ? path.slice(base.length + 1) : null;
+}
+
+/** `value` when it is an array of strings, else undefined. */
+export function strings(value: unknown): string[] | undefined {
+	return Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : undefined;
+}
+
+/** `count` and `word`, with an `s` unless the count is one. */
+export function plural(count: number, word: string): string {
+	return `${count} ${word}${count === 1 ? '' : 's'}`;
+}
+
 /**
  * The nearest directory at or above `path` (default: `cwd`) that holds a
  * `constellation.json`, or null. `path` may be a file or a directory; a

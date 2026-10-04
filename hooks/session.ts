@@ -5,7 +5,7 @@ import { forgetAgentImpact, resetImpact } from './impact';
 import { isConfigured } from './lib';
 import { resetPrImpact } from './primpact';
 import { resetRiskCache } from './risk';
-import { resetTurnSummary, startTurnSummary, summarizeTurn } from './turnsummary';
+import { resetTurnSummary, summarizeTurn } from './turnsummary';
 
 /**
  * Session lifecycle for the module's state, in one place: a new conversation
@@ -32,7 +32,7 @@ export function registerSession(on: On): void {
 			return next(e);
 		}
 		if (e.isAborted || e.reason !== 'answer') {
-			startTurnSummary();
+			resetTurnSummary();
 			return next(e);
 		}
 		const r = await next(e);
@@ -46,7 +46,9 @@ export function registerSession(on: On): void {
 				},
 				next.signal,
 			);
-			return line === undefined ? r : { ...r, text: line };
+			if (line === undefined) return r;
+			// A line another hook beneath already set stays, with this one under it.
+			return { ...r, text: r.text !== undefined && r.text !== e.answer ? `${r.text}\n${line}` : line };
 		} catch {
 			return r;
 		}

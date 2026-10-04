@@ -1,6 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
-import { type Blast, blastRadius, relativeTo } from './blast';
-import { absolute, type McpPort, projectRoot, stringArg, withinDeadline } from './lib';
+import { type Blast, blastRadius } from './blast';
+import { absolute, type McpPort, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
 import { PROMPT } from './theme';
 
 /**
@@ -18,13 +18,7 @@ const changed = new Set<string>();
 /** Absolute paths a Write created this turn. */
 const created = new Set<string>();
 
-/** Starts a new turn's record of changed files. */
-export function startTurnSummary(): void {
-	changed.clear();
-	created.clear();
-}
-
-/** Drops the record of changed files, for a new conversation (`/clear`, `/resume`, `/branch`). */
+/** Drops the record of changed files: a new turn, a turn that ended with no answer, or a new conversation. */
 export function resetTurnSummary(): void {
 	changed.clear();
 	created.clear();
@@ -37,36 +31,37 @@ export type TurnSummaryPort = {
 	sleep: (ms: number, options: { signal: AbortSignal }) => Promise<unknown>;
 };
 
-function plural(count: number, word: string): string {
-	return `${count} ${word}${count === 1 ? '' : 's'}`;
-}
-
 /** The summary line for `n` changed files, `k` of them new, `queried` of them looked up, and their blast radius. */
 function summaryLine(n: number, k: number, queried: number, blast: Blast): string {
 	const fresh = k > 0 ? ` (${k} new)` : '';
 	const tests = plural(blast.tests, 'test file');
 	const commit = blast.asOfCommit === undefined ? '' : ` · as of ${blast.asOfCommit}`;
 	const of = blast.skipped === undefined ? '' : ` of the first ${queried - blast.skipped} files`;
-	return `${PROMPT} ${plural(n, 'file')} changed${fresh} · ${plural(blast.dependents.length, 'downstream dependent')}${of} (${tests})${commit}`;
+	const count = blast.atLimit === undefined ? plural(blast.dependents.length, 'downstream dependent') : `${blast.dependents.length}+ downstream dependents`;
+	return `${PROMPT} ${plural(n, 'file')} changed${fresh} · ${count}${of} (${tests})${commit}`;
 }
 
 /**
  * One line on the files this turn changed and how many files depend on them,
  * then a fresh record for the next turn. Undefined when the summary is off,
- * nothing changed, the first changed file is not in a Constellation project, or
+ * nothing changed, no changed file is in a Constellation project, or
  * the lookup failed or missed `TURN_SUMMARY_DEADLINE_MS`.
  */
 export async function summarizeTurn(port: TurnSummaryPort, signal: AbortSignal): Promise<string | undefined> {
 	if (!enabled || changed.size === 0) return undefined;
 	const files = [...changed];
 	const fresh = new Set(created);
-	startTurnSummary();
-	const [first] = files;
-	if (first === undefined) return undefined;
-	const root = await projectRoot(absolute('..', first), port.exists);
+	resetTurnSummary();
+	// The first changed file inside a project picks the root, so a plan or scratch file edited first does not hide the line.
+	let root: string | null = null;
+	for (const path of files) {
+		root = await projectRoot(absolute('..', path), port.exists);
+		if (root !== null) break;
+	}
 	if (root === null) return undefined;
+	const inside = root;
 	const queried = files.flatMap((path) => {
-		const rel = fresh.has(path) ? null : relativeTo(root, path);
+		const rel = fresh.has(path) ? null : relativeTo(inside, path);
 		return rel === null ? [] : [rel];
 	});
 	const blast: Blast | undefined =
