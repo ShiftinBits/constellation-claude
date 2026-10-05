@@ -5,6 +5,7 @@ import { registerCommand } from './command';
 import { registerDescribe } from './describe';
 import { registerImpactGate } from './impact';
 import { registerNudges } from './nudge';
+import { registerOnboarding } from './onboarding';
 import { registerPrImpact } from './primpact';
 import { registerSession } from './session';
 import { registerToolRows } from './toolrows';
@@ -21,4 +22,5 @@ export const register: Register = (on, options) => {
 	registerTurnSummary(on, options);
 	registerPrImpact(on, options);
 	registerToolRows(on, options);
+	registerOnboarding(on, options);
 };

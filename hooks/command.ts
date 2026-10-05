@@ -1,5 +1,5 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { canDraw, codeIntel, isRecord, projectName } from './lib';
+import { canDraw, codeIntel, isConfigured, isRecord, projectName } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
@@ -7,6 +7,8 @@ import type { Hit } from './explore';
 import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
+import { checkConnection, readStoredKeyAtStart, rememberRepo } from './onboarding';
+import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
@@ -538,7 +540,46 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 
 export function registerCommand(on: On, options: PluginOptions): void {
 	on('session.start', async ($, e, next) => {
+		const ports: OnboardingPorts = {
+			run: (argv, init) => $.process.run(argv, init),
+			exists: (p) => $.fs.exists(p),
+			read: (p) => $.fs.read(p),
+			envSet: (key) => $.env.set('CONSTELLATION_ACCESS_KEY', key),
+			after: (ms, fn) => {
+				$.clock.after(ms, fn);
+			},
+			mcp: { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
+			reload: () => $.command.run({ command: 'reload-plugins' }),
+			toast: (text) => $.ui.toast(text),
+			invalidate: () => $.ui.invalidate('ui.render'),
+			log: async (text) => {
+				if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+			},
+		};
+		// A key the CLI stored is set before the session goes on, so the MCP server can start with it.
+		// A `-p` or SDK run skips the read-back: no one is at the prompt, and a login shell can take seconds.
+		let found: FoundKey | undefined;
+		try {
+			if (e.isInteractive && !isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) {
+				found = await readStoredKeyAtStart(e.cwd, ports);
+				if (found !== undefined) await ports.envSet(found.key);
+			} else {
+				await rememberRepo(e.cwd, ports.exists);
+			}
+		} catch {
+			// The onboarding never fails the session or skips the registration.
+			found = undefined;
+		}
 		const r = await next(e);
+		const root = found?.projectRoot;
+		if (typeof root === 'string') {
+			try {
+				// Never await code_intel in session.start: the ping runs on a timer.
+				$.clock.after(0, () => void checkConnection(root, ports));
+			} catch {
+				// No timer: the agent's own calls still bring up the band.
+			}
+		}
 		try {
 			await $.command.register({
 				name: COMMAND,

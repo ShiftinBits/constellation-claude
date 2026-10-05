@@ -3,13 +3,14 @@ import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { registerOnboarding } from './onboarding';
 import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
-type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string };
+type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
 type Bottom = (e: object) => Promise<Answer>;
 /** Who raised the dispatch, as `next.origin` holds it. */
 type Origin = { plugin: string; tier: string };
@@ -33,9 +34,39 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 /** How many `$.fs.exists` calls the handlers made. */
 let existsCalls = 0;
 
+/** Elements as plain data: the type and the props. */
+const make =
+	(type: string) =>
+	(props: Record<string, unknown>) => ({ type, props });
+const EL = { Box: make('Box'), Text: make('Text'), Button: make('Button'), Link: make('Link') };
+
+/** The text a drawn tree shows. */
+function shown(tree: unknown): string {
+	if (typeof tree === 'string') return tree;
+	if (Array.isArray(tree)) return tree.map(shown).join(' ');
+	if (typeof tree !== 'object' || tree === null) return '';
+	return shown(Reflect.get(Reflect.get(tree, 'props') ?? {}, 'children'));
+}
+
+/** How many times a handler asked for a redraw. */
+let invalidations = 0;
+
+/** The session's access key as `$.env.get` answers it. */
+let sessionKey: string | undefined = KEY;
+
 const $ = {
-	env: { get: async () => KEY },
-	session: { cwd: async () => PROJECT },
+	env: { get: async () => sessionKey },
+	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
+	ui: {
+		invalidate: () => {
+			invalidations += 1;
+		},
+		resolve: () => EL,
+		log: () => undefined,
+	},
+	store: { get: async () => undefined },
+	config: { list: async () => [] },
+	clock: { now: async () => 0 },
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
@@ -59,6 +90,8 @@ function load(options: PluginOptions) {
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
+	registerOnboarding(capture as unknown as On, options);
+	invalidations = 0;
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -88,6 +121,8 @@ function load(options: PluginOptions) {
 		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
 			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		/** The band above the prompt as drawn, or the marker beneath when it passes. */
+		band: async () => shown(await raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } }, async () => ({ text: 'beneath' }))),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
 		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
@@ -107,6 +142,10 @@ function load(options: PluginOptions) {
 }
 
 const REMINDER = [REMINDER_TEXT];
+
+/** A code_intel call that failed with AUTH_ERROR, as the agent's tool call returns it: errored, `Error: ` before the envelope. */
+const AUTH_ERROR_TEXT = `Error: ${JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } })}`;
+const AUTH_ERROR_CALL: Answer = { isError: true, result: AUTH_ERROR_TEXT, text: AUTH_ERROR_TEXT };
 
 describe('nudge budget', () => {
 	test('gives exactly nudgeLimit reminders and then none', async () => {
@@ -294,6 +333,38 @@ describe('nudge budget', () => {
 		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
 		collectEvidence(false);
 		expect(await m.search('agent-1')).toBeUndefined();
+	});
+
+	test('an AUTH_ERROR from the agent\'s code_intel call reaches the onboarding band', async () => {
+		const m = load({});
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		expect(invalidations).toBe(1);
+		expect(await m.band()).toContain('Constellation sign-in failed');
+	});
+
+	test("with no key set, the agent's AUTH_ERROR says not signed in", async () => {
+		const m = load({});
+		sessionKey = undefined;
+		try {
+			await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		} finally {
+			sessionKey = KEY;
+		}
+		expect(await m.band()).toContain("Constellation isn't signed in");
+	});
+
+	test('a SessionStart clear takes the onboarding band down', async () => {
+		const m = load({});
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		await m.sessionStart('clear');
+		expect(await m.band()).toBe('');
+	});
+
+	test("a plugin's own code_intel error leaves the onboarding band alone", async () => {
+		const m = load({});
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
+		expect(invalidations).toBe(0);
+		expect(await m.band()).toBe('');
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {
