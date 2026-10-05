@@ -10,7 +10,7 @@ const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
-type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
+type Answer = { additionalContext?: string[]; context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
 type Bottom = (e: object) => Promise<Answer>;
 /** Who raised the dispatch, as `next.origin` holds it. */
 type Origin = { plugin: string; tier: string };
@@ -77,7 +77,7 @@ const $ = {
 
 /**
  * The budget and nudge handlers as one hooks module registers them, raised
- * directly: the test kit does not surface a PreToolUse handler's added context.
+ * directly, so each test starts from a budget this module instance can read.
  */
 function load(options: PluginOptions) {
 	resetRiskCache();
@@ -111,9 +111,6 @@ function load(options: PluginOptions) {
 	};
 
 	let calls = 0;
-	/** A PreToolUse envelope for a Grep of `pattern`: it carries no `agentId`. */
-	const grep = (pattern: string, tool_use_id: string) => ({ tool: 'Grep', pattern, tool_use_id });
-
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
@@ -124,20 +121,9 @@ function load(options: PluginOptions) {
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
 		band: async () => shown(await raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } }, async () => ({ text: 'beneath' }))),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
-		/**
-		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
-		 * PreToolUse event runs beneath the call's tool.call, which alone carries `agentId`.
-		 */
-		search: async (agentId?: string, pattern = 'AuthService') => {
-			const id = `call-${(calls += 1)}`;
-			const answer = await raise('tool.call', { ...grep(pattern, id), agentId }, (e) =>
-				raise('classic.PreToolUse', grep(pattern, Reflect.get(e, 'tool_use_id'))),
-			);
-			return answer.additionalContext;
-		},
-		/** A PreToolUse event with no tool.call above it. */
-		bareSearch: async (tool_use_id: string) =>
-			(await raise('classic.PreToolUse', grep('AuthService', tool_use_id))).additionalContext,
+		/** What the search handler adds for a Grep of a symbol by `agentId`, the main conversation when absent. */
+		search: async (agentId?: string, pattern = 'AuthService') =>
+			(await raise('tool.call', { tool: 'Grep', pattern, tool_use_id: `call-${(calls += 1)}`, agentId })).context,
 	};
 }
 
@@ -244,13 +230,6 @@ describe('nudge budget', () => {
 		await m.turn('t1');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 		expect(await m.search()).toEqual(REMINDER);
-	});
-
-	test('a subagent search does not leave its agent behind for a later call', async () => {
-		const m = load({ nudgeLimit: 1 });
-		await m.turn('t1');
-		expect(await m.search('agent-1')).toEqual(REMINDER);
-		expect(await m.bareSearch('call-1')).toEqual(REMINDER);
 	});
 
 	test('a subagent that called code_intel gets no reminder for the rest of its run', async () => {

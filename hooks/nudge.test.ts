@@ -5,7 +5,7 @@ import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 
 const KEY = 'ak:test-key';
 
-type Answer = { additionalContext?: string[]; deny?: string };
+type Answer = { context?: string[]; deny?: string };
 
 type Handler = (
 	$: {
@@ -21,22 +21,22 @@ const PROJECT = '/work/app';
 const OUTSIDE = '/elsewhere';
 
 /**
- * The PreToolUse handler the module registers, called directly with a constructed
- * envelope. Registering the budget starts every call with a full one.
+ * The search handler the module registers on `tool.call`, called directly with a
+ * constructed envelope. Registering the budget starts every call with a full one.
  */
-function preToolUse(): Handler {
+function searchCall(): Handler {
 	let handler: Handler | undefined;
 	const capture = (pattern: string, ...rest: unknown[]) => {
-		if (pattern === 'classic.PreToolUse') handler = rest[rest.length - 1] as Handler;
+		if (pattern === 'tool.call') handler = rest[rest.length - 1] as Handler;
 	};
-	registerBudget(capture as unknown as On, {});
+	registerBudget((() => {}) as unknown as On, {});
 	registerNudges(capture as unknown as On);
-	if (!handler) throw new Error('no classic.PreToolUse handler registered');
+	if (!handler) throw new Error('no tool.call handler registered');
 	return handler;
 }
 
 /**
- * What the PreToolUse handler adds for a tool call, given the key, the working
+ * What the search handler adds for a tool call, given the key, the working
  * directory, and what the chain beneath answers. `/work/app` holds a
  * constellation.json; `/elsewhere` does not.
  */
@@ -51,7 +51,7 @@ async function nudgesFor(
 		session: { cwd: async () => cwd },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
 	};
-	return preToolUse()($, e, async () => beneath);
+	return searchCall()($, e, async () => beneath);
 }
 
 const CASES: ReadonlyArray<readonly [string, object]> = [
@@ -127,60 +127,65 @@ describe('session and subagent awareness', () => {
 describe('search nudge', () => {
 	for (const [name, e] of CASES) {
 		test(`${name} adds exactly one reminder with an ak: key`, async () => {
-			expect((await nudgesFor(e, KEY)).additionalContext).toEqual([REMINDER_TEXT]);
+			expect((await nudgesFor(e, KEY)).context).toEqual([REMINDER_TEXT]);
 		});
 
 		test(`${name} adds nothing without a key`, async () => {
-			expect((await nudgesFor(e, undefined)).additionalContext).toBeUndefined();
+			expect((await nudgesFor(e, undefined)).context).toBeUndefined();
 		});
 
 		test(`${name} adds nothing when the key does not start with ak:`, async () => {
-			expect((await nudgesFor(e, 'sk:other')).additionalContext).toBeUndefined();
+			expect((await nudgesFor(e, 'sk:other')).context).toBeUndefined();
 		});
 
 		test(`${name} adds nothing when the working directory is outside an indexed project`, async () => {
-			expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toBeUndefined();
+			expect((await nudgesFor(e, KEY, {}, OUTSIDE)).context).toBeUndefined();
 		});
 	}
 
 	for (const [name, e] of QUIET_CASES) {
 		test(`${name} adds nothing`, async () => {
-			expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
+			expect((await nudgesFor(e, KEY)).context).toBeUndefined();
 		});
 	}
 
 	test('a Grep path inside the project nudges even when the working directory is outside it', async () => {
 		const e = { tool: 'Grep', pattern: 'AuthService', path: `${PROJECT}/src` };
-		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).context).toEqual([REMINDER_TEXT]);
 	});
 
 	test('a Glob path inside the project nudges even when the working directory is outside it', async () => {
 		const e = { tool: 'Glob', pattern: '**/UserService.ts', path: PROJECT };
-		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).context).toEqual([REMINDER_TEXT]);
 	});
 
 	test('a Grep path outside the project adds nothing even when the working directory is inside it', async () => {
 		const e = { tool: 'Grep', pattern: 'AuthService', path: OUTSIDE };
-		expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
+		expect((await nudgesFor(e, KEY)).context).toBeUndefined();
 	});
 
 	test('a shell search of a path inside the project nudges even when the working directory is outside it', async () => {
 		const e = { tool: 'Bash', command: `grep -rn AuthService ${PROJECT}/src` };
-		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).context).toEqual([REMINDER_TEXT]);
 	});
 
 	test('a cd into the project before a shell search nudges', async () => {
 		const e = { tool: 'Bash', command: `cd ${PROJECT} && rg AuthService src` };
-		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).additionalContext).toEqual([REMINDER_TEXT]);
+		expect((await nudgesFor(e, KEY, {}, OUTSIDE)).context).toEqual([REMINDER_TEXT]);
 	});
 
 	test('a shell search of a path outside the project adds nothing even when the working directory is inside it', async () => {
 		const e = { tool: 'Bash', command: `rg AuthService ${OUTSIDE}/src` };
-		expect((await nudgesFor(e, KEY)).additionalContext).toBeUndefined();
+		expect((await nudgesFor(e, KEY)).context).toBeUndefined();
 	});
 
-	test('keeps a decision and the context the chain beneath produced', async () => {
-		const r = await nudgesFor({ tool: 'Grep', pattern: 'AuthService' }, KEY, { deny: 'no', additionalContext: ['earlier'] });
-		expect(r).toEqual({ deny: 'no', additionalContext: ['earlier', REMINDER_TEXT] });
+	test('keeps the context the chain beneath produced', async () => {
+		const r = await nudgesFor({ tool: 'Grep', pattern: 'AuthService' }, KEY, { context: ['earlier'] });
+		expect(r).toEqual({ context: ['earlier', REMINDER_TEXT] });
+	});
+
+	test('a refused call passes through as it came', async () => {
+		const r = await nudgesFor({ tool: 'Grep', pattern: 'AuthService' }, KEY, { deny: 'no' });
+		expect(r).toEqual({ deny: 'no' });
 	});
 });

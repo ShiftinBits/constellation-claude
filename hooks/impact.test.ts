@@ -70,6 +70,8 @@ function load(options: PluginOptions, world: World = {}) {
 	registerSession(capture as unknown as On);
 
 	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0, exists: [], timers: [] };
+	/** Core's decision for the check being raised, which the gate's `$.tool.check` query resolves to. */
+	let core: ToolCheckResult['decision'] = 'allow';
 	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
 	const $ = {
 		env: {
@@ -79,6 +81,7 @@ function load(options: PluginOptions, world: World = {}) {
 			},
 		},
 		session: { cwd: async () => PROJECT, surfaces: async () => world.surfaces ?? ['terminal'] },
+		tool: { check: async (): Promise<ToolCheckResult> => ({ decision: core }) },
 		fs: {
 			exists: async (path: string) => {
 				calls.exists.push(path);
@@ -144,6 +147,7 @@ function load(options: PluginOptions, world: World = {}) {
 	/** A real call's check (it carries a `tool_use_id`) of `tool` on `path`, over core's `decision`. */
 	const check = (decision: ToolCheckResult['decision'] = 'allow', path = FILE, tool = 'Edit') => {
 		const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
+		core = decision;
 		return raise('tool.check', { tool, input: { [field]: path }, tool_use_id: 'u1' }, async () => ({ decision }));
 	};
 

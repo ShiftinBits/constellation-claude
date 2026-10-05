@@ -1,6 +1,7 @@
 import type { McpToolResult, On, ToolCallArgs, ToolCallResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { augmentLine, FAILURE_BACKOFF_MS, type LookupApi, lookupCode, lookupSymbol, SOFT_DEADLINE_MS } from './augment';
+import { REMINDER_TEXT } from './nudge';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -70,8 +71,11 @@ function world(
 	return { clock, codes };
 }
 
+/** No search reminders, which share the result's `context` with the line. */
+const QUIET = { options: { nudgeLimit: 0 } };
+
 describe('search result augment', () => {
-	test('a Bash rg of a symbol gains exactly one line with kind, location and usages', async ($, on) => {
+	test('a Bash rg of a symbol gains exactly one line with kind, location and usages', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		const r = await $.tool.call(SEARCH);
 		expect(r).toEqual({ ...BENEATH, context: [LINE] });
@@ -82,7 +86,7 @@ describe('search result augment', () => {
 		expect(String(codes[0])).toContain('(api, "AuthService");');
 	});
 
-	test('a Grep of a symbol gains the same line when the build raises Grep', async ($, on) => {
+	test('a Grep of a symbol gains the same line when the build raises Grep', QUIET, async ($, on) => {
 		world(on);
 		// This build's tool table has no Grep, though the kit raises it, so the input is typed by hand.
 		const grep = { tool: 'Grep', pattern: 'class AuthService', path: `${PROJECT}/src` };
@@ -90,31 +94,31 @@ describe('search result augment', () => {
 		expect(r.context).toEqual([LINE]);
 	});
 
-	test('keeps the context the chain beneath produced', async ($, on) => {
+	test('keeps the context the chain beneath produced', QUIET, async ($, on) => {
 		world(on, { beneath: { ...BENEATH, context: ['earlier'] } });
 		const r = await $.tool.call(SEARCH);
 		expect(r.context).toEqual(['earlier', LINE]);
 	});
 
 	for (const command of ["rg 'connection refused' src", 'rg TODO', 'grep -rn "foo|bar" .', 'cat log | grep AuthService', 'ls -la']) {
-		test(`\`${command}\` is left as it was`, async ($, on) => {
+		test(`\`${command}\` is left as it was`, QUIET, async ($, on) => {
 			const { codes } = world(on);
 			expect(await $.tool.call({ tool: 'Bash', command })).toEqual(BENEATH);
 			expect(codes.length).toBe(0);
 		});
 	}
 
-	test('a code_intel error envelope leaves the result as it was', async ($, on) => {
+	test('a code_intel error envelope leaves the result as it was', QUIET, async ($, on) => {
 		world(on, { answer: () => envelope({ success: false, error: { code: 'PROJECT_NOT_INDEXED' } }) });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 	});
 
-	test('no exact match leaves the result as it was', async ($, on) => {
+	test('no exact match leaves the result as it was', QUIET, async ($, on) => {
 		world(on, { answer: () => envelope({ success: true, result: null }) });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 	});
 
-	test('a lookup slower than the deadline leaves the result as it was', async ($, on) => {
+	test('a lookup slower than the deadline leaves the result as it was', QUIET, async ($, on) => {
 		const { clock } = world(on, { answer: () => new Promise<McpToolResult>(() => {}) });
 		const pending = $.tool.call(SEARCH);
 		await clock.settle();
@@ -122,7 +126,7 @@ describe('search result augment', () => {
 		expect(await pending).toEqual(BENEATH);
 	});
 
-	test('a failed lookup is retried only after the backoff, and does not use up the symbol', async ($, on) => {
+	test('a failed lookup is retried only after the backoff, and does not use up the symbol', QUIET, async ($, on) => {
 		let fail = true;
 		const { clock, codes } = world(on, {
 			answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }),
@@ -136,14 +140,14 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(2);
 	});
 
-	test('no exact match is remembered, so a repeat search makes no second lookup', async ($, on) => {
+	test('no exact match is remembered, so a repeat search makes no second lookup', QUIET, async ($, on) => {
 		const { codes } = world(on, { answer: () => envelope({ success: true, result: null }) });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		expect(codes.length).toBe(1);
 	});
 
-	test('two searches for a symbol at once show one line', async ($, on) => {
+	test('two searches for a symbol at once show one line', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		const [a, b] = await Promise.all([$.tool.call(SEARCH), $.tool.call({ tool: 'Bash', command: 'grep -rn AuthService test' })]);
 		expect([a.context, b.context]).toContainEqual([LINE]);
@@ -151,7 +155,7 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(1);
 	});
 
-	test('a subagent gets its own line for a symbol the main conversation already saw', async ($, on) => {
+	test('a subagent gets its own line for a symbol the main conversation already saw', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 		const sub = { ...SEARCH, agentId: 'agent-1' };
@@ -159,7 +163,7 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(1);
 	});
 
-	test('a failure from before /clear never evicts a lookup made after it', async ($, on) => {
+	test('a failure from before /clear never evicts a lookup made after it', QUIET, async ($, on) => {
 		let fail = true;
 		const { clock, codes } = world(on, {
 			answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }),
@@ -175,7 +179,7 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(2);
 	});
 
-	test('a subagent continued after its run ended is shown the line again', async ($, on) => {
+	test('a subagent continued after its run ended is shown the line again', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		on('turn.complete', () => ({ text: '' }));
 		const sub = { ...SEARCH, agentId: 'agent-1' } as unknown as ToolCallArgs;
@@ -186,14 +190,14 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(1);
 	});
 
-	test('a shell search of another directory uses the project there', async ($, on) => {
+	test('a shell search of another directory uses the project there', QUIET, async ($, on) => {
 		const { codes } = world(on, { cwd: '/elsewhere' });
 		const r = await $.tool.call({ tool: 'Bash', command: `cd ${PROJECT} && rg AuthService src` });
 		expect(r.context).toEqual([LINE]);
 		expect(codes.length).toBe(1);
 	});
 
-	test('/clear lets a symbol be shown again', async ($, on) => {
+	test('/clear lets a symbol be shown again', QUIET, async ($, on) => {
 		world(on);
 		on('classic.SessionStart', () => ({}));
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
@@ -201,14 +205,14 @@ describe('search result augment', () => {
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 	});
 
-	test('the same symbol is augmented once', async ($, on) => {
+	test('the same symbol is augmented once', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 		expect(await $.tool.call({ tool: 'Bash', command: 'grep -rn AuthService .' })).toEqual(BENEATH);
 		expect(codes.length).toBe(1);
 	});
 
-	test('a code_intel call earlier in the same turn means no augment', async ($, on) => {
+	test('a code_intel call earlier in the same turn means no augment', QUIET, async ($, on) => {
 		const { codes } = world(on);
 		await $.turn.start({ text: 'hi', turnId: 't1' });
 		await $.tool.call({ tool: CODE_INTEL, code: 'return 1', cwd: PROJECT });
@@ -216,44 +220,50 @@ describe('search result augment', () => {
 		expect(codes.length).toBe(0);
 	});
 
-	test('a used-up reminder budget does not stop the augment', { options: { nudgeLimit: 0 } }, async ($, on) => {
+	test('a used-up reminder budget does not stop the augment', QUIET, async ($, on) => {
 		world(on);
 		await $.turn.start({ text: 'hi', turnId: 't1' });
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 	});
 
-	test('augmentGrep false means no augment', { options: { augmentGrep: false } }, async ($, on) => {
+	test('augmentGrep false means no augment', { options: { augmentGrep: false, nudgeLimit: 0 } }, async ($, on) => {
 		const { codes } = world(on);
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		expect(codes.length).toBe(0);
 	});
 
-	test('no key means no augment', async ($, on) => {
+	test('no key means no augment', QUIET, async ($, on) => {
 		const { codes } = world(on, { key: null });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		expect(codes.length).toBe(0);
 	});
 
-	test('a key that does not start with ak: means no augment', async ($, on) => {
+	test('a key that does not start with ak: means no augment', QUIET, async ($, on) => {
 		world(on, { key: 'sk:other' });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 	});
 
-	test('a search outside any indexed project means no augment', async ($, on) => {
+	test('a search outside any indexed project means no augment', QUIET, async ($, on) => {
 		const { codes } = world(on, { cwd: '/elsewhere' });
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
 		expect(codes.length).toBe(0);
 	});
 
-	test('a denied search is left as it was', async ($, on) => {
+	test('a denied search is left as it was', QUIET, async ($, on) => {
 		world(on, { beneath: { deny: 'not allowed' } });
 		expect(await $.tool.call(SEARCH)).toEqual({ deny: 'not allowed' });
 	});
 
-	test('an errored search is left as it was', async ($, on) => {
+	test('an errored search is left as it was', QUIET, async ($, on) => {
 		const errored = { ref: 7, result: 'Exit code 2', text: 'Exit code 2', isError: true } as const;
 		world(on, { beneath: errored });
 		expect(await $.tool.call(SEARCH)).toEqual(errored);
+	});
+
+	test('the line and a reminder share the result context, the line first', async ($, on) => {
+		world(on);
+		const r = await $.tool.call(SEARCH);
+		expect(r.context).toEqual([LINE, REMINDER_TEXT]);
 	});
 });
 
