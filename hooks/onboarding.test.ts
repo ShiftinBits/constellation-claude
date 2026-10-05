@@ -148,10 +148,11 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 		handler = rest[rest.length - 1] as RenderHandler;
 	};
 	registerOnboarding(capture as unknown as On, options);
-	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[] };
-	const flags = { storeDown: false };
+	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[], storeReads: 0, configReads: 0 };
+	const flags = { storeDown: false, now: 0 };
 	const $ = {
 		fs: { exists: async (p: string) => p === '/bin/sh' },
+		clock: { now: async () => flags.now },
 		...world,
 		ui: {
 			resolve: () => EL,
@@ -163,6 +164,7 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 		},
 		store: {
 			get: async (key: string) => {
+				seen.storeReads += 1;
 				if (flags.storeDown) throw new Error('store unavailable');
 				return store.get(key);
 			},
@@ -170,7 +172,12 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 				store.set(key, value);
 			},
 		},
-		config: { list: async () => [{ key: 'theme', value: 'dark' }] },
+		config: {
+			list: async () => {
+				seen.configReads += 1;
+				return [{ key: 'theme', value: 'dark' }];
+			},
+		},
 		session: { cwd: async () => REPO, surfaces: async () => ['terminal'] },
 	};
 	const draw = async (props: Record<string, unknown> = {}) => {
@@ -775,11 +782,26 @@ describe('the band above the prompt', () => {
 		expect(shown(await band.draw())).toContain("This project isn't indexed yet");
 	});
 
-	test('an unavailable store shows the band', async () => {
+	test('draws read the dismissal once and the theme at most once a second', async () => {
+		const band = loadBand();
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		for (let i = 0; i < 5; i++) await band.draw();
+		expect(band.seen.storeReads).toBe(1);
+		expect(band.seen.configReads).toBe(1);
+		band.flags.now = 1001;
+		await band.draw();
+		expect(band.seen.storeReads).toBe(1);
+		expect(band.seen.configReads).toBe(2);
+	});
+
+	test('an unavailable store shows the band, and the next draw reads it again', async () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		band.flags.storeDown = true;
 		expect(shown(await band.draw())).toContain('Constellation sign-in failed');
+		band.flags.storeDown = false;
+		await band.draw();
+		expect(band.seen.storeReads).toBe(2);
 	});
 });
 
@@ -797,6 +819,7 @@ describe('the band as a loaded plugin', () => {
 		const toasts: string[] = [];
 		mock.env(on, signedIn ? { CONSTELLATION_ACCESS_KEY: KEY } : {});
 		mock.store(on);
+		mock.clock(on);
 		on('fs.exists', (_$, e) => ({ value: e.path === '/bin/sh' || e.path === `${REPO}/.git` || e.path === '/work/other/.git' }));
 		on('process.run', () => ({ value: { exitCode: 0, stdout: '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }));
 		on('session.surfaces', () => ({ value: surfaces }));
@@ -985,7 +1008,7 @@ function buttonWorld(run: Run, c: Child = {}) {
 		},
 		fs: { exists: async (p: string) => p === '/bin/sh' || p === `${REPO}/.git` || p === `${REPO}/constellation.json` },
 		env: { set: async () => undefined },
-		clock: { after: () => undefined },
+		clock: { after: () => undefined, now: async () => 0 },
 		mcp: { connect: async () => ({ isConnected: true, server: 's' }), call: async () => mcpText(OK) },
 		command: { run: async () => ({}) },
 	};

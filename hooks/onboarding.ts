@@ -20,6 +20,9 @@ export const KEY_PATTERN = /^ak:[0-9a-f]{32}$/i;
 /** What `constellation index` prints when the project ID is unknown to Constellation. */
 export const NOT_REGISTERED_OUTPUT = /Project not registered|PROJECT_NOT_REGISTERED/;
 
+/** How long a theme read serves draws: a running CLI draws the band again for each line it prints. */
+const THEME_MS = 1000;
+
 /** Where a project is created and its ID found. */
 const WEB_APP = 'https://app.constellationdev.io';
 
@@ -188,6 +191,10 @@ let cliMissing = false;
 let logged = false;
 /** Whether a POSIX `/bin/sh` is present, once asked: Windows has none, and the band starts no CLI there. */
 let shell: boolean | undefined;
+/** The repository's stored dismissal, by its store key: only this plugin writes it, so one read serves every draw. */
+let dismissal: { key: string; value: unknown } | undefined;
+/** Claude Code's theme and when it was read: `/theme` raises no event, so a read older than THEME_MS is read again. */
+let theme: { value: unknown; readAt: number } | undefined;
 /** The git root (else the working directory) the session started in: dismissals are kept per repository. */
 let repoRoot: string | undefined;
 
@@ -687,7 +694,8 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 /**
  * The onboarding band above the prompt. Draws from module state only; a
  * repository whose stored dismissal equals the current state passes, so a
- * new, different error shows the band again.
+ * new, different error shows the band again. The dismissal is read once and
+ * the theme at most once a second, so a running CLI's redraws read neither.
  */
 export function registerOnboarding(on: On, options: PluginOptions): void {
 	generation += 1;
@@ -699,22 +707,30 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 	logged = false;
 	repoRoot = undefined;
 	shell = undefined;
+	dismissal = undefined;
+	theme = undefined;
 
 	on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
 		const shown = state;
 		if (e.props.hasSurvey || shown === undefined) return next(e);
 		const key = dismissalKey(repoRoot ?? (await $.session.cwd()));
-		try {
-			if ((await $.store.get(key)) === shown) return next(e);
-		} catch {
-			// The store is unavailable: the band shows.
+		if (dismissal?.key !== key) {
+			try {
+				dismissal = { key, value: await $.store.get(key) };
+			} catch {
+				// The store is unavailable: the band shows, and the next draw reads again.
+			}
 		}
-		let tint: Scheme;
-		try {
-			tint = scheme(options.colors, (await $.config.list()).find((r) => r.key === 'theme')?.value);
-		} catch {
-			tint = scheme(options.colors, undefined);
+		if (dismissal?.key === key && dismissal.value === shown) return next(e);
+		const now = await $.clock.now();
+		if (theme === undefined || now - theme.readAt > THEME_MS) {
+			try {
+				theme = { value: (await $.config.list()).find((r) => r.key === 'theme')?.value, readAt: now };
+			} catch {
+				// The default colors, until a read succeeds.
+			}
 		}
+		const tint = scheme(options.colors, theme?.value);
 		const noShell = !(await hasShell((p) => $.fs.exists(p)));
 		// While a run goes, its latest line; then the line it ended on.
 		const line = running === undefined ? detail : lastLine(buffer);
@@ -729,10 +745,11 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 			...(cliMissing ? { cliMissing } : {}),
 			...(noShell ? { noShell } : {}),
 			dismiss: async () => {
+				dismissal = { key, value: shown };
 				try {
 					await $.store.set(key, shown);
 				} catch {
-					// Not kept: the band shows again on the next draw.
+					// Kept for this session only: the next one shows the band again.
 				}
 				portsOf($).invalidate();
 			},

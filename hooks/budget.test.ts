@@ -66,6 +66,7 @@ const $ = {
 	},
 	store: { get: async () => undefined },
 	config: { list: async () => [] },
+	clock: { now: async () => 0 },
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
