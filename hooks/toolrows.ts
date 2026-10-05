@@ -21,8 +21,15 @@ const MAX_NAMES = 3;
  */
 const projects = new Map<string, string>();
 
-/** Claude Code's theme and verbose settings, read once and again after either changes. */
-let settings: { theme: unknown; verbose: boolean } | undefined;
+/** How long a settings read serves redraws: a resize redraws every row at once. */
+const SETTINGS_MS = 1000;
+
+/**
+ * Claude Code's theme and verbose settings and when they were read. A
+ * `config.set` drops them at once; `/theme` raises no event, so a read older
+ * than SETTINGS_MS is read again.
+ */
+let settings: { theme: unknown; verbose: boolean; readAt: number } | undefined;
 
 /** Forgets every row and the settings read, for a new conversation. */
 export function resetToolRows(): void {
@@ -211,12 +218,14 @@ export function registerToolRows(on: On, options: PluginOptions): void {
 		let row: RenderElement | undefined;
 		let verbose = false;
 		try {
-			if (settings === undefined) {
+			const now = await $.clock.now();
+			if (settings === undefined || now - settings.readAt > SETTINGS_MS) {
 				try {
 					const config = await $.config.list();
 					settings = {
 						theme: config.find((r) => r.key === 'theme')?.value,
 						verbose: config.find((r) => r.key === 'verbose')?.value === true,
+						readAt: now,
 					};
 				} catch {
 					// The default colors and Claude Code's row hidden, until a read succeeds.

@@ -1,5 +1,5 @@
 import type { On, RenderPropsOf } from 'claude-code';
-import { describe, expect, test } from 'claude-code/testing';
+import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine, Mounted } from 'claude-code/testing';
 import { palette } from './theme';
 import { registerSession } from './session';
@@ -89,8 +89,9 @@ const NOT_INDEXED = {
 	docs: 'https://docs.constellationdev.io/setup',
 };
 
-/** A stand-in for Claude Code's own row beneath the plugin, and the `/config` rows the plugin reads. */
+/** A stand-in for Claude Code's own row beneath the plugin, the clock, and the `/config` rows the plugin reads. */
 function world(on: On, { theme = 'dark', verbose = false }: { theme?: string; verbose?: boolean } = {}): void {
+	mock.clock(on);
 	on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
 	on('config.list', () => ({
 		value: [
@@ -485,7 +486,7 @@ const TABLE = { Text: element('Text'), Box: element('Box') };
  * that `resetToolRows` clears (the plugin the kit loads is a separate module
  * instance). `el` and `list` stand in for `$.ui.resolve(e)` and `$.config.list()`.
  */
-function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () => Promise<unknown[]> } = {}) {
+function direct({ el = TABLE, list = async () => [], now = () => 0 }: { el?: object; list?: () => Promise<unknown[]>; now?: () => number } = {}) {
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]): void => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -494,7 +495,7 @@ function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () 
 	};
 	registerToolRows(capture as unknown as On, {});
 	registerSession(capture as unknown as On);
-	const $ = { ui: { resolve: () => el, invalidate: () => {} }, config: { list } };
+	const $ = { ui: { resolve: () => el, invalidate: () => {} }, config: { list }, clock: { now: async () => now() } };
 	const raise = async (event: string, e: object, bottom: () => Promise<unknown>): Promise<unknown> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
 		const step =
@@ -598,6 +599,27 @@ describe('fail-safe', () => {
 		verbose = true;
 		await rows.configSet('verbose');
 		expect(((await rows.drawn('third')) as Element).type).toBe('Box');
+		expect(reads).toBe(2);
+	});
+
+	test('the settings are read again once a read is over a second old', async () => {
+		resetToolRows();
+		let clock = 1_000_000;
+		let theme = 'dark';
+		let reads = 0;
+		const rows = direct({
+			list: async () => {
+				reads++;
+				return [{ key: 'theme', value: theme }];
+			},
+			now: () => clock,
+		});
+		expect(within(await rows.drawn('dark'), '✓ connected')?.props['color']).toBe(palette.cosmic);
+		theme = 'light';
+		clock += 1000;
+		expect(within(await rows.drawn('still-dark'), '✓ connected')?.props['color']).toBe(palette.cosmic);
+		clock += 1;
+		expect(within(await rows.drawn('light'), '✓ connected')?.props['color']).toBe('success');
 		expect(reads).toBe(2);
 	});
 
