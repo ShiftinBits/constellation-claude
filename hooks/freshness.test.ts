@@ -1,6 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
-import { compareLocal, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
+import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
 import { GIT, GIT_ENV, GIT_TIMEOUT_MS } from './lib';
 
 const ROOT = '/work/app';
@@ -271,6 +271,52 @@ describe('observeEnvelope and recheck', () => {
 		resetFreshness();
 		await observeEnvelope(ok(OLD), ROOT, behindBy4().run, () => undefined, log);
 		expect(lines).toHaveLength(2);
+	});
+
+	test('a mismatch is not logged', async () => {
+		fresh();
+		track(ROOT);
+		const lines: string[] = [];
+		await observeEnvelope(ok(OLD), ROOT, fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '0\n' } }).run, () => undefined, (t) => void lines.push(t));
+		expect(freshnessLine(NOW)?.view.kind).toBe('mismatch');
+		expect(lines).toEqual([]);
+	});
+});
+
+describe('freshnessBand', () => {
+	const el = {
+		Text: (props: Record<string, unknown>) => ({ type: 'Text', props }),
+	} as unknown as Parameters<typeof freshnessBand>[0];
+	const pieces = (tint: Parameters<typeof freshnessBand>[2], view: Parameters<typeof freshnessBand>[1]) => {
+		const row = freshnessBand(el, view, tint, NOW);
+		return (Reflect.get(Reflect.get(row, 'props'), 'children') as { props: Record<string, unknown> }[]).map((c) => c.props);
+	};
+
+	test('paints the mark and state words and dims the age and local changes', () => {
+		const [head, since, dirty] = pieces('brand', { kind: 'behind', behind: 4, dirty: true, lastIndexedAt: TWO_HOURS_AGO });
+		expect(head).toMatchObject({ children: '✦ index 4 commits behind', color: expect.any(String) });
+		expect(since).toEqual({ dimColor: true, children: ' · indexed 2h ago' });
+		expect(dirty).toEqual({ dimColor: true, children: ' + local changes' });
+	});
+
+	test('a mismatch names the indexed commit', () => {
+		const [head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD, dirty: false });
+		expect(head?.['children']).toBe('✦ index at fedcba9');
+	});
+
+	test('an error paints the code in another color, keeps the headline plain and dims the next step', () => {
+		const behind = pieces('brand', { kind: 'behind', behind: 1, dirty: false })[0];
+		const [code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] }, dirty: false });
+		expect(code?.['children']).toBe('✦ WEIRD');
+		expect(code?.['color']).not.toBe(behind?.['color']);
+		expect(headline).not.toHaveProperty('color');
+		expect(headline).not.toHaveProperty('dimColor');
+		expect(step).toMatchObject({ dimColor: true });
+	});
+
+	test('the none scheme draws no color', () => {
+		const [head] = pieces('none', { kind: 'behind', behind: 2, dirty: false });
+		expect(head).not.toHaveProperty('color');
 	});
 });
 

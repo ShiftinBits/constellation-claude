@@ -9,6 +9,7 @@ import type {
 	ProcessSpawnRequest,
 	RenderElement,
 } from 'claude-code';
+import { freshnessBand, freshnessLine } from './freshness';
 import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
@@ -710,6 +711,30 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 }
 
 /**
+ * The color scheme now, with the clock it was read at. The theme row is read at
+ * most once a second (`THEME_MS`), so a running CLI's redraws read it once.
+ */
+async function readTint($: EngineInterface, colors: unknown): Promise<{ now: number; tint: Scheme }> {
+	const now = await $.clock.now();
+	if (theme === undefined || now - theme.readAt > THEME_MS) {
+		try {
+			theme = { value: (await $.config.list()).find((r) => r.key === 'theme')?.value, readAt: now };
+		} catch {
+			// The default colors, until a read succeeds.
+		}
+	}
+	return { now, tint: scheme(colors, theme?.value) };
+}
+
+/** True when a lower mod drew nothing: core's own drawing, or a container with no children. */
+function isEmpty(element: RenderElement): boolean {
+	if (element.type === 'engine') return true;
+	if (element.type !== 'Box' && element.type !== 'Text') return false;
+	const children: unknown = element.props?.children;
+	return children === undefined || (Array.isArray(children) && children.length === 0);
+}
+
+/**
  * The onboarding band above the prompt. Draws from module state only; a
  * repository whose stored dismissal equals the current state passes, so a
  * new, different error shows the band again. The dismissal is read once and
@@ -730,7 +755,17 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 
 	on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
 		const shown = state;
-		if (e.props.hasSurvey || shown === undefined) return next(e);
+		if (e.props.hasSurvey) return next(e);
+		if (shown === undefined) {
+			// A fresh index reads nothing; the line draws only while no onboarding state exists.
+			const row = freshnessLine(Date.now());
+			if (row === undefined) return next(e);
+			const { now, tint } = await readTint($, options.colors);
+			const below = await next(e);
+			const el = $.ui.resolve(e);
+			const line = freshnessBand(el, row.view, tint, now);
+			return isEmpty(below) ? line : el.Box({ flexDirection: 'column', children: [line, below] });
+		}
 		const key = dismissalKey(repoRoot ?? (await $.session.cwd()));
 		if (dismissal?.key !== key) {
 			try {
@@ -740,15 +775,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 			}
 		}
 		if (dismissal?.key === key && dismissal.value === shown) return next(e);
-		const now = await $.clock.now();
-		if (theme === undefined || now - theme.readAt > THEME_MS) {
-			try {
-				theme = { value: (await $.config.list()).find((r) => r.key === 'theme')?.value, readAt: now };
-			} catch {
-				// The default colors, until a read succeeds.
-			}
-		}
-		const tint = scheme(options.colors, theme?.value);
+		const { tint } = await readTint($, options.colors);
 		const noShell = !(await hasShell((p) => $.fs.exists(p)));
 		// While a run goes, its latest line; then the line it ended on.
 		const line = running === undefined ? detail : lastLine(buffer);

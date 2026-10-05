@@ -1,6 +1,8 @@
-import type { On, PluginOptions, ProcessRunInit, ProcessRunResult, Timer } from 'claude-code';
+import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
+import { forTheme, status } from './theme';
+import type { Scheme } from './theme';
 
 /** Runs a command, as `$.process.run`. */
 export type Run = (argv: readonly string[], init: ProcessRunInit) => Promise<Pick<ProcessRunResult, 'exitCode' | 'stdout'>>;
@@ -82,15 +84,46 @@ export function freshnessView(
 	return { kind: 'mismatch', asOfCommit: known.asOfCommit, ...shared };
 }
 
+/** What a behind or mismatch view says: its state words, and when the index was taken. */
+function stateParts(view: Exclude<FreshnessView, { kind: 'error' }>, now: number): { head: string; since?: string } {
+	const since = view.lastIndexedAt === undefined ? undefined : age(view.lastIndexedAt, now);
+	const head = view.kind === 'behind' ? `index ${plural(view.behind, 'commit')} behind` : `index at ${view.asOfCommit.slice(0, 7)}`;
+	return since === undefined ? { head } : { head, since: `indexed ${since}` };
+}
+
 /** The indicator as one plain line, for the band and for sessions that cannot draw. */
 export function freshnessText(view: FreshnessView, now: number): string {
 	if (view.kind === 'error') {
 		const ex = explain(view.failure);
 		return ['✦ ' + view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP);
 	}
-	const since = view.lastIndexedAt === undefined ? undefined : age(view.lastIndexedAt, now);
-	const head = view.kind === 'behind' ? `index ${plural(view.behind, 'commit')} behind` : `index at ${view.asOfCommit.slice(0, 7)}`;
-	return `✦ ${[head, ...(since === undefined ? [] : [`indexed ${since}`])].join(SEP)}${view.dirty ? ' + local changes' : ''}`;
+	const { head, since } = stateParts(view, now);
+	return `✦ ${[head, ...(since === undefined ? [] : [since])].join(SEP)}${view.dirty ? ' + local changes' : ''}`;
+}
+
+/**
+ * The indicator as one row: the mark and state words painted (gold for behind
+ * and mismatch, red for an error), the index age and local changes dim. An
+ * error's headline is primary text and its next step dim. `el` is the table
+ * from `$.ui.resolve(e)`.
+ */
+export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Scheme, now: number): RenderElement {
+	const tone = forTheme(status(view.kind === 'error' ? 'error' : 'stale'), tint);
+	const painted = (text: string) => el.Text({ ...(tone.color === undefined ? {} : { color: tone.color }), children: text });
+	const dim = (text: string) => el.Text({ dimColor: true, children: text });
+	if (view.kind === 'error') {
+		const ex = explain(view.failure);
+		const step = ex.steps[0];
+		return el.Text({
+			wrap: 'truncate',
+			children: [painted(`✦ ${view.failure.code}`), el.Text({ children: `${SEP}${ex.title}` }), ...(step === undefined ? [] : [dim(`${SEP}${step}`)])],
+		});
+	}
+	const { head, since } = stateParts(view, now);
+	return el.Text({
+		wrap: 'truncate',
+		children: [painted(`✦ ${head}`), ...(since === undefined ? [] : [dim(`${SEP}${since}`)]), ...(view.dirty ? [dim(' + local changes')] : [])],
+	});
 }
 
 /**
@@ -132,7 +165,8 @@ function changed(before: string | undefined, invalidate: () => void, log?: Log):
 	const after = lineNow();
 	if (after === before) return;
 	invalidate();
-	if (after !== undefined && log !== undefined && !logged) {
+	// Only a stale index is worth a line where nothing draws the indicator.
+	if (after !== undefined && log !== undefined && !logged && freshnessView(index, local, failure)?.kind === 'behind') {
 		logged = true;
 		void Promise.resolve(log(after)).catch(() => undefined);
 	}

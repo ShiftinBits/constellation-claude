@@ -57,26 +57,36 @@ let sessionKey: string | undefined = KEY;
 
 /** The git commands the handlers ran, and the commit HEAD is at. */
 const gitRuns: string[][] = [];
+/** Whether `git status` reports changes, how many `$.config.list` reads were made, the surfaces the session has and what `$.ui.log` got. */
+let dirtyTree = false;
+let configReads = 0;
+let surfaces: string[] = ['terminal'];
+const logLines: string[] = [];
 const HEAD = '0123456789abcdef0123456789abcdef01234567';
 
 const $ = {
 	env: { get: async () => sessionKey },
-	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
+	session: { cwd: async () => PROJECT, surfaces: async () => surfaces },
 	ui: {
 		invalidate: () => {
 			invalidations += 1;
 		},
 		resolve: () => EL,
-		log: () => undefined,
+		log: (text: string) => void logLines.push(text),
 	},
 	store: { get: async () => undefined },
-	config: { list: async () => [] },
-	clock: { now: async () => 0 },
+	config: {
+		list: async () => {
+			configReads += 1;
+			return [];
+		},
+	},
+	clock: { now: async () => Date.now() },
 	process: {
 		run: async (argv: readonly string[]) => {
 			gitRuns.push([...argv]);
 			if (argv.includes('rev-parse')) return { exitCode: 0, stdout: `${HEAD}\nrefs/heads/main\n` };
-			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : '' };
+			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : argv.includes('status') && dirtyTree ? ' M a.ts\n' : '' };
 		},
 	},
 	fs: {
@@ -106,6 +116,10 @@ function load(options: PluginOptions) {
 	registerFreshness(capture as unknown as On, options);
 	invalidations = 0;
 	gitRuns.length = 0;
+	dirtyTree = false;
+	configReads = 0;
+	surfaces = ['terminal'];
+	logLines.length = 0;
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -133,6 +147,9 @@ function load(options: PluginOptions) {
 			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
+		/** The raw tree the band returns over a `bottom` that draws `beneath`, with the survey flag as given. */
+		draw: (beneath: object = { type: 'Text', props: { children: 'beneath' } }, hasSurvey = false) =>
+			raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey } }, async () => beneath),
 		band: async () => shown(await raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } }, async () => ({ text: 'beneath' }))),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/** What the search handler adds for a Grep of a symbol by `agentId`, the main conversation when absent. */
@@ -389,6 +406,92 @@ describe('nudge budget', () => {
 		await m.search('agent-1');
 		await m.sessionStart('clear');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
+	});
+});
+
+describe('freshness band above the prompt', () => {
+	const OLD = 'fedcba9876543210fedcba9876543210fedcba98';
+	const staleAnswer = (asOfCommit = OLD): Answer => ({
+		text: JSON.stringify({ success: true, result: {}, asOfCommit, lastIndexedAt: new Date(Date.now() - 7_200_000).toISOString() }),
+	});
+	const settle = async () => {
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+	};
+	/** Loads the module with the index behind HEAD by three commits. */
+	const behind = async (state: { dirty?: boolean; cannotDraw?: boolean } = {}) => {
+		const m = load({});
+		track(PROJECT);
+		dirtyTree = state.dirty === true;
+		if (state.cannotDraw === true) surfaces = [];
+		await m.program('main', 'return await api.ping()', staleAnswer());
+		await settle();
+		return m;
+	};
+	/** The row's text as the terminal joins its pieces: no space between them. */
+	const flat = (tree: unknown) => shown(tree).replace(/ {2,}/g, ' ');
+	const BENEATH = { type: 'Text', props: { children: 'beneath' } };
+
+	test('a fresh index returns what the lower mod returned and reads no store, clock or config', async () => {
+		for (const dirty of [false, true]) {
+			const m = load({});
+			track(PROJECT);
+			dirtyTree = dirty;
+			await m.program('main', 'return await api.ping()', staleAnswer(HEAD));
+			await settle();
+			expect(await m.draw(BENEATH)).toBe(BENEATH);
+			expect(configReads).toBe(0);
+		}
+	});
+
+	test('behind shows the state and index age above a lower mod element', async () => {
+		const m = await behind();
+		const tree = await m.draw();
+		expect(flat(tree)).toBe('✦ index 3 commits behind · indexed 2h ago beneath');
+		expect(Reflect.get(Reflect.get(tree, 'props'), 'flexDirection')).toBe('column');
+		expect(configReads).toBe(1);
+	});
+
+	test('a dirty tree adds the local changes suffix', async () => {
+		const m = await behind({ dirty: true });
+		expect(flat(await m.draw())).toContain(' + local changes');
+	});
+
+	test('draws the row alone when nothing draws beneath', async () => {
+		const m = await behind();
+		for (const none of [{ type: 'engine', ref: 0 }, { type: 'Box', props: { children: [] } }]) {
+			expect(flat(await m.draw(none))).toBe('✦ index 3 commits behind · indexed 2h ago');
+		}
+	});
+
+	test('an error with no index shows its code and guidance', async () => {
+		const m = load({});
+		track(PROJECT);
+		const failed = { success: false, error: { code: 'API_UNREACHABLE', message: 'unreachable' } };
+		await m.program('main', 'return await api.ping()', { text: JSON.stringify(failed) });
+		expect(shown(await m.draw())).toContain('✦ API_UNREACHABLE');
+	});
+
+	test('yields to a survey', async () => {
+		const m = await behind();
+		const before = configReads;
+		expect(await m.draw(BENEATH, true)).toBe(BENEATH);
+		expect(configReads).toBe(before);
+	});
+
+	test('an onboarding state, shown or dismissed, hides the freshness row', async () => {
+		const m = await behind();
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		const tree = await m.draw();
+		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).not.toContain('index 3 commits behind');
+	});
+
+	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
+		const m = await behind({ cannotDraw: true });
+		expect(logLines).toEqual(['✦ index 3 commits behind · indexed 2h ago']);
+		await m.program('main', 'return await api.ping()', staleAnswer('ab' + OLD.slice(2)));
+		await settle();
+		expect(logLines).toHaveLength(1);
 	});
 });
 
