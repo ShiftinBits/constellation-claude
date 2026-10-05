@@ -183,6 +183,14 @@ export function parseEnvelope(text: string | undefined): CodeIntelEnvelope {
 }
 
 /**
+ * Reads the text a code_intel call gave the model into the envelope. An
+ * errored call's text is `Error: ` and then the envelope, so the prefix goes first.
+ */
+export function parseToolText(text: string | undefined, isError: boolean): CodeIntelEnvelope {
+	return parseEnvelope(isError ? text?.replace(/^Error:\s*/, '') : text);
+}
+
+/**
  * Runs `code` through the plugin's `code_intel` MCP tool in the project at `cwd`.
  * Connects on every call: `$.mcp.connect` answers at once for a connected
  * server and gives the name it runs under now, so a restarted or renamed server

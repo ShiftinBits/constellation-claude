@@ -9,7 +9,7 @@ import type {
 	ProcessSpawnRequest,
 	RenderElement,
 } from 'claude-code';
-import { canDraw, codeIntel, gitRoot, parseEnvelope, projectRoot } from './lib';
+import { canDraw, codeIntel, gitRoot, parseToolText, projectRoot } from './lib';
 import type { McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
@@ -362,10 +362,14 @@ export async function checkConnection(root: string | null, ports: OnboardingPort
  * a `CWD_NOT_INDEXED` that lists project roots (a monorepo) change nothing.
  * With no key set, `AUTH_ERROR` keeps "not signed in": the server then got no key.
  */
-export function observeCodeIntel(r: { deny?: string; text?: string }, invalidate: () => void, log?: (text: string) => Promise<void>): void {
+export function observeCodeIntel(
+	r: { deny?: string; text?: string; isError?: boolean },
+	invalidate: () => void,
+	log?: (text: string) => Promise<void>,
+): void {
 	if (r.deny !== undefined || running !== undefined) return;
 	const notify: Notify = log === undefined ? { invalidate } : { invalidate, log };
-	const envelope = parseEnvelope(r.text);
+	const envelope = parseToolText(r.text, r.isError === true);
 	if (envelope.success) {
 		if (state !== undefined && ERROR_STATES.has(state)) apply(undefined, notify);
 		return;

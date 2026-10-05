@@ -1,7 +1,7 @@
 import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 'claude-code';
 import { isTestFile } from './blast';
 import { explain } from './explain';
-import { type CodeIntelEnvelope, isRecord, num, parseEnvelope, plural, projectName } from './lib';
+import { type CodeIntelEnvelope, isRecord, num, parseToolText, plural, projectName } from './lib';
 import { badge, forTheme, kind, palette, risk, type Scheme, scheme, status, type Tone } from './theme';
 
 /** The mark that opens a code_intel call row. */
@@ -241,9 +241,8 @@ export function registerToolRows(on: On, options: PluginOptions): void {
 					row = el.Text({ children: callRow(el, methodsOf(input.code), project, e.props.isRunning, to) });
 				}
 			} else {
-				const text = outputText(e.props.output);
-				// An errored call's output is the text the model read: `Error: ` and then the envelope.
-				const envelope = parseEnvelope(e.props.isErrored ? text?.replace(/^Error:\s*/, '') : text);
+				// An errored call's output is the text the model read.
+				const envelope = parseToolText(outputText(e.props.output), e.props.isErrored);
 				const drawable = envelope.error === undefined ? envelope.success && !e.props.isErrored : envelope.error.code !== 'INVALID_RESPONSE';
 				if (drawable) row = el.Text({ children: summarize(el, envelope, to, projects.get(e.requestId)) });
 			}

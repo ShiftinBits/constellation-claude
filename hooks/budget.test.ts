@@ -10,7 +10,7 @@ const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
-type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string };
+type Answer = { additionalContext?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
 type Bottom = (e: object) => Promise<Answer>;
 /** Who raised the dispatch, as `next.origin` holds it. */
 type Origin = { plugin: string; tier: string };
@@ -138,6 +138,10 @@ function load(options: PluginOptions) {
 }
 
 const REMINDER = [REMINDER_TEXT];
+
+/** A code_intel call that failed with AUTH_ERROR, as the agent's tool call returns it: errored, `Error: ` before the envelope. */
+const AUTH_ERROR_TEXT = `Error: ${JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } })}`;
+const AUTH_ERROR_CALL: Answer = { isError: true, result: AUTH_ERROR_TEXT, text: AUTH_ERROR_TEXT };
 
 describe('nudge budget', () => {
 	test('gives exactly nudgeLimit reminders and then none', async () => {
@@ -329,24 +333,21 @@ describe('nudge budget', () => {
 
 	test('an AUTH_ERROR from the agent\'s code_intel call reaches the onboarding band', async () => {
 		const m = load({});
-		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
-		await m.program('main', 'return await api.ping()', { result: authError, text: authError });
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
 		expect(invalidations).toBe(1);
 		expect(await m.band()).toContain('Constellation sign-in failed');
 	});
 
 	test('a SessionStart clear takes the onboarding band down', async () => {
 		const m = load({});
-		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
-		await m.program('main', 'return await api.ping()', { result: authError, text: authError });
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
 		await m.sessionStart('clear');
 		expect(await m.band()).toBe('');
 	});
 
 	test("a plugin's own code_intel error leaves the onboarding band alone", async () => {
 		const m = load({});
-		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
-		await m.program('main', 'return await api.ping()', { result: authError, text: authError }, { plugin: 'constellation', tier: 'user' });
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
 		expect(invalidations).toBe(0);
 		expect(await m.band()).toBe('');
 	});

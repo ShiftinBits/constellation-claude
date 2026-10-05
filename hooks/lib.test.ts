@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { canDraw, codeIntel, gitRoot, isConfigured, projectRoot, type McpPort } from './lib';
+import { canDraw, codeIntel, gitRoot, isConfigured, parseToolText, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -159,6 +159,19 @@ describe('codeIntel', () => {
 		const recovered = await codeIntel(host, 'x', { cwd: '/p' });
 		expect(recovered.success).toBe(true);
 		expect(connects.length).toBe(2);
+	});
+});
+
+describe('parseToolText', () => {
+	const body = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
+
+	test('an errored call drops the Error: prefix before the envelope', () => {
+		expect(parseToolText(`Error: ${body}`, true).error?.code).toBe('AUTH_ERROR');
+	});
+
+	test('a call that did not error is read as it is', () => {
+		expect(parseToolText(body, false).error?.code).toBe('AUTH_ERROR');
+		expect(parseToolText(`Error: ${body}`, false).error?.code).toBe('INVALID_RESPONSE');
 	});
 });
 
