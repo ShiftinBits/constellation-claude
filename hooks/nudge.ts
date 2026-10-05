@@ -1,5 +1,6 @@
 import type { On } from 'claude-code';
-import { hasNudgeLeft, spendNudge, usedCodeIntelThisTurn } from './budget';
+import { dayKey, noteSearch, persist } from './adoption';
+import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
 
@@ -34,10 +35,23 @@ export function registerNudges(on: On): void {
 	// On `tool.call`, not `classic.PreToolUse`: adding context means reading what `next` resolved to,
 	// and a hook on a permission event has to return that unread.
 	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
+		const { isSearch, symbolLike, path } = searchTarget(e);
 		const r = await next(e);
 		if (r.deny !== undefined) return r;
+		// Counted with or without a key: every search that ran, as symbol-like or literal. A Bash call that searches nothing counts nothing.
+		if (isSearch) {
+			try {
+				await persist(
+					noteSearch(agentKey(e) === MAIN, symbolLike),
+					dayKey(await $.clock.now(), await $.session.id()),
+					(k) => $.store.get(k),
+					(k, entry) => $.store.set(k, entry),
+				);
+			} catch {
+				// The session count stands without the stored one; the search's answer goes back untouched.
+			}
+		}
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
-		const { symbolLike, path } = searchTarget(e);
 		if (!symbolLike || usedCodeIntelThisTurn(e) || !hasNudgeLeft(e)) return r;
 		if ((await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path)) === null) return r;
 		if (!spendNudge(e)) return r;

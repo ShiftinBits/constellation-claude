@@ -10,8 +10,10 @@ type Answer = { context?: string[]; deny?: string };
 type Handler = (
 	$: {
 		env: { get: (name: string) => Promise<string | undefined> };
-		session: { cwd: () => Promise<string> };
+		session: { cwd: () => Promise<string>; id: () => Promise<string> };
 		fs: { exists: (path: string) => Promise<boolean> };
+		store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void> };
+		clock: { now: () => Promise<number> };
 	},
 	e: object,
 	next: (e: object) => Promise<Answer>,
@@ -48,8 +50,10 @@ async function nudgesFor(
 ): Promise<Answer> {
 	const $ = {
 		env: { get: async () => key },
-		session: { cwd: async () => cwd },
+		session: { cwd: async () => cwd, id: async () => 'session-1' },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
+		store: { get: async () => undefined, set: async () => undefined },
+		clock: { now: async () => 0 },
 	};
 	return searchCall()($, e, async () => beneath);
 }

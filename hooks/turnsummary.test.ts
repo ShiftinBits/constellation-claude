@@ -94,7 +94,8 @@ function load(options: PluginOptions = {}, world: World = {}) {
 				return typeof world.key === 'function' ? world.key() : (world.key ?? KEY);
 			},
 		},
-		session: { cwd: async () => PROJECT },
+		session: { cwd: async () => PROJECT, id: async () => 'session-1' },
+		store: { get: async () => undefined, set: async () => undefined },
 		fs: {
 			exists: async (path: string) => {
 				if (world.rejects === 'exists' && path.endsWith('/constellation.json')) throw new Error('fs unavailable');
@@ -126,6 +127,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 			},
 		},
 		clock: {
+			now: async () => 0,
 			// The deadline passes at once in a slow world; otherwise it waits until the hook aborts it.
 			sleep: (ms: number, opts?: { signal?: AbortSignal }) => {
 				calls.sleeps.push(ms);

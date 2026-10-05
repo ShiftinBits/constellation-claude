@@ -1,5 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
-import { canDraw, isConfigured, stringArg } from './lib';
+import { dayKey, noteCodeIntelCall, persist } from './adoption';
+import { canDraw, isConfigured, parseToolText, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
 
@@ -7,7 +8,7 @@ import { noteCodeIntel } from './risk';
 const DEFAULT_NUDGE_LIMIT = 3;
 
 /** The agent key of the main conversation. */
-const MAIN = 'main';
+export const MAIN = 'main';
 
 type AgentBudget = {
 	/** Nudges spent so far. */
@@ -101,6 +102,19 @@ export function registerBudget(on: On, options: PluginOptions): void {
 				);
 			} catch {
 				// The band stays as it was; the agent's answer goes back untouched.
+			}
+			// A refused call never ran; an errored one is still the agent reaching for code_intel.
+			if (r.deny === undefined) {
+				try {
+					await persist(
+						noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time),
+						dayKey(await $.clock.now(), await $.session.id()),
+						(k) => $.store.get(k),
+						(k, entry) => $.store.set(k, entry),
+					);
+				} catch {
+					// The session count stands without the stored one; the agent's answer goes back untouched.
+				}
 			}
 		}
 		return r;

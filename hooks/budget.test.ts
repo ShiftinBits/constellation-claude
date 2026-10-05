@@ -56,7 +56,7 @@ let sessionKey: string | undefined = KEY;
 
 const $ = {
 	env: { get: async () => sessionKey },
-	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
+	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'], id: async () => 'session-1' },
 	ui: {
 		invalidate: () => {
 			invalidations += 1;
@@ -64,7 +64,7 @@ const $ = {
 		resolve: () => EL,
 		log: () => undefined,
 	},
-	store: { get: async () => undefined },
+	store: { get: async () => undefined, set: async () => undefined },
 	config: { list: async () => [] },
 	clock: { now: async () => 0 },
 	fs: {
