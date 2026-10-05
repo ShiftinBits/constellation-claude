@@ -7,7 +7,7 @@ import { isConfigured, projectRoot } from './lib';
 export const SESSION_TEXT =
 	'You have access to the code_intel source code intelligence tool, this should be your preferred tool for searching or navigating the code base (finding definitions or references, impact analysis, architecture details, etc.). Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.';
 
-/** Added to the model's context before a search tool call. */
+/** Added to the model's context with a search tool call's result. */
 export const REMINDER_TEXT =
 	'Use the code_intel tool before other tools for searching or navigating the codebase. Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.';
 
@@ -31,13 +31,16 @@ export function registerNudges(on: On): void {
 		return withContext(r, SESSION_TEXT);
 	});
 
-	on('classic.PreToolUse', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
+	// On `tool.call`, not `classic.PreToolUse`: adding context means reading what `next` resolved to,
+	// and a hook on a permission event has to return that unread.
+	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
 		const r = await next(e);
+		if (r.deny !== undefined) return r;
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
 		const { symbolLike, path } = searchTarget(e);
 		if (!symbolLike || usedCodeIntelThisTurn(e) || !hasNudgeLeft(e)) return r;
 		if ((await projectRoot(await $.session.cwd(), (p) => $.fs.exists(p), path)) === null) return r;
 		if (!spendNudge(e)) return r;
-		return withContext(r, REMINDER_TEXT);
+		return { ...r, context: [...(r.context ?? []), REMINDER_TEXT] };
 	});
 }

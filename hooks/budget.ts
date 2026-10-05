@@ -28,21 +28,11 @@ const budgets = new Map<string, AgentBudget>();
  */
 let mainTurn: string | undefined;
 
-/**
- * The subagent a search call runs in, by `tool_use_id`, for the span of the call.
- * The envelope `classic.PreToolUse` receives carries no `agentId`, but it runs
- * inside the same call's `tool.call`, which does.
- */
-const searchAgents = new Map<string, string>();
-
 let nudgeLimit = DEFAULT_NUDGE_LIMIT;
 
 /** The agent a tool call belongs to: `agentId` in a subagent, else the main conversation. */
 export function agentKey(e: object): string {
-	const id = stringArg(e, 'agentId');
-	if (id !== undefined) return id;
-	const callId = stringArg(e, 'tool_use_id');
-	return (callId !== undefined ? searchAgents.get(callId) : undefined) ?? MAIN;
+	return stringArg(e, 'agentId') ?? MAIN;
 }
 
 function budgetOf(key: string): AgentBudget {
@@ -84,7 +74,6 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	nudgeLimit = typeof limit === 'number' ? limit : DEFAULT_NUDGE_LIMIT;
 	budgets.clear();
 	mainTurn = undefined;
-	searchAgents.clear();
 
 	on('turn.start', async (_$, e, next) => {
 		mainTurn = e.turnId;
@@ -99,16 +88,6 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis.
 		if (next.origin.plugin === 'engine') noteCodeIntel(key, e, r);
 		return r;
-	});
-
-	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async (_$, e, next) => {
-		if (e.agentId === undefined) return next(e);
-		searchAgents.set(e.tool_use_id, e.agentId);
-		try {
-			return await next(e);
-		} finally {
-			searchAgents.delete(e.tool_use_id);
-		}
 	});
 }
 

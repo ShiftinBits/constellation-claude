@@ -1,4 +1,4 @@
-import type { EngineInterface, On, PluginOptions, ToolCheckResult } from 'claude-code';
+import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { agentKey } from './budget';
 import { absolute, isConfigured, projectRoot, stringArg, withinDeadline } from './lib';
 import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, resetRiskCache, type RiskLevel } from './risk';
@@ -60,12 +60,9 @@ function question(risk: FileRisk): string {
 }
 
 /** The refusal the model reads when the user declines or dismisses the dialog, with what they typed under "Other". */
-function declined(risk: FileRisk, said?: string): ToolCheckResult {
+function declined(risk: FileRisk, said?: string): string {
 	const words = said === undefined ? '' : ` The user said: "${said}"`;
-	return {
-		decision: 'deny',
-		reason: `The user declined this edit to ${risk.path} (${risk.dependents} dependents, ${tone(risk.level).word} risk). Ask before trying a different approach.${words}`,
-	};
+	return `The user declined this edit to ${risk.path} (${risk.dependents} dependents, ${tone(risk.level).word} risk). Ask before trying a different approach.${words}`;
 }
 
 /** The refusal the model reads before its first edit to a file it has not looked into. */
@@ -132,49 +129,54 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 		return next(e);
 	});
 
+	// Every return is `next(e)` or a fixed `ask` or `deny`: core's decision is read from a
+	// `$.tool.check` query, never from what `next` resolves to, so the gate cannot turn it into an allow.
 	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-		const decided = await next(e);
 		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog or toast.
-		if (e.tool_use_id === undefined || decided.decision === 'deny') return decided;
-		// In auto mode an ask goes to the classifier: no one would see it, so the gate asks itself.
-		const classified = decided.decision === 'ask' && permissionMode === 'auto';
-		// An edit headed to the permission prompt needs no downgrade (native) and gets only a toast (dialog).
-		if (mode === 'native' && decided.decision === 'ask' && !classified) return decided;
-		// A -p or SDK run has no one to answer: a downgrade there would turn the edit into a refusal.
-		if (mode === 'native' && decided.decision === 'allow' && (await $.session.surfaces()).length === 0) return decided;
+		if (e.tool_use_id === undefined) return next(e);
 		const input = typeof e.input === 'object' && e.input !== null ? e.input : undefined;
 		const raw = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
-		if (raw === undefined) return decided;
+		if (raw === undefined) return next(e);
+		// The query skips this hook and asks no settings PreToolUse hook, so it is the rules' and the mode's decision.
+		const { decision } = await $.tool.check({ tool: e.tool, input: e.input });
+		if (decision === 'deny') return next(e);
+		// In auto mode an ask goes to the classifier: no one would see it, so the gate asks itself.
+		const classified = decision === 'ask' && permissionMode === 'auto';
+		// An edit headed to the permission prompt needs no downgrade (native) and gets only a toast (dialog).
+		if (mode === 'native' && decision === 'ask' && !classified) return next(e);
+		// A -p or SDK run has no one to answer: a downgrade there would turn the edit into a refusal.
+		if (mode === 'native' && decision === 'allow' && (await $.session.surfaces()).length === 0) return next(e);
 		const path = absolute(raw, await $.session.cwd());
-		const asks = (mode === 'dialog' && decided.decision === 'allow') || classified;
-		if (asks && remembered.has(path)) return decided;
+		const asks = (mode === 'dialog' && decision === 'allow') || classified;
+		if (asks && remembered.has(path)) return next(e);
 		const risk = await gatedRisk($, String(e.tool), path, next.signal);
-		if (risk === undefined) return decided;
+		if (risk === undefined) return next(e);
 
 		const line = headline(risk);
 		if (!asks) {
 			$.ui.toast(line, { timeoutMs: TOAST_MS });
-			// Native mode sends an auto-approved edit to the permission prompt; dialog mode leaves a prompted one there.
-			return mode === 'native' ? { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` } : decided;
+			// Dialog mode leaves a prompted edit at its prompt; native mode sends an auto-approved one there.
+			if (mode !== 'native') return next(e);
+			return { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` };
 		}
 		// A -p or SDK run has no one to ask: no one would see the dialog, so fail open.
 		if ((await $.session.surfaces()).length === 0) {
 			$.ui.log(`${line} (could not ask, edit allowed)`);
-			return decided;
+			return next(e);
 		}
-		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
+		let answer = CANCEL;
 		try {
-			const answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
-			if (answer === PROCEED) return decided;
-			if (answer === PROCEED_REMEMBER) {
-				remembered.add(path);
-				return decided;
-			}
-			return declined(risk, answer === CANCEL ? undefined : answer);
+			answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
 		} catch {
 			// With someone to ask, a rejection is the dialog dismissed (Esc), which refuses.
-			return declined(risk);
 		}
+		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
+		if (answer === PROCEED) return next(e);
+		if (answer === PROCEED_REMEMBER) {
+			remembered.add(path);
+			return next(e);
+		}
+		return { decision: 'deny', reason: declined(risk, answer === CANCEL ? undefined : answer) };
 	});
 }
 
