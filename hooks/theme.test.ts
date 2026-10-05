@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import type { ElementTable, On, RenderElement } from 'claude-code';
-import { BANNER_WIDTH, BOX_WIDTH, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, header, kind, paint, palette, rgb, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, BOX_WIDTH, badge, banner, buttonRow, compactBanner, forTheme, gradientAt, header, kind, onboarding, paint, palette, rgb, risk, scheme, status } from './theme';
 import type { Tone } from './theme';
 
 const SURFACES = ['terminal', 'desktop'] as const;
@@ -287,4 +287,29 @@ describe('banner', () => {
 		expect(textOf(runs.filter((r) => r.props['bold'] !== true))).toBe('│   │');
 		expect(runs.every((r) => typeof r.props['color'] === 'string')).toBe(true);
 	});
+});
+
+describe('onboarding tones', () => {
+	const cases: [keyof typeof onboarding, string][] = [
+		['notSetUp', palette.solar],
+		['pending', palette.solar],
+		['failed', palette.stellar],
+		['connected', palette.cosmic],
+	];
+	for (const [name, color] of cases) {
+		test(`${name} carries a word, a glyph and its accent, and no background`, () => {
+			const tone: Tone = onboarding[name];
+			expect(tone.word).not.toBe('');
+			expect(tone.glyph).not.toBe('');
+			expect(tone.color).toBe(color);
+			expect(tone).not.toHaveProperty('backgroundColor');
+		});
+
+		test(`${name} drops its color under the none scheme and keeps its word and glyph`, () => {
+			const tone = forTheme(onboarding[name], 'none');
+			expect(tone.color).toBeUndefined();
+			expect(tone.word).toBe(onboarding[name].word);
+			expect(tone.glyph).toBe(onboarding[name].glyph);
+		});
+	}
 });

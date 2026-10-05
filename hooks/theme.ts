@@ -92,6 +92,17 @@ const KIND: Readonly<Record<string, string>> = {
 	constant: palette.cosmic,
 };
 
+/**
+ * The tones of the onboarding band: not set up and pending are gold, failed is
+ * red and connected is green. Each carries a word and a glyph and no background.
+ */
+export const onboarding = {
+	notSetUp: { color: palette.solar, glyph: '✦', word: 'setup' },
+	pending: { color: palette.solar, glyph: '◐', word: 'working' },
+	failed: { color: palette.stellar, glyph: '✦', word: 'failed' },
+	connected: { color: palette.cosmic, glyph: '✦', word: 'connected' },
+} as const satisfies Readonly<Record<string, Tone>>;
+
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
 	const name = key.toLowerCase();
 	return Object.hasOwn(table, name) ? table[name] : undefined;
