@@ -29,7 +29,7 @@ Check error.code:
 - API_UNREACHABLE --> Connectivity section
 ```
 
-In the terminal and the desktop app, the Constellation onboarding band above the prompt offers **Sign in** and **Index this project** buttons. The manual steps below still apply.
+In the terminal and the desktop app, the Constellation onboarding band above the prompt offers **Sign in** and **Index this project** buttons (on Windows it names the command to run in a terminal instead). The manual steps below still apply.
 
 ## MCP Server Issues
 
