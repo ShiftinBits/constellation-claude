@@ -382,6 +382,17 @@ describe('checkConnection', () => {
 		expect(await band.draw()).toBe(FALLTHROUGH);
 	});
 
+	test('an AUTH_ERROR ping while a sign-in runs leaves the run and its band alone', async () => {
+		const band = loadBand();
+		const { ports, seen, timers } = fakePorts({ answer: mcpText(failed('AUTH_ERROR')) });
+		startTask('auth', ports);
+		await checkConnection(REPO, ports);
+		expect(timers).toHaveLength(0);
+		expect(seen.reloads).toBe(0);
+		expect(shown(await band.draw())).toContain('Signing in to Constellation');
+		endTask();
+	});
+
 	test('a PROJECT_NOT_INDEXED ping puts up not indexed', async () => {
 		const band = loadBand();
 		const { ports, seen } = fakePorts({ answer: mcpText(failed('PROJECT_NOT_INDEXED')) });

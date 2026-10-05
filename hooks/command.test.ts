@@ -1342,6 +1342,38 @@ describe('registration', () => {
 		expect(setValue === STORED_KEY).toBe(true);
 	});
 
+	test('the ping scheduled after a stored key is set runs on the timer and can put up the band', async ($, on) => {
+		mock.env(on, {});
+		const clock = mock.clock(on);
+		const codes: string[] = [];
+		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/.git' || e.path === '/work/app/constellation.json' }));
+		on('process.run', () => ({
+			value: { exitCode: 0, stdout: `${STORED_KEY}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+		}));
+		on('env.set', () => ({ value: undefined }));
+		on('session.start', (_, e) => ({ cwd: e.cwd }));
+		on('session.surfaces', () => ({ value: ['terminal'] }));
+		on('command.register', (_, e) => ({ value: { command: e.name } }));
+		on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
+		on('mcp.call', (_, e) => {
+			codes.push(String(e.args.code));
+			return { value: failure('PROJECT_NOT_INDEXED', 'Project not indexed') };
+		});
+		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		expect(codes).toEqual([]);
+		await clock.advance(0);
+		expect(codes).toEqual(['return await api.ping()']);
+		const ui = await $.ui.mount({
+			plugin: 'constellation',
+			surface: 'terminal',
+			component: 'AbovePrompt',
+			props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} },
+		});
+		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
+		expect(await ui.find({ type: 'Button', key: 'onboarding-index' })).toBeDefined();
+	});
+
 	test('an onboarding failure still registers the command and returns the cwd', async ($, on) => {
 		const registered: string[] = [];
 		mock.env(on, {});

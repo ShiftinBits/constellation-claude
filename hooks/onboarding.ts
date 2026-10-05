@@ -258,7 +258,11 @@ function reloadPlugins(ports: OnboardingPorts): void {
 	});
 }
 
-/** Sets `key` for the session, then reloads the plugins so the MCP server starts with it. */
+/**
+ * Sets `key` for the session, then reloads the plugins so the MCP server
+ * starts with it. A reload unloads the module and kills a running child, so
+ * call it once a CLI run has ended (`endTask`).
+ */
 export async function connect(key: string, ports: OnboardingPorts): Promise<void> {
 	await ports.envSet(key);
 	reloadPlugins(ports);
@@ -279,7 +283,8 @@ export async function checkConnection(root: string | null, ports: OnboardingPort
 		const envelope = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		const code = envelope.error?.code;
 		if (code === 'AUTH_ERROR') {
-			reloadPlugins(ports);
+			// A sign-in already running connects when it ends; a reload now would kill its child.
+			if (running === undefined) reloadPlugins(ports);
 			return;
 		}
 		const next = onboardingState({ configured: true, code });
