@@ -1505,12 +1505,13 @@ describe('the stats tab', () => {
 	const TODAY_WITHOUT = '- Today: 0 code_intel calls (0 ms) · 0 symbol-like searches · 0 literal searches · n/a structural lookups';
 
 	test('the read waits for counts still being saved, so today is never behind the session', COUNTING, async ($, on) => {
-		const { releaseSets } = world(on, { surfaces: ['vscode'], holdSets: true });
+		const { clock, releaseSets } = world(on, { surfaces: ['vscode'], holdSets: true });
 		await searchThrice($, on);
 		let lines: string[] | undefined;
 		const reply = run($, 'stats').then((r) => {
 			lines = r.text?.split('\n');
 		});
+		await clock.advance(999);
 		await settle();
 		expect(lines).toBeUndefined();
 		releaseSets();
