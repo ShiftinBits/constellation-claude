@@ -580,16 +580,12 @@ describe('the pane', () => {
 				await listKeys(/^tab\/shift\+tab move · enter toggle · h hand off$/);
 			});
 
-			test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
-				world(on, { surfaces: [surface] });
+			test(`a row names only its line under the file header, never the path again, on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface], answer: () => success(UNUSED_MORE) });
 				const ui = await openUnused($, surface);
-				const locations = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && String(t.children[0]).startsWith('src/util.ts'));
-				// Desktop names only the line under the file header, so no row repeats the path.
-				if (surface === 'desktop') expect(locations).toEqual([]);
-				else {
-					expect(locations.length).toBeGreaterThan(0);
-					for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
-				}
+				const repeated = (await ui.findAll({ type: 'Text' })).filter((t) => t.text.includes('src/more.ts'));
+				expect(repeated).toEqual([]);
+				expect(await reads(ui, /^line 9$/)).toBe(true);
 			});
 
 			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
@@ -624,7 +620,7 @@ describe('the pane', () => {
 				await settle();
 				expect(codes.at(-1)).toBe(orphanCode({ limit: 50, offset: 50 }));
 				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
-				expect(await reads(ui, surface === 'terminal' ? /src\/more\.ts:9/ : /^line 9$/)).toBe(true);
+				expect(await reads(ui, /^line 9$/)).toBe(true);
 				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
 			});
 

@@ -6,7 +6,7 @@ import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
 import type { Hit } from './explore';
-import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
+import { byFile, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
 import { observeEnvelope, recheck, startTicks, track } from './freshness';
@@ -902,8 +902,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					body.push(
 						el.Button({ key: `orphan-file:${file}`, label: `${check(all)} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
 						...rows.map((row) =>
-							// Desktop: the name is part of the checkbox, so it is a larger target, and the columns are shares
-							// of the width; the file is the header above, so a row names only its line.
+							// The file is the header above, so a row names only its line. Desktop: the name is part of the
+							// checkbox, so it is a larger target, and the columns are shares of the width.
 							!grid
 								? el.Box({
 										key: `row:${row.symbolId}`,
@@ -941,7 +941,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 										el.Text({ children: row.name }),
 										badge(el, '', forTheme(kind(row.kind), tint)),
 									]),
-									place(location(row)),
+									...(row.lineEnd === undefined ? [] : [el.Text({ dimColor: true, children: `line ${row.lineEnd}` })]),
 								],
 							}),
 						),
