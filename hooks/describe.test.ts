@@ -107,12 +107,17 @@ describe('the freshness indicator follows the working directory', () => {
 	const SERVER = 'plugin:constellation:constellation';
 	const INDEXED = 'fedcba9876543210fedcba9876543210fedcba98';
 
-	/** Two projects, /repo and /other, on the default API: records the pings and the git runs. */
+	/**
+	 * Two projects, /repo and /other, on the default API, with HEAD two commits
+	 * past the index: records the pings, the git runs and, in `timeline`, the
+	 * pings and band redraws in the order they happened.
+	 */
 	function projects(on: On, signedIn = true) {
 		mock.env(on, signedIn ? { CONSTELLATION_ACCESS_KEY: KEY } : {});
 		const clock = mock.clock(on);
 		const pings: string[] = [];
 		const runs: string[] = [];
+		const timeline: string[] = [];
 		on('session.cwd', () => ({ value: '/repo' }));
 		on('session.surfaces', () => ({ value: ['terminal'] }));
 		on('fs.exists', (_, e) => ({ value: e.path === '/repo/constellation.json' || e.path === '/other/constellation.json' }));
@@ -120,6 +125,7 @@ describe('the freshness indicator follows the working directory', () => {
 		on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
 		on('mcp.call', (_, e) => {
 			pings.push(String(e.args?.['cwd']));
+			timeline.push(`ping ${String(e.args?.['cwd'])}`);
 			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result: {}, asOfCommit: INDEXED }) }], isError: false } };
 		});
 		on('process.run', (_, e) => {
@@ -129,9 +135,13 @@ describe('the freshness indicator follows the working directory', () => {
 		});
 		on('classic.CwdChanged', () => ({}));
 		on('tool.describe', (_, e) => ({ description: e.description }));
-		on('ui.invalidate', () => ({ value: undefined }));
+		on('ui.invalidate', (_, e) => {
+			if (e.event === 'ui.render') timeline.push('redraw');
+			return { value: undefined };
+		});
 		const revParses = () => runs.filter((r) => r.includes('rev-parse')).length;
-		return { clock, pings, revParses };
+		const redraws = () => timeline.filter((t) => t === 'redraw').length;
+		return { clock, pings, revParses, timeline, redraws };
 	}
 
 	test('a move into a project pings it once and compares the checkout', async ($, on) => {
@@ -142,24 +152,30 @@ describe('the freshness indicator follows the working directory', () => {
 		expect(revParses() > 0).toBe(true);
 	});
 
-	test('a move within the project compares again, with the gate already open, and pings nothing', async ($, on) => {
-		const { clock, pings, revParses } = projects(on);
+	test('a move within the project compares again, with the gate already open, pings nothing and redraws nothing for the same line', async ($, on) => {
+		const { clock, pings, revParses, redraws } = projects(on);
 		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
 		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
 		await clock.settle();
 		const before = revParses();
+		const drawn = redraws();
+		expect(drawn > 0).toBe(true);
 		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/repo/lib' });
 		await clock.settle();
 		expect(pings).toEqual(['/repo']);
 		expect(revParses()).toBe(before + 1);
+		expect(redraws()).toBe(drawn);
 	});
 
-	test('a move into another project pings that one', async ($, on) => {
-		const { clock, pings } = projects(on);
+	test('a move into another project takes the last line down before it pings that one', async ($, on) => {
+		const { clock, pings, timeline } = projects(on);
 		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
+		await clock.settle();
+		expect(timeline).toEqual(['ping /repo', 'redraw']);
 		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/other/src' });
 		await clock.settle();
 		expect(pings).toEqual(['/repo', '/other']);
+		expect(timeline.slice(2, 4)).toEqual(['redraw', 'ping /other']);
 	});
 
 	test('without a key nothing is pinged or compared', async ($, on) => {

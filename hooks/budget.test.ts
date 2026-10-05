@@ -9,6 +9,8 @@ import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
+/** A second project beside the first, as in a monorepo. */
+const OTHER = '/work/other';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
 type Answer = { additionalContext?: string[]; context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
@@ -34,6 +36,9 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 
 /** How many `$.fs.exists` calls the handlers made. */
 let existsCalls = 0;
+
+/** The `constellation.json` files that exist. */
+let projectFiles: string[] = [];
 
 /** Elements as plain data: the type and the props. */
 const make =
@@ -92,7 +97,7 @@ const $ = {
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
-			return path === `${PROJECT}/constellation.json`;
+			return projectFiles.includes(path);
 		},
 	},
 };
@@ -120,6 +125,7 @@ function load(options: PluginOptions) {
 	configReads = 0;
 	surfaces = ['terminal'];
 	logLines.length = 0;
+	projectFiles = [`${PROJECT}/constellation.json`];
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -142,9 +148,9 @@ function load(options: PluginOptions) {
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
-		/** A code_intel call running `code` for `agentId`, raised by `origin`, over a bottom that answers `answer`. */
-		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
-			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
+		/** A code_intel call running `code` for `agentId` in `cwd` (the session's when absent), raised by `origin`, over a bottom that answers `answer`. */
+		program: (agentId: string, code: string, answer: Answer, origin = ENGINE, cwd?: string) =>
+			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code, ...(cwd === undefined ? {} : { cwd }) }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
 		/** The raw tree the band returns over a `bottom` that draws `beneath`, with the survey flag as given. */
@@ -484,6 +490,35 @@ describe('freshness band above the prompt', () => {
 		const tree = await m.draw();
 		expect(shown(tree)).toContain('Constellation sign-in failed');
 		expect(shown(tree)).not.toContain('index 3 commits behind');
+	});
+
+	test("an agent's call in another project runs no git and leaves the indicator alone", async () => {
+		const m = await behind();
+		const before = { runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations };
+		projectFiles.push(`${OTHER}/constellation.json`);
+		const newer = { text: JSON.stringify({ success: true, result: {}, asOfCommit: 'ab' + OLD.slice(2), lastIndexedAt: new Date().toISOString() }) };
+		await m.program('main', 'return await api.ping()', newer, ENGINE, OTHER);
+		await settle();
+		expect({ runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations }).toEqual(before);
+	});
+
+	test("an agent's call with a relative cwd resolves under the session's and updates the indicator", async () => {
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, 'src/lib');
+		await settle();
+		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
+		expect(freshnessLine(Date.now())?.text).toBe('✦ index 3 commits behind · indexed 2h ago');
+	});
+
+	test("an agent's call outside any project runs no git", async () => {
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, '/elsewhere/app');
+		await settle();
+		expect(gitRuns).toEqual([]);
+		expect(freshnessLine(0)).toBeUndefined();
+		expect(invalidations).toBe(0);
 	});
 
 	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
