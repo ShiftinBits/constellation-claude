@@ -30,6 +30,10 @@ const READ_BACK_MS = 5000;
 const INSTALL_COMMAND = 'npm i -g @constellationdev/cli';
 const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
 
+/** What a sign-in that stored a new key says, before the reload. */
+const CONNECTED = '✦ Constellation connected';
+const CONNECTED_NO_PROJECT = '✦ Constellation connected. Run constellation init in this repo to set it up';
+
 /** A failed sign-in's line where the CLI said nothing, or where no login `sh` reads its key back. */
 const AUTH_IN_TERMINAL = 'Run `constellation auth` in a terminal';
 
@@ -301,32 +305,30 @@ export async function readStoredKeyAtStart(
 	return { key, projectRoot: await projectRoot(cwd, ports.exists) };
 }
 
-/** Takes the band down and reloads the plugins on a timer, then says so unless `announce` is false. */
-function reloadPlugins(ports: OnboardingPorts, announce = true): void {
+/**
+ * Takes the band down, shows `toast` when given, and reloads the plugins on a
+ * timer. The reload unloads this module, so nothing is chained after it.
+ */
+function reloadPlugins(ports: OnboardingPorts, toast?: string): void {
 	state = undefined;
 	detail = undefined;
 	buffer = '';
 	ports.invalidate();
+	if (toast !== undefined) ports.toast(toast);
 	// `$.command.run` is refused inside a hook the turn waits on, so it always goes through the timer.
 	ports.after(0, () => {
-		ports
-			.reload()
-			.then(() => {
-				if (announce) ports.toast('✦ Constellation connected');
-			})
-			.catch(() => undefined);
+		ports.reload().catch(() => undefined);
 	});
 }
 
 /**
- * Sets `key` for the session, then reloads the plugins so the MCP server
- * starts with it, and says so after unless `announce` is false. A reload
- * unloads the module and kills a running child, so call it once a CLI run has
- * ended (`endTask`).
+ * Sets `key` for the session, shows `toast`, then reloads the plugins so the
+ * MCP server starts with the key. A reload unloads the module and kills a
+ * running child, so call it once a CLI run has ended (`endTask`).
  */
-export async function connect(key: string, ports: OnboardingPorts, announce = true): Promise<void> {
+export async function connect(key: string, ports: OnboardingPorts, toast: string): Promise<void> {
 	await ports.envSet(key);
-	reloadPlugins(ports, announce);
+	reloadPlugins(ports, toast);
 }
 
 /**
@@ -344,6 +346,7 @@ export async function checkConnection(root: string | null, ports: OnboardingPort
 		const envelope = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		const code = envelope.error?.code;
 		if (code === 'AUTH_ERROR') {
+			// No toast: nothing is known to work. The agent's next AUTH_ERROR says sign in again.
 			// A sign-in already running connects when it ends; a reload now would kill its child.
 			if (running === undefined) reloadPlugins(ports);
 			return;
@@ -475,9 +478,7 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 		if (generation !== gen) return;
 		if (after !== undefined && after !== before) {
 			try {
-				// The reload wipes module state, so the init hint goes out before it.
-				if (root === null) ports.toast('✦ Constellation connected. Run constellation init in this repo to set it up');
-				await connect(after, ports, root !== null);
+				await connect(after, ports, root === null ? CONNECTED_NO_PROJECT : CONNECTED);
 				return;
 			} catch {
 				// The key could not be set: the sign-in failed.

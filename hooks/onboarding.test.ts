@@ -384,7 +384,7 @@ describe('checkConnection', () => {
 		expect(shown(tree)).toContain('Not set up for this project');
 	});
 
-	test('an AUTH_ERROR ping reloads the plugins only through after(0)', async () => {
+	test('an AUTH_ERROR ping reloads the plugins once, only through after(0), and says nothing', async () => {
 		const band = loadBand();
 		const { ports, seen, timers, fire } = fakePorts({ answer: mcpText(failed('AUTH_ERROR')) });
 		await checkConnection(REPO, ports);
@@ -393,7 +393,8 @@ describe('checkConnection', () => {
 		expect(timers).toHaveLength(1);
 		await fire();
 		expect(seen.reloads).toBe(1);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(timers).toHaveLength(0);
+		expect(seen.toasts).toEqual([]);
 		expect(await band.draw()).toBe(FALLTHROUGH);
 	});
 
@@ -426,13 +427,14 @@ describe('checkConnection', () => {
 });
 
 describe('connect', () => {
-	test('sets the key, takes the band down and reloads on a timer', async () => {
+	test('sets the key, takes the band down, toasts and then reloads on a timer', async () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const { ports, seen, timers, fire } = fakePorts();
-		await connect(KEY, ports);
+		await connect(KEY, ports, '✦ Constellation connected');
 		expect(seen.envSet.map(isKey)).toEqual([true]);
 		expect(await band.draw()).toBe(FALLTHROUGH);
+		expect(seen.toasts).toEqual(['✦ Constellation connected']);
 		expect(seen.reloads).toBe(0);
 		expect(timers).toHaveLength(1);
 		await fire();
@@ -1019,6 +1021,8 @@ describe('the Sign in button', () => {
 		expect(seen.reloads).toBe(0);
 		expect(timers).toHaveLength(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
+		// The toast goes out before the reload, which unloads the module.
+		expect(seen.toasts).toEqual(['✦ Constellation connected']);
 		await fire();
 		expect(seen.reloads).toBe(1);
 		expect(seen.toasts).toEqual(['✦ Constellation connected']);
