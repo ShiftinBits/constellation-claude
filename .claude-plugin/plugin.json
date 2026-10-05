@@ -22,6 +22,10 @@
 		"constellation"
 	],
 	"icon": "./assets/logo.png",
+	"documentationUrl": "https://docs.constellationdev.io/plugins/claude-code",
+	"supportUrl": "https://github.com/ShiftinBits/constellation-claude/issues",
+	"privacyPolicyUrl": "https://constellationdev.io/privacy",
+	"termsOfServiceUrl": "https://constellationdev.io/tos",
 	"userConfig": {
 		"nudgeLimit": {
 			"type": "number",
