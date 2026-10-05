@@ -1,4 +1,4 @@
-import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
+import type { ButtonProps, ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
 import type { Buckets, Stats } from './adoption';
 import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot, withinDeadline } from './lib';
@@ -6,7 +6,7 @@ import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
 import type { Hit } from './explore';
-import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
+import { byFile, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
 import { observeEnvelope, recheck, startTicks, track } from './freshness';
@@ -315,6 +315,11 @@ export function projectDetail(envelope: CodeIntelEnvelope | undefined): string {
 	if (files !== undefined) parts.push(`${files} files`);
 	return parts.length === 0 ? 'indexed' : parts.join(' · ');
 }
+
+/** The Unused tab's kind choices: the kinds an export usually has, of the categories `findOrphanedCode` filters by. */
+const UNUSED_KINDS: readonly string[] = ['function', 'class', 'interface', 'type', 'type_alias', 'variable', 'constant', 'enum', 'struct', 'trait', 'module', 'namespace'];
+/** The Unused kind choice that sends no filter. */
+const ALL_KINDS = 'all';
 
 /** The `findOrphanedCode` filter for the kind the command named, if any. */
 function unusedFilter(): { filterByKind?: string[] } {
@@ -736,6 +741,11 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
 		// Desktop has no monospace grid, so rows padded into columns do not line up there: it gets markdown tables.
 		const grid = e.surface !== 'desktop';
+		// The selected one of a row of tab-like buttons: `▸` in the terminal, Desktop's own primary button there.
+		// A checkbox: `[x]` in the terminal; on Desktop ballot boxes, the check forced to text (U+FE0E), not an emoji.
+		const check = (isChecked: boolean): string => (grid ? (isChecked ? '[x]' : '[ ]') : isChecked ? '\u2611\uFE0E' : '\u2610');
+		const choice = (isSelected: boolean, label: string): Pick<ButtonProps, 'label' | 'plain' | 'variant'> =>
+			grid ? { label: isSelected ? `▸ ${label}` : label, plain: true } : isSelected ? { label, variant: 'primary' } : { label, plain: true };
 		// A table of Boxes, each column a share of the width, so cells keep their colors and still line up without a
 		// monospace grid. Never markdown: the cells hold graph text, which a markdown parser would read as links.
 		const boxTable = (widths: readonly string[], rows: readonly { key?: string; cells: readonly RenderElement[] }[], head?: readonly string[]): RenderElement => {
@@ -781,6 +791,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		};
 		const summary = selected === 'stats' || envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
 
+		const picking = summary?.items.some((i) => i.project !== undefined) ?? false;
+
 		const body: RenderElement[] = [];
 		if (selected === 'deps') {
 			body.push(
@@ -792,13 +804,39 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					submitLabel: 'show',
 					onSubmit: (value) => showDeps(value.trim()),
 				}),
-				el.Button({
-					key: 'deps-toggle',
-					label: depsDirection === 'dependencies' ? 'Showing dependencies (switch to dependents)' : 'Showing dependents (switch to dependencies)',
-					plain: true,
-					onPress: () => {
-						depsDirection = depsDirection === 'dependencies' ? 'dependents' : 'dependencies';
+				el.Select({
+					key: 'deps-direction',
+					label: 'Show',
+					options: [
+						{ value: 'dependencies', label: 'Dependencies (what this file imports)' },
+						{ value: 'dependents', label: 'Dependents (what imports this file)' },
+					],
+					value: depsDirection,
+					onSelect: (value) => {
+						if (value !== 'dependencies' && value !== 'dependents') return;
+						if (value === depsDirection) return;
+						depsDirection = value;
 						drop('deps');
+						redraw();
+					},
+				}),
+			);
+		}
+		if (selected === 'unused' && !picking) {
+			body.push(
+				el.Select({
+					key: 'unused-kind',
+					label: 'Kind',
+					options: [
+						{ value: ALL_KINDS, label: 'All kinds' },
+						...[...UNUSED_KINDS, ...(unusedKind === undefined || UNUSED_KINDS.includes(unusedKind) ? [] : [unusedKind])].map((k) => ({ value: k, label: k })),
+					],
+					value: unusedKind ?? ALL_KINDS,
+					onSelect: (value) => {
+						const chosenKind = value === ALL_KINDS ? undefined : value;
+						if (chosenKind === unusedKind) return;
+						unusedKind = chosenKind;
+						drop('unused');
 						redraw();
 					},
 				}),
@@ -852,7 +890,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 								],
 							}),
 							// The list's keys sit here, not in the footer: a long list scrolls the footer out of view.
-							el.Text({ dimColor: true, children: `tab/shift+tab move · enter toggle${picked.size > 0 ? ' · h hand off' : ''}` }),
+							// Desktop shows each hotkey on its button and is used with a pointer, so the key hints are the terminal's.
+							...(grid ? [el.Text({ dimColor: true, children: `tab/shift+tab move · enter toggle${picked.size > 0 ? ' · h hand off' : ''}` })] : []),
 							...(handoffNote === undefined ? [] : [el.Text({ dimColor: true, children: handoffNote })]),
 						],
 					}),
@@ -861,9 +900,32 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					const ids = rows.map((r) => r.symbolId);
 					const all = ids.every((id) => picked.has(id));
 					body.push(
-						el.Button({ key: `orphan-file:${file}`, label: `${all ? '[x]' : '[ ]'} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
+						el.Button({ key: `orphan-file:${file}`, label: `${check(all)} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
 						...rows.map((row) =>
-							el.Box({
+							// The file is the header above, so a row names only its line. Desktop: the name is part of the
+							// checkbox, so it is a larger target, and the columns are shares of the width.
+							!grid
+								? el.Box({
+										key: `row:${row.symbolId}`,
+										flexDirection: 'row',
+										paddingLeft: 2,
+										children: [
+											el.Box({
+												width: '50%',
+												children: [
+													el.Button({
+														key: `orphan:${row.symbolId}`,
+														label: `${check(picked.has(row.symbolId))} ${row.name}`,
+														plain: true,
+														onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
+													}),
+												],
+											}),
+											el.Box({ width: '25%', children: [badge(el, '', forTheme(kind(row.kind), tint))] }),
+											el.Box({ width: '25%', children: row.lineEnd === undefined ? [] : [el.Text({ dimColor: true, children: `line ${row.lineEnd}` })] }),
+										],
+									})
+								: el.Box({
 								key: `row:${row.symbolId}`,
 								flexDirection: 'row',
 								columnGap: 1,
@@ -872,14 +934,14 @@ export function registerCommand(on: On, options: PluginOptions): void {
 									fixed([
 										el.Button({
 											key: `orphan:${row.symbolId}`,
-											label: picked.has(row.symbolId) ? '[x]' : '[ ]',
+											label: check(picked.has(row.symbolId)),
 											plain: true,
 											onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
 										}),
 										el.Text({ children: row.name }),
 										badge(el, '', forTheme(kind(row.kind), tint)),
 									]),
-									place(location(row)),
+									...(row.lineEnd === undefined ? [] : [el.Text({ dimColor: true, children: `line ${row.lineEnd}` })]),
 								],
 							}),
 						),
@@ -1040,8 +1102,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 								children: sections.map(([name, label]) =>
 									el.Button({
 										key: `section-${name}`,
-										label: name === section ? `▸ ${label}` : label,
-										plain: true,
+										...choice(name === section, label),
 										onPress: () => {
 											section = name;
 											redraw();
@@ -1183,7 +1244,6 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const meta = metadata(envelope);
 		// Until a project is picked every tab would ask the same question, so the
 		// picker hides the tabs and Refresh.
-		const picking = summary?.items.some((i) => i.project !== undefined) ?? false;
 		const canSwitch = !picking && launchCwd !== undefined && sessionCwd !== undefined && sessionCwd !== launchCwd;
 		const project = picking ? undefined : projectName(sessionCwd);
 		const close = {
@@ -1200,9 +1260,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const tabs = TABS.map((tab, index) =>
 			el.Button({
 				key: `tab-${tab}`,
-				label: tab === selected ? `▸ ${TAB_LABEL[tab]}` : TAB_LABEL[tab],
+				...choice(tab === selected, TAB_LABEL[tab]),
 				hotkey: String(index + 1),
-				plain: true,
 				onPress: () => {
 					selected = tab;
 					redraw();
@@ -1334,7 +1393,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 										redraw();
 									},
 								}),
-						el.Text({ dimColor: true, children: keys }),
+						...(grid ? [el.Text({ dimColor: true, children: keys })] : []),
 					],
 				}),
 			],

@@ -247,6 +247,26 @@ async function reads(ui: Awaited<ReturnType<typeof mountPane>>, pattern: RegExp)
 	return (await ui.find({ type: 'Text', text: pattern })) !== undefined;
 }
 
+/**
+ * Checks the dim line naming the keys: the terminal draws it; Desktop shows each hotkey on its button and is used
+ * with a pointer, so it draws no key line at all.
+ */
+async function expectKeys(ui: Awaited<ReturnType<typeof mountPane>>, surface: (typeof SURFACES)[number], pattern: RegExp): Promise<void> {
+	if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: pattern })).toBeDefined();
+	else expect(await ui.find({ type: 'Text', text: /switch tabs|esc close/ })).toBeUndefined();
+}
+
+/** A checkbox as drawn: `[x]` and `[ ]` in the terminal, ballot boxes on Desktop (the check forced to text, not emoji). */
+function box(surface: (typeof SURFACES)[number], isChecked: boolean): string {
+	if (surface === 'terminal') return isChecked ? '[x]' : '[ ]';
+	return isChecked ? '\u2611\uFE0E' : '\u2610';
+}
+
+/** How the selected one of a row of tab-like buttons is drawn: `▸` in the terminal, Desktop's primary button there. */
+function selectedProps(surface: (typeof SURFACES)[number], label: string): Record<string, unknown> {
+	return surface === 'terminal' ? { label: `▸ ${label}`, plain: true } : { label, variant: 'primary' };
+}
+
 /** The text of every Markdown element the pane drew: on Desktop only the rule, since graph text never goes through markdown. */
 async function markdownText(ui: Awaited<ReturnType<typeof mountPane>>): Promise<string> {
 	return (await ui.findAll({ type: 'Markdown' })).map((m) => String(m.props['text'])).join('\n');
@@ -471,7 +491,7 @@ describe('the pane', () => {
 			else expect(String((await ui.find({ type: 'Svg' }))?.props['source'])).toContain(palette.galactic);
 			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
-			expect(await ui.find({ type: 'Text', text: /1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
+			await expectKeys(ui, surface, /1-6 switch tabs · r refresh · esc close/);
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /✓ ok/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
@@ -505,7 +525,7 @@ describe('the pane', () => {
 			await run($, 'unused');
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[ ] src/util.ts' } });
+			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: `${box(surface, false)} src/util.ts` } });
 			expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
 			expect(await ui.find({ type: 'Button', key: 'orphan:b' })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /• function/ })).toBeDefined();
@@ -539,7 +559,8 @@ describe('the pane', () => {
 				await ui.press({ key: 'orphan:a' });
 				await settle();
 				expect(await reads(ui, /^1 selected$/)).toBe(true);
-				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: '[x]' } });
+				// Desktop puts the name in the checkbox, a larger target than the box alone.
+				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: surface === 'terminal' ? '[x]' : `${box(surface, true)} helper` } });
 				await ui.press({ key: 'orphan:a' });
 				await settle();
 				expect(await reads(ui, /^0 selected$/)).toBe(true);
@@ -548,19 +569,23 @@ describe('the pane', () => {
 			test(`the list's keys sit by the count, where a long list keeps them in view, and the hand-off joins them once something is checked, on ${surface}`, async ($, on) => {
 				world(on, { surfaces: [surface] });
 				const ui = await openUnused($, surface);
-				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle$/ })).toBeDefined();
-				expect(await ui.find({ type: 'Text', text: /^1-6 switch tabs · r refresh · esc close$/ })).toBeDefined();
+				const listKeys = async (pattern: RegExp) => {
+					if (surface === 'terminal') expect(await ui.find({ type: 'Text', text: pattern })).toBeDefined();
+					else expect(await ui.find({ type: 'Text', text: /tab\/shift\+tab/ })).toBeUndefined();
+				};
+				await listKeys(/^tab\/shift\+tab move · enter toggle$/);
+				await expectKeys(ui, surface, /^1-6 switch tabs · r refresh · esc close$/);
 				await ui.press({ key: 'orphan:a' });
 				await settle();
-				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle · h hand off$/ })).toBeDefined();
+				await listKeys(/^tab\/shift\+tab move · enter toggle · h hand off$/);
 			});
 
-			test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
-				world(on, { surfaces: [surface] });
+			test(`a row names only its line under the file header, never the path again, on ${surface}`, async ($, on) => {
+				world(on, { surfaces: [surface], answer: () => success(UNUSED_MORE) });
 				const ui = await openUnused($, surface);
-				const locations = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && String(t.children[0]).startsWith('src/util.ts'));
-				expect(locations.length).toBeGreaterThan(0);
-				for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
+				const repeated = (await ui.findAll({ type: 'Text' })).filter((t) => t.text.includes('src/more.ts'));
+				expect(repeated).toEqual([]);
+				expect(await reads(ui, /^line 9$/)).toBe(true);
 			});
 
 			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
@@ -569,7 +594,7 @@ describe('the pane', () => {
 				await ui.press({ key: 'orphan-file:src/util.ts' });
 				await settle();
 				expect(await reads(ui, /^2 selected$/)).toBe(true);
-				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[x] src/util.ts' } });
+				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: `${box(surface, true)} src/util.ts` } });
 				await ui.press({ key: 'orphan-file:src/util.ts' });
 				await settle();
 				expect(await reads(ui, /^0 selected$/)).toBe(true);
@@ -595,7 +620,7 @@ describe('the pane', () => {
 				await settle();
 				expect(codes.at(-1)).toBe(orphanCode({ limit: 50, offset: 50 }));
 				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
-				expect(await reads(ui, /src\/more\.ts:9/)).toBe(true);
+				expect(await reads(ui, /^line 9$/)).toBe(true);
 				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
 			});
 
@@ -703,6 +728,29 @@ describe('the pane', () => {
 			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
 		});
 
+		for (const surface of SURFACES) {
+			test(`the kind picker filters the query, and All kinds sends none, on ${surface}`, async ($, on) => {
+				const { codes } = world(on, { surfaces: [surface] });
+				const ui = await openUnused($, surface);
+				expect(await ui.find({ type: 'Select', key: 'unused-kind' })).toMatchObject({ props: { value: 'all' } });
+				await ui.select({ key: 'unused-kind', value: 'class' });
+				await settle();
+				expect(codes.at(-1)).toBe(orphanCode({ filterByKind: ['class'] }));
+				expect(await ui.find({ type: 'Select', key: 'unused-kind' })).toMatchObject({ props: { value: 'class' } });
+				await ui.select({ key: 'unused-kind', value: 'all' });
+				await settle();
+				expect(codes.at(-1)).toBe(orphanCode({}));
+			});
+		}
+
+		test('a kind named on the command line that the picker does not list is offered and selected', async ($, on) => {
+			world(on);
+			const ui = await openUnused($, 'terminal', 'unused method');
+			const picker = await ui.find({ type: 'Select', key: 'unused-kind' });
+			expect(picker?.props['value']).toBe('method');
+			expect((picker?.props['options'] as { value: string }[]).map((o) => o.value)).toContain('method');
+		});
+
 		test('the kind reaches the query from both argument forms', async ($, on) => {
 			const { codes } = world(on);
 			const first = await openUnused($, 'terminal', 'unused function');
@@ -781,7 +829,7 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
-	test('an answer that lands after the deps direction toggled is discarded', async ($, on) => {
+	test('an answer that lands after the deps direction changed is discarded', async ($, on) => {
 		let calls = 0;
 		let release: (value: McpToolResult) => void = () => {};
 		const gate = new Promise<McpToolResult>((resolve) => {
@@ -791,7 +839,7 @@ describe('the pane', () => {
 		await run($, 'deps src/app.ts');
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		await ui.press({ key: 'deps-toggle' });
+		await ui.select({ key: 'deps-direction', value: 'dependents' });
 		await settle();
 		release(success(DEPS));
 		await settle();
@@ -919,12 +967,12 @@ describe('the pane', () => {
 		expect(codes).toHaveLength(2);
 	});
 
-	test('the toggle switches deps between dependencies and dependents', async ($, on) => {
+	test('the direction picker switches deps between dependencies and dependents', async ($, on) => {
 		const { codes } = world(on);
 		await run($, 'deps src/app.ts');
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		await ui.press({ key: 'deps-toggle' });
+		await ui.select({ key: 'deps-direction', value: 'dependents' });
 		await settle();
 		expect(codes.at(-1)).toContain('getDependents');
 		expect(await ui.find({ type: 'Button', key: 'dep:src/main.ts' })).toBeDefined();
@@ -1210,7 +1258,7 @@ describe('the symbol explorer', () => {
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toMatchObject({ props: { value: 'Graph' } });
 			const keys = (await ui.findAll({ type: 'Button' })).map((b) => b.key).filter((k) => k?.startsWith('hit:'));
 			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3', 'hit:s4']);
-			expect(await ui.find({ type: 'Text', text: /esc leaves the search field · 1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
+			await expectKeys(ui, surface, /esc leaves the search field · 1-6 switch tabs · r refresh · esc close/);
 			expect(await ui.find({ type: 'Text', text: /as of 0123456/ })).toBeDefined();
 		});
 
@@ -1232,7 +1280,7 @@ describe('the symbol explorer', () => {
 				expect(await reads(ui, /^Exported: yes$/)).toBe(true);
 			}
 			expect(await reads(ui, /results for Graph/)).toBe(true);
-			expect(await ui.find({ type: 'Text', text: /b back · 1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
+			await expectKeys(ui, surface, /b back · 1-6 switch tabs · r refresh · esc close/);
 		});
 
 		test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
@@ -1270,7 +1318,7 @@ describe('the symbol explorer', () => {
 			}
 			else expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
-			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: { label: '▸ Usages' } });
+			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: selectedProps(surface, 'Usages') });
 
 			await ui.press({ key: 'section-impact' });
 			await settle();
@@ -1415,7 +1463,7 @@ describe('the stats tab', () => {
 			const ui = await mountPane($, surface);
 			await settle();
 
-			expect((await ui.findAll({ type: 'Button' })).map((b) => String(b.props['label']))).toContain('▸ Stats');
+			expect(await ui.find({ type: 'Button', key: 'tab-stats' })).toMatchObject({ props: selectedProps(surface, 'Stats') });
 			if (surface === 'desktop') {
 				// No monospace grid on Desktop: a table under a head of words, the session's split as rows of its own.
 				// A row's text is its cells run together, in column order.
@@ -1444,7 +1492,7 @@ describe('the stats tab', () => {
 				expect(await row('Last 30 days')).toContain('53%');
 			}
 			expect(await reads(ui, /^Structural lookups: code_intel calls out of/)).toBe(true);
-			expect(await reads(ui, /^1-6 switch tabs · r refresh · esc close$/)).toBe(true);
+			await expectKeys(ui, surface, /^1-6 switch tabs · r refresh · esc close$/);
 			expect(store.has(dayKey(daysBack(31), 'session-a'))).toBe(false);
 			expect(store.has(dayKey(daysBack(30), 'session-a'))).toBe(false);
 			expect(store.has(dayKey(daysBack(29), 'session-a'))).toBe(true);
