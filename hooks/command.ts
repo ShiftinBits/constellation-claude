@@ -543,6 +543,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const ports: OnboardingPorts = {
 			run: (argv, init) => $.process.run(argv, init),
 			exists: (p) => $.fs.exists(p),
+			read: (p) => $.fs.read(p),
 			envSet: (key) => $.env.set('CONSTELLATION_ACCESS_KEY', key),
 			after: (ms, fn) => {
 				$.clock.after(ms, fn);
@@ -556,21 +557,22 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			},
 		};
 		// A key the CLI stored is set before the session goes on, so the MCP server can start with it.
+		// A `-p` or SDK run skips the read-back: no one is at the prompt, and a login shell can take seconds.
 		let found: FoundKey | undefined;
 		try {
-			if (isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) {
-				await rememberRepo(e.cwd, ports.exists);
-			} else {
+			if (e.isInteractive && !isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) {
 				found = await readStoredKeyAtStart(e.cwd, ports);
 				if (found !== undefined) await ports.envSet(found.key);
+			} else {
+				await rememberRepo(e.cwd, ports.exists);
 			}
 		} catch {
 			// The onboarding never fails the session or skips the registration.
 			found = undefined;
 		}
 		const r = await next(e);
-		if (found !== undefined) {
-			const root = found.projectRoot;
+		const root = found?.projectRoot;
+		if (typeof root === 'string') {
 			try {
 				// Never await code_intel in session.start: the ping runs on a timer.
 				$.clock.after(0, () => void checkConnection(root, ports));

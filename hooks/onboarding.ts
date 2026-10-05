@@ -9,7 +9,7 @@ import type {
 	ProcessSpawnRequest,
 	RenderElement,
 } from 'claude-code';
-import { canDraw, codeIntel, gitRoot, parseToolText, projectRoot } from './lib';
+import { canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
@@ -56,8 +56,6 @@ export type OnboardingFacts = {
 	code?: string;
 	/** The project roots `CWD_NOT_INDEXED` found under the git root. */
 	candidates?: readonly string[];
-	/** False when no `constellation.json` sits at or above the working directory. */
-	hasProject?: boolean;
 	/** The CLI's own output said the project is not registered. */
 	notRegistered?: boolean;
 	/** `constellation auth` or `constellation index` is running. */
@@ -68,7 +66,7 @@ export type OnboardingFacts = {
 export function onboardingState(facts: OnboardingFacts): OnboardingState | undefined {
 	if (!facts.configured && facts.stored !== true) return 'not-set-up';
 	if (facts.code === 'AUTH_ERROR') return 'sign-in-again';
-	if (facts.hasProject === false || (facts.code === 'CWD_NOT_INDEXED' && (facts.candidates ?? []).length === 0)) return 'no-project';
+	if (facts.code === 'CWD_NOT_INDEXED' && (facts.candidates ?? []).length === 0) return 'no-project';
 	if (facts.code === 'PROJECT_NOT_REGISTERED' || facts.notRegistered === true) return 'not-registered';
 	if (facts.code === 'PROJECT_NOT_INDEXED') return 'not-indexed';
 	if (facts.running === true) return 'working';
@@ -136,6 +134,8 @@ export type Run = (argv: readonly string[], init: ProcessRunInit) => Promise<Pic
 export type OnboardingPorts = {
 	run: Run;
 	exists: (path: string) => Promise<boolean>;
+	/** Reads a file's text, as `$.fs.read`. */
+	read: (path: string) => Promise<string>;
 	/** Sets `CONSTELLATION_ACCESS_KEY` for the session and what it starts. */
 	envSet: (key: string) => Promise<void>;
 	after: (ms: number, fn: () => void) => void;
@@ -290,7 +290,8 @@ export type FoundKey = { key: string; projectRoot: string | null };
 /**
  * At session start with no key set: outside a git repository nothing runs. In
  * one, the stored key is read back; with none the band says not set up, else
- * the key and the project root (null without a `constellation.json`) return.
+ * the key and the project root (null without a `constellation.json`, which
+ * then gets no ping) return.
  */
 export async function readStoredKeyAtStart(
 	cwd: string,
@@ -331,18 +332,36 @@ export async function connect(key: string, ports: OnboardingPorts, toast: string
 	reloadPlugins(ports, toast);
 }
 
+/** The API a `constellation.json` with no `apiUrl` reaches. */
+const DEFAULT_API = 'https://api.constellationdev.io';
+
 /**
- * After a stored key was set at session start: with no project the band says
- * so; else a ping decides. `AUTH_ERROR` means the server started before the
- * key was set, so the plugins reload; `PROJECT_NOT_INDEXED` (also sent for an
- * unregistered project) puts up the index button. Never rejects.
+ * True when the `constellation.json` in `root` leaves the API at the default
+ * (the MCP server sends the access key to the one it names, and takes any
+ * falsy `apiUrl` as the default). A file that cannot be read or parsed counts
+ * as naming another.
  */
-export async function checkConnection(root: string | null, ports: OnboardingPorts): Promise<void> {
+export async function usesDefaultApi(root: string, read: (path: string) => Promise<string>): Promise<boolean> {
 	try {
-		if (root === null) {
-			apply(onboardingState({ configured: true, hasProject: false }), ports);
-			return;
-		}
+		const config: unknown = JSON.parse(await read(`${root.replace(/\/$/, '')}/constellation.json`));
+		if (!isRecord(config)) return false;
+		return !config.apiUrl || (typeof config.apiUrl === 'string' && config.apiUrl.replace(/\/+$/, '') === DEFAULT_API);
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * After a stored key was set at session start, in the project at `root`: a
+ * ping decides, unless the project's `constellation.json` names an API other
+ * than the default, which a repository chooses, so it is not pinged unasked.
+ * `AUTH_ERROR` means the server started before the key was set, so the
+ * plugins reload; `PROJECT_NOT_INDEXED` (also sent for an unregistered
+ * project) puts up the index button. Never rejects.
+ */
+export async function checkConnection(root: string, ports: OnboardingPorts): Promise<void> {
+	try {
+		if (!(await usesDefaultApi(root, ports.read))) return;
 		const envelope = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		const code = envelope.error?.code;
 		if (code === 'AUTH_ERROR') {
@@ -537,6 +556,7 @@ function portsOf($: EngineInterface): ButtonPorts {
 		cwd: () => $.session.cwd(),
 		run: (argv, init) => $.process.run(argv, init),
 		exists: (p) => $.fs.exists(p),
+		read: (p) => $.fs.read(p),
 		envSet: (key) => $.env.set('CONSTELLATION_ACCESS_KEY', key),
 		after: (ms, fn) => {
 			$.clock.after(ms, fn);

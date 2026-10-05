@@ -83,12 +83,17 @@ const buttons = (tree: unknown) => nodes(tree).filter((n) => n.type === 'Button'
 const keys = (tree: unknown) => buttons(tree).map((b) => b.props['key']);
 
 /** Records what the ports were asked to do. */
-function fakePorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: string) => boolean } = {}) {
-	const seen = { envSet: [] as string[], reloads: 0, toasts: [] as string[], logs: [] as string[], invalidations: 0, pings: [] as string[] };
+function fakePorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: string) => boolean; config?: string } = {}) {
+	const seen = { envSet: [] as string[], reloads: 0, toasts: [] as string[], logs: [] as string[], invalidations: 0, pings: [] as string[], reads: [] as string[] };
 	const timers: (() => void)[] = [];
 	const ports: OnboardingPorts = {
 		run: world.run ?? (async () => ({ exitCode: 0, stdout: '' })),
 		exists: async (p) => (world.exists ?? ((path: string) => path === `${REPO}/.git` || path === `${REPO}/constellation.json`))(p),
+		read: async (p) => {
+			seen.reads.push(p);
+			if (p !== `${REPO}/constellation.json`) throw new Error(`no file ${p}`);
+			return world.config ?? JSON.stringify({ projectId: 'p', branch: 'main' });
+		},
 		envSet: async (key) => {
 			seen.envSet.push(key);
 		},
@@ -252,7 +257,6 @@ describe('onboardingState', () => {
 	test('each row on its own', () => {
 		expect(onboardingState({ configured: false })).toBe('not-set-up');
 		expect(onboardingState({ configured: true, code: 'AUTH_ERROR' })).toBe('sign-in-again');
-		expect(onboardingState({ configured: true, hasProject: false })).toBe('no-project');
 		expect(onboardingState({ configured: true, code: 'CWD_NOT_INDEXED' })).toBe('no-project');
 		expect(onboardingState({ configured: true, code: 'CWD_NOT_INDEXED', candidates: [] })).toBe('no-project');
 		expect(onboardingState({ configured: true, code: 'PROJECT_NOT_REGISTERED' })).toBe('not-registered');
@@ -263,11 +267,11 @@ describe('onboardingState', () => {
 	});
 
 	test('the first row that holds wins', () => {
-		const all = { code: 'AUTH_ERROR', hasProject: false, notRegistered: true, running: true } as const;
+		const all = { code: 'AUTH_ERROR', notRegistered: true, running: true } as const;
 		expect(onboardingState({ configured: false, ...all })).toBe('not-set-up');
 		expect(onboardingState({ configured: true, ...all })).toBe('sign-in-again');
-		expect(onboardingState({ configured: true, ...all, code: 'PROJECT_NOT_INDEXED' })).toBe('no-project');
-		expect(onboardingState({ configured: true, ...all, code: 'PROJECT_NOT_INDEXED', hasProject: true })).toBe('not-registered');
+		expect(onboardingState({ configured: true, ...all, code: 'CWD_NOT_INDEXED' })).toBe('no-project');
+		expect(onboardingState({ configured: true, ...all, code: 'PROJECT_NOT_INDEXED' })).toBe('not-registered');
 		expect(onboardingState({ configured: true, code: 'PROJECT_NOT_INDEXED', running: true })).toBe('not-indexed');
 	});
 
@@ -374,14 +378,41 @@ describe('readStoredKeyAtStart', () => {
 });
 
 describe('checkConnection', () => {
-	test('a null project root puts up no project, with no ping', async () => {
-		const band = loadBand();
-		const { ports, seen } = fakePorts();
-		await checkConnection(null, ports);
-		expect(seen.pings).toEqual([]);
-		expect(seen.invalidations).toBe(1);
-		const tree = await band.draw();
-		expect(shown(tree)).toContain('Not set up for this project');
+	test("reads the project's constellation.json, and pings with no apiUrl or the default one", async () => {
+		for (const config of [
+			JSON.stringify({ projectId: 'p' }),
+			JSON.stringify({ projectId: 'p', apiUrl: '' }),
+			JSON.stringify({ projectId: 'p', apiUrl: 'https://api.constellationdev.io' }),
+			JSON.stringify({ projectId: 'p', apiUrl: 'https://api.constellationdev.io/' }),
+		]) {
+			loadBand();
+			const { ports, seen } = fakePorts({ config });
+			await checkConnection(REPO, ports);
+			expect(seen.reads).toEqual([`${REPO}/constellation.json`]);
+			expect(seen.pings).toEqual(['return await api.ping()']);
+		}
+	});
+
+	test('an apiUrl other than the default, or a file that cannot be read as an object, is never pinged', async () => {
+		for (const config of [
+			JSON.stringify({ projectId: 'p', apiUrl: 'https://collector.example.com' }),
+			JSON.stringify({ projectId: 'p', apiUrl: 'http://api.constellationdev.io' }),
+			JSON.stringify({ projectId: 'p', apiUrl: 'https://api.constellationdev.io.example.com' }),
+			JSON.stringify({ projectId: 'p', apiUrl: 42 }),
+			'{ not json',
+			'[]',
+		]) {
+			const band = loadBand();
+			const { ports, seen, timers } = fakePorts({ config, answer: mcpText(failed('AUTH_ERROR')) });
+			await checkConnection(REPO, ports);
+			expect(seen.pings).toEqual([]);
+			expect(timers).toHaveLength(0);
+			expect(await band.draw()).toBe(FALLTHROUGH);
+		}
+		loadBand();
+		const unreadable = fakePorts();
+		await checkConnection('/work/elsewhere', unreadable.ports);
+		expect(unreadable.seen.pings).toEqual([]);
 	});
 
 	test('an AUTH_ERROR ping reloads the plugins once, only through after(0), and says nothing', async () => {
@@ -683,7 +714,7 @@ describe('the band above the prompt', () => {
 				['onboarding-dismiss', 'onboarding-sign-in'],
 			],
 			[() => observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined), 'Constellation sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
-			[() => checkConnection(null, fakePorts().ports), 'Not set up for this project', ['onboarding-dismiss']],
+			[() => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined), 'Not set up for this project', ['onboarding-dismiss']],
 			[
 				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 				"This project isn't registered with Constellation",
@@ -814,9 +845,13 @@ describe('the band as a loaded plugin', () => {
 			expect(logs).toEqual(['>_CONSTELLATION:// sign-in failed: run constellation auth']);
 		});
 
-		test(`on ${surfaces.join() || 'no surface'} a session start with no key logs one line`, async ($, on) => {
+		test(`on ${surfaces.join() || 'no surface'} a session with no key logs nothing at start, then one line for the agent's AUTH_ERROR`, async ($, on) => {
 			const { logs } = world(on, { surfaces, signedIn: false });
 			await $.session.start({ cwd: REPO, surface: null, isInteractive: false });
+			await settle();
+			expect(logs).toEqual([]);
+			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
+			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
 			expect(logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
 		});
@@ -1302,7 +1337,7 @@ describe('the Index button', () => {
 describe('states with no button', () => {
 	test('no project and not registered offer only Dismiss, and nothing spawns', async () => {
 		for (const put of [
-			() => checkConnection(null, fakePorts().ports),
+			async () => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined),
 			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 		]) {
 			const { world, spawns } = buttonWorld(host().run);
@@ -1378,7 +1413,7 @@ describe('the key stays out of what is shown', () => {
 		const found = await readStoredKeyAtStart(REPO, ports);
 		if (found === undefined) throw new Error('no key found');
 		await ports.envSet(found.key);
-		await checkConnection(found.projectRoot, ports);
+		await checkConnection(found.projectRoot ?? REPO, ports);
 		await fire();
 		const drawn: string[] = [];
 		for (const code of ['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'PROJECT_NOT_REGISTERED', 'CWD_NOT_INDEXED']) {

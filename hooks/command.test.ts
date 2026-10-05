@@ -1342,15 +1342,30 @@ describe('registration', () => {
 		expect(setValue === STORED_KEY).toBe(true);
 	});
 
-	test('the ping scheduled after a stored key is set runs on the timer and can put up the band', async ($, on) => {
+	/**
+	 * A session start in /work/app, a git repository, whose login shell reads
+	 * back a stored key. `project: false` leaves out constellation.json, and
+	 * `config` is its text. Each code_intel call answers PROJECT_NOT_INDEXED.
+	 */
+	function storedKeyWorld(on: On, { project = true, config = JSON.stringify({ projectId: 'p' }) }: { project?: boolean; config?: string } = {}) {
 		mock.env(on, {});
 		const clock = mock.clock(on);
 		const codes: string[] = [];
-		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/.git' || e.path === '/work/app/constellation.json' }));
-		on('process.run', () => ({
-			value: { exitCode: 0, stdout: `${STORED_KEY}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-		}));
-		on('env.set', () => ({ value: undefined }));
+		const runs: string[] = [];
+		const set: (string | undefined)[] = [];
+		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/.git' || (project && e.path === '/work/app/constellation.json') }));
+		on('fs.read', (_, e) => {
+			if (!project || e.path !== '/work/app/constellation.json') throw new Error(`no such file ${e.path}`);
+			return { value: config };
+		});
+		on('process.run', (_, e) => {
+			runs.push(e.argv.join(' '));
+			return { value: { exitCode: 0, stdout: `${STORED_KEY}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
+		});
+		on('env.set', (_, e) => {
+			set.push(e.value);
+			return { value: undefined };
+		});
 		on('session.start', (_, e) => ({ cwd: e.cwd }));
 		on('session.surfaces', () => ({ value: ['terminal'] }));
 		on('command.register', (_, e) => ({ value: { command: e.name } }));
@@ -1360,18 +1375,48 @@ describe('registration', () => {
 			return { value: failure('PROJECT_NOT_INDEXED', 'Project not indexed') };
 		});
 		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
+		return { clock, codes, runs, keySet: () => set.length === 1 && set[0] === STORED_KEY };
+	}
+
+	const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} };
+
+	test('the ping scheduled after a stored key is set runs on the timer and can put up the band', async ($, on) => {
+		const { clock, codes } = storedKeyWorld(on);
 		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
 		expect(codes).toEqual([]);
 		await clock.advance(0);
 		expect(codes).toEqual(['return await api.ping()']);
-		const ui = await $.ui.mount({
-			plugin: 'constellation',
-			surface: 'terminal',
-			component: 'AbovePrompt',
-			props: { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} },
-		});
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
 		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
 		expect(await ui.find({ type: 'Button', key: 'onboarding-index' })).toBeDefined();
+	});
+
+	test('with no constellation.json the stored key is set, nothing is pinged and the band stays down', async ($, on) => {
+		const { clock, codes, keySet } = storedKeyWorld(on, { project: false });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		expect(keySet()).toBe(true);
+		expect(codes).toEqual([]);
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
+		expect(await ui.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
+	});
+
+	test('a constellation.json that names another API is not pinged, so the key goes nowhere unasked', async ($, on) => {
+		const { clock, codes, keySet } = storedKeyWorld(on, { config: JSON.stringify({ projectId: 'p', apiUrl: 'https://collector.example.com' }) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		expect(keySet()).toBe(true);
+		expect(codes).toEqual([]);
+	});
+
+	test('a session with no one at the prompt reads no key back and pings nothing', async ($, on) => {
+		const { clock, codes, runs, keySet } = storedKeyWorld(on);
+		const r = await $.session.start({ cwd: '/work/app', surface: null, isInteractive: false });
+		await clock.advance(0);
+		expect(r).toEqual({ cwd: '/work/app' });
+		expect(runs).toEqual([]);
+		expect(keySet()).toBe(false);
+		expect(codes).toEqual([]);
 	});
 
 	test('an onboarding failure still registers the command and returns the cwd', async ($, on) => {
