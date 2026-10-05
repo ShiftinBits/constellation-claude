@@ -1353,7 +1353,7 @@ describe('registration', () => {
 		const codes: string[] = [];
 		const runs: string[] = [];
 		const set: (string | undefined)[] = [];
-		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/.git' || (project && e.path === '/work/app/constellation.json') }));
+		on('fs.exists', (_, e) => ({ value: e.path === '/bin/sh' || e.path === '/work/app/.git' || (project && e.path === '/work/app/constellation.json') }));
 		on('fs.read', (_, e) => {
 			if (!project || e.path !== '/work/app/constellation.json') throw new Error(`no such file ${e.path}`);
 			return { value: config };

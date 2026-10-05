@@ -14,6 +14,7 @@ import {
 	NOT_REGISTERED_OUTPUT,
 	band,
 	checkConnection,
+	CLI_LOOKUP,
 	cliPath,
 	connect,
 	endTask,
@@ -22,6 +23,7 @@ import {
 	observeCodeIntel,
 	onboardingState,
 	parseCliPath,
+	parseShellPath,
 	parseStoredKey,
 	readStoredKeyAtStart,
 	registerOnboarding,
@@ -82,13 +84,13 @@ function shown(tree: unknown): string {
 const buttons = (tree: unknown) => nodes(tree).filter((n) => n.type === 'Button');
 const keys = (tree: unknown) => buttons(tree).map((b) => b.props['key']);
 
-/** Records what the ports were asked to do. */
+/** Records what the ports were asked to do, on a host that has `/bin/sh`. */
 function fakePorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: string) => boolean; config?: string } = {}) {
 	const seen = { envSet: [] as string[], reloads: 0, toasts: [] as string[], logs: [] as string[], invalidations: 0, pings: [] as string[], reads: [] as string[] };
 	const timers: (() => void)[] = [];
 	const ports: OnboardingPorts = {
 		run: world.run ?? (async () => ({ exitCode: 0, stdout: '' })),
-		exists: async (p) => (world.exists ?? ((path: string) => path === `${REPO}/.git` || path === `${REPO}/constellation.json`))(p),
+		exists: async (p) => p === '/bin/sh' || (world.exists ?? ((path: string) => path === `${REPO}/.git` || path === `${REPO}/constellation.json`))(p),
 		read: async (p) => {
 			seen.reads.push(p);
 			if (p !== `${REPO}/constellation.json`) throw new Error(`no file ${p}`);
@@ -149,6 +151,7 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[] };
 	const flags = { storeDown: false };
 	const $ = {
+		fs: { exists: async (p: string) => p === '/bin/sh' },
 		...world,
 		ui: {
 			resolve: () => EL,
@@ -216,7 +219,7 @@ describe('output helpers', () => {
 	test('parseCliPath takes the last absolute path', () => {
 		expect(parseCliPath('profile noise\n/usr/local/bin/constellation\n')).toBe('/usr/local/bin/constellation');
 		expect(parseCliPath('/old/constellation\n/new/constellation\nbye\n')).toBe('/new/constellation');
-		expect(parseCliPath('C:\\Users\\me\\AppData\\Roaming\\npm\\constellation.cmd\r\n')).toBe('C:\\Users\\me\\AppData\\Roaming\\npm\\constellation.cmd');
+		expect(parseCliPath('C:\\Users\\me\\AppData\\Roaming\\npm\\constellation.cmd\r\n')).toBeUndefined();
 		expect(parseCliPath('constellation not found\n')).toBeUndefined();
 	});
 
@@ -290,9 +293,16 @@ describe('onboardingState', () => {
 });
 
 describe('storedKey', () => {
+	/** The read-back's calls, on a host with `/bin/sh` unless `sh` is false, the module's shell check fresh. */
+	function read(run: Run, sh = true) {
+		loadBand();
+		const exists = async (p: string) => sh && p === '/bin/sh';
+		return storedKey({ run, exists });
+	}
+
 	test('runs a login sh with the key emptied and a timeout', async () => {
 		const calls: { argv: readonly string[]; init: ProcessRunInit }[] = [];
-		const key = await storedKey(async (argv, init) => {
+		const key = await read(async (argv, init) => {
 			calls.push({ argv, init });
 			return { exitCode: 0, stdout: `${KEY}\n` };
 		});
@@ -303,25 +313,34 @@ describe('storedKey', () => {
 	});
 
 	test('a non-zero exit counts as no key', async () => {
-		expect(await storedKey(async () => ({ exitCode: 1, stdout: '' }))).toBeUndefined();
+		expect(await read(async () => ({ exitCode: 1, stdout: '' }))).toBeUndefined();
 	});
 
-	test('reads the registry when sh cannot start', async () => {
+	test('with no /bin/sh, reads the registry through reg.exe by its absolute path', async () => {
 		const argvs: (readonly string[])[] = [];
-		const key = await storedKey(async (argv) => {
+		const key = await read(async (argv) => {
 			argvs.push(argv);
-			if (argv[0] === '/bin/sh') throw new Error('cannot start /bin/sh');
 			return { exitCode: 0, stdout: `    CONSTELLATION_ACCESS_KEY    REG_SZ    ${KEY}\r\n` };
-		});
+		}, false);
 		expect(isKey(key)).toBe(true);
-		expect(argvs[1]).toEqual(['reg', 'query', 'HKCU\\Environment', '/v', 'CONSTELLATION_ACCESS_KEY']);
+		expect(argvs).toEqual([['C:\\Windows\\System32\\reg.exe', 'query', 'HKCU\\Environment', '/v', 'CONSTELLATION_ACCESS_KEY']]);
 	});
 
-	test('a timeout counts as no key, with the registry missing too', async () => {
-		const key = await storedKey(async (argv) => {
-			throw new Error(argv[0] === '/bin/sh' ? 'still running after 5000 ms' : 'cannot start reg');
-		});
-		expect(key).toBeUndefined();
+	test('a login sh that times out or exits non-zero counts as no key, and the registry is never asked', async () => {
+		for (const run of [
+			async () => {
+				throw new Error('still running after 5000 ms');
+			},
+			async () => ({ exitCode: 127, stdout: '' }),
+		] satisfies Run[]) {
+			const argvs: (readonly string[])[] = [];
+			const key = await read(async (argv, init) => {
+				argvs.push(argv);
+				return run();
+			});
+			expect(key).toBeUndefined();
+			expect(argvs.map((argv) => argv[0])).toEqual(['/bin/sh']);
+		}
 	});
 });
 
@@ -778,7 +797,7 @@ describe('the band as a loaded plugin', () => {
 		const toasts: string[] = [];
 		mock.env(on, signedIn ? { CONSTELLATION_ACCESS_KEY: KEY } : {});
 		mock.store(on);
-		on('fs.exists', (_$, e) => ({ value: e.path === `${REPO}/.git` || e.path === '/work/other/.git' }));
+		on('fs.exists', (_$, e) => ({ value: e.path === '/bin/sh' || e.path === `${REPO}/.git` || e.path === '/work/other/.git' }));
 		on('process.run', () => ({ value: { exitCode: 0, stdout: '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }));
 		on('session.surfaces', () => ({ value: surfaces }));
 		on('session.start', (_$, e) => ({ cwd: e.cwd }));
@@ -899,28 +918,30 @@ function gate() {
 	return { promise, open };
 }
 
+const HOST_PATH = '/usr/bin:/bin';
+const LOGIN_PATH = '/opt/node/bin:/usr/bin:/bin';
+
 /**
  * The host a button's run reads: each `printenv` read-back answers the next of
- * `keys` (none when it is undefined or used up), `command -v` and `where` name
- * `cli` (null: not installed), and `sh: false` is a host with no `/bin/sh`.
+ * `keys` (none when it is undefined or used up), and the CLI lookup prints its
+ * shell's PATH and names `cli` (null: not installed), on the host's PATH
+ * unless `loginOnly` puts it only on the PATH the profile sets.
  */
-function host(world: { keys?: (string | undefined)[]; cli?: string | null; sh?: boolean } = {}) {
+function host(world: { keys?: (string | undefined)[]; cli?: string | null; loginOnly?: boolean } = {}) {
 	const keys = [...(world.keys ?? [])];
 	const cli = world.cli === undefined ? CLI : world.cli;
 	const argvs: (readonly string[])[] = [];
 	const run: Run = async (argv) => {
 		argvs.push(argv);
-		if (argv[0] === '/bin/sh' && world.sh === false) throw new Error('cannot start /bin/sh');
 		if (argv[2] === 'printenv CONSTELLATION_ACCESS_KEY') return { exitCode: 0, stdout: `${keys.shift() ?? ''}\n` };
-		if (argv[2] === 'command -v constellation') return cli === null ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${cli}\n` };
-		if (argv[0] === 'where') return cli === null ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${cli}\r\n` };
-		if (argv[0] === 'reg') {
-			const key = keys.shift();
-			return key === undefined ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `    CONSTELLATION_ACCESS_KEY    REG_SZ    ${key}\r\n` };
+		if (argv[0] === '/bin/sh' && argv[2] === CLI_LOOKUP) {
+			const login = argv[1] === '-lc';
+			const found = cli !== null && (login || world.loginOnly !== true);
+			return { exitCode: found ? 0 : 1, stdout: `PATH=${login ? LOGIN_PATH : HOST_PATH}\n${found ? `${cli}\n` : ''}` };
 		}
-		throw new Error(`unexpected command ${argv[0]}`);
+		throw new Error(`unexpected command ${argv.join(' ')}`);
 	};
-	const readBacks = () => argvs.filter((argv) => argv[2] === 'printenv CONSTELLATION_ACCESS_KEY' || argv[0] === 'reg').length;
+	const readBacks = () => argvs.filter((argv) => argv[2] === 'printenv CONSTELLATION_ACCESS_KEY').length;
 	return { run, argvs, readBacks };
 }
 
@@ -962,7 +983,7 @@ function buttonWorld(run: Run, c: Child = {}) {
 				return child(c);
 			},
 		},
-		fs: { exists: async (p: string) => p === `${REPO}/.git` || p === `${REPO}/constellation.json` },
+		fs: { exists: async (p: string) => p === '/bin/sh' || p === `${REPO}/.git` || p === `${REPO}/constellation.json` },
 		env: { set: async () => undefined },
 		clock: { after: () => undefined },
 		mcp: { connect: async () => ({ isConnected: true, server: 's' }), call: async () => mcpText(OK) },
@@ -974,35 +995,48 @@ function buttonWorld(run: Run, c: Child = {}) {
 const stellarBadge = (tree: unknown) => nodes(tree).find((n) => n.props['children'] === '✦ failed')?.props['color'];
 
 describe('cliPath', () => {
-	test('a login sh finds the CLI on the PATH its profile sets, with a timeout', async () => {
+	test("a plain sh looks on the host's PATH first, with a timeout, and a CLI found there runs with the host's environment", async () => {
 		const calls: { argv: readonly string[]; init: ProcessRunInit }[] = [];
+		const { run } = host();
 		const found = await cliPath(async (argv, init) => {
 			calls.push({ argv, init });
-			return { exitCode: 0, stdout: `Welcome back\n${CLI}\n` };
-		});
-		expect(found).toEqual({ path: CLI, shell: true });
-		expect(calls).toEqual([{ argv: ['/bin/sh', '-lc', 'command -v constellation'], init: { timeoutMs: 5000 } }]);
+			return run(argv, init);
+		}, [REPO]);
+		expect(found).toEqual({ path: CLI, env: {} });
+		expect(calls).toEqual([{ argv: ['/bin/sh', '-c', CLI_LOOKUP], init: { timeoutMs: 5000 } }]);
 	});
 
-	test('not found by sh is missing, and where is not asked', async () => {
+	test("a CLI only the login shell finds runs with the profile's PATH before the host's", async () => {
+		const { run, argvs } = host({ loginOnly: true });
+		expect(await cliPath(run, [REPO])).toEqual({ path: CLI, env: { PATH: `${LOGIN_PATH}:${HOST_PATH}` } });
+		expect(argvs.map((argv) => argv[1])).toEqual(['-c', '-lc']);
+	});
+
+	test('not found by either shell is missing', async () => {
 		const { run, argvs } = host({ cli: null });
-		expect(await cliPath(run)).toEqual({ path: undefined, shell: true });
-		expect(argvs).toHaveLength(1);
+		expect(await cliPath(run, [REPO])).toEqual({ path: undefined, env: {} });
+		expect(argvs).toHaveLength(2);
 	});
 
-	test('where names it when sh cannot start, its first line taken', async () => {
-		const found = await cliPath(async (argv) => {
-			if (argv[0] === '/bin/sh') throw new Error('cannot start /bin/sh');
-			return { exitCode: 0, stdout: '\r\nC:\\npm\\constellation.cmd\r\nC:\\npm\\constellation\r\n' };
-		});
-		expect(found).toEqual({ path: 'C:\\npm\\constellation.cmd', shell: false });
+	test("a path inside the session's directory or its git root is a repository's file and counts as not found", async () => {
+		for (const planted of [`${REPO}/node_modules/.bin/constellation`, `${REPO}/tools/../bin/constellation`, '/work/constellation']) {
+			const run: Run = async (argv) => ({ exitCode: 0, stdout: `PATH=.:${HOST_PATH}\n${argv[1] === '-c' ? planted : CLI}\n` });
+			expect(await cliPath(run, [`${REPO}/src`, '/work'])).toEqual({ path: CLI, env: { PATH: `.:${HOST_PATH}:.:${HOST_PATH}` } });
+		}
+		const everywhere: Run = async () => ({ exitCode: 0, stdout: `${REPO}/bin/constellation\n` });
+		expect(await cliPath(everywhere, [REPO])).toEqual({ path: undefined, env: {} });
 	});
 
-	test('nothing that can look counts as missing', async () => {
+	test('a sh that cannot start or runs past the timeout is missing', async () => {
 		const found = await cliPath(async () => {
 			throw new Error('cannot start');
-		});
-		expect(found).toEqual({ path: undefined, shell: false });
+		}, [REPO]);
+		expect(found).toEqual({ path: undefined, env: {} });
+	});
+
+	test('parseShellPath takes the marked line the lookup printed last, never a profile line before it', () => {
+		expect(parseShellPath(`PATH=/from/profile\nnoise\nPATH=${LOGIN_PATH}\r\n${CLI}\n`)).toBe(LOGIN_PATH);
+		expect(parseShellPath(`${CLI}\n`)).toBeUndefined();
 	});
 });
 
@@ -1112,18 +1146,13 @@ describe('the Sign in button', () => {
 		await settle();
 	});
 
-	test('where no login sh runs, a failure says to run constellation auth in a terminal', async () => {
-		const band = loadBand();
-		const { ports, spawns } = buttonPorts({
-			run: host({ sh: false, keys: [undefined, undefined], cli: 'C:\\npm\\constellation.cmd' }).run,
-			child: { chunks: [out('Opening browser for authentication...\n')] },
-		});
-		await startSignIn(ports);
+	test("a CLI only the login shell finds signs in with the profile's PATH, never through the login shell", async () => {
+		const { world, spawns } = buttonWorld(host({ loginOnly: true }).run);
+		const band = loadBand({}, new Map(), world);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
-		expect(spawns[0]?.argv).toEqual(['C:\\npm\\constellation.cmd', 'auth']);
-		const text = shown(await band.draw());
-		expect(text).toContain('Run `constellation auth` in a terminal');
-		expect(text).not.toContain('Opening browser');
+		expect(spawns).toEqual([{ argv: [CLI, 'auth'], env: { PATH: `${LOGIN_PATH}:${HOST_PATH}`, CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }]);
 	});
 
 	test('a second press is refused while the child is live, and a loop that ends after a reset does nothing', async () => {
@@ -1149,14 +1178,17 @@ describe('the Sign in button', () => {
 		expect(spawns).toHaveLength(2);
 	});
 
-	for (const step of ['command -v constellation', 'printenv CONSTELLATION_ACCESS_KEY']) {
-		test(`a reset while ${step.split(' ')[0]} runs spawns nothing and frees the claim`, async () => {
+	for (const [what, step] of [
+		['the CLI lookup', 'command -v constellation'],
+		['the key read-back', 'printenv CONSTELLATION_ACCESS_KEY'],
+	] as const) {
+		test(`a reset during ${what} spawns nothing and frees the claim`, async () => {
 			const band = loadBand();
 			observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 			const held = gate();
 			const base = host();
 			const run: Run = async (argv, init) => {
-				if (argv[2] === step) await held.promise;
+				if (String(argv[2]).includes(step)) await held.promise;
 				return base.run(argv, init);
 			};
 			const { ports, spawns } = buttonPorts({ run });
@@ -1334,6 +1366,35 @@ describe('the Index button', () => {
 	});
 });
 
+describe('with no /bin/sh (Windows)', () => {
+	test('the band names the command to run in a terminal and offers only Dismiss, so nothing can spawn', async () => {
+		for (const [code, step] of [
+			['AUTH_ERROR', 'Run `constellation auth` in a terminal'],
+			['PROJECT_NOT_INDEXED', 'Run `constellation index` in a terminal, in the project directory'],
+		] as const) {
+			const { world, spawns } = buttonWorld(host().run);
+			const band = loadBand({}, new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
+			observeCodeIntel(errored(code), true, () => undefined);
+			const tree = await band.draw();
+			expect(shown(tree)).toContain(step);
+			expect(keys(tree)).toEqual(['onboarding-dismiss']);
+			await band.press(tree, 'onboarding-dismiss');
+			await settle();
+			expect(spawns).toEqual([]);
+		}
+	});
+
+	test('a not set up band on Windows says to run constellation auth', async () => {
+		const band = loadBand({}, new Map(), { fs: { exists: async () => false } });
+		const ports = fakePorts({ run: async () => ({ exitCode: 1, stdout: '' }) }).ports;
+		await readStoredKeyAtStart(REPO, { ...ports, exists: async (p) => p === `${REPO}/.git` });
+		const tree = await band.draw();
+		expect(shown(tree)).toContain("Constellation isn't signed in");
+		expect(shown(tree)).toContain('Run `constellation auth` in a terminal');
+		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+	});
+});
+
 describe('states with no button', () => {
 	test('no project and not registered offer only Dismiss, and nothing spawns', async () => {
 		for (const put of [
@@ -1362,9 +1423,9 @@ describe('Sign in as a loaded plugin', () => {
 		const commands: string[] = [];
 		const toasts: string[] = [];
 		let setKey: string | undefined;
-		on('fs.exists', (_$, e) => ({ value: e.path === `${REPO}/.git` || e.path === `${REPO}/constellation.json` }));
+		on('fs.exists', (_$, e) => ({ value: e.path === '/bin/sh' || e.path === `${REPO}/.git` || e.path === `${REPO}/constellation.json` }));
 		on('process.run', (_$, e) => {
-			if (e.argv[2] === 'command -v constellation') {
+			if (e.argv[2] === CLI_LOOKUP) {
 				return { value: { exitCode: 0, stdout: `${CLI}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
 			}
 			return { value: { exitCode: 0, stdout: `${keys.shift() ?? ''}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
@@ -1387,6 +1448,7 @@ describe('Sign in as a loaded plugin', () => {
 			return { value: undefined };
 		});
 		on('session.start', (_$, e) => ({ cwd: e.cwd }));
+		on('session.cwd', () => ({ value: REPO }));
 		on('session.surfaces', () => ({ value: ['terminal'] }));
 		on('command.register', (_$, e) => ({ value: { command: e.name } }));
 		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));

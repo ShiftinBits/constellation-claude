@@ -9,7 +9,7 @@ import type {
 	ProcessSpawnRequest,
 	RenderElement,
 } from 'claude-code';
-import { canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot } from './lib';
+import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
@@ -26,6 +26,12 @@ const WEB_APP = 'https://app.constellationdev.io';
 /** How long the stored key read-back may take: a profile that prompts must not hold up the session. */
 const READ_BACK_MS = 5000;
 
+/** Where Windows keeps `reg`: by absolute path, so a `reg` in the working directory is never run. */
+const REG = 'C:\\Windows\\System32\\reg.exe';
+
+/** Prints the shell's PATH, then where the CLI is: the PATH line is marked, so it never reads as the CLI's path. */
+export const CLI_LOOKUP = `printf 'PATH=%s\\n' "$PATH"; command -v constellation`;
+
 /** How the CLI is installed, and where the docs say so. */
 const INSTALL_COMMAND = 'npm i -g @constellationdev/cli';
 const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
@@ -34,10 +40,10 @@ const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
 const CONNECTED = '✦ Constellation connected';
 const CONNECTED_NO_PROJECT = '✦ Constellation connected. Run constellation init in this repo to set it up';
 
-/** A failed sign-in's line where the CLI said nothing, or where no login `sh` reads its key back. */
+/** A failed sign-in's line where the CLI said nothing, and the sign-in step where no `/bin/sh` runs (Windows). */
 const AUTH_IN_TERMINAL = 'Run `constellation auth` in a terminal';
 
-/** An index press where no `constellation.json` sits at or above the session's directory. */
+/** An index press where no `constellation.json` sits at or above the session's directory, and the index step where no `/bin/sh` runs. */
 const INDEX_IN_PROJECT = 'Run `constellation index` in a terminal, in the project directory';
 
 /** The band's states. The first that holds wins, in this order. */
@@ -88,12 +94,12 @@ export function parseStoredKey(output: string): string | undefined {
 	return found;
 }
 
-/** The last line of `output` that is an absolute path (POSIX or a Windows drive), else undefined. */
+/** The last line of `output` that is an absolute POSIX path, else undefined. */
 export function parseCliPath(output: string): string | undefined {
 	let found: string | undefined;
 	for (const raw of output.split('\n')) {
 		const line = raw.trim();
-		if (/^(\/|[A-Za-z]:[\\/])/.test(line)) found = line;
+		if (line.startsWith('/')) found = line;
 	}
 	return found;
 }
@@ -180,6 +186,8 @@ let detail: string | undefined;
 let cliMissing = false;
 /** A session that cannot draw gets one line. */
 let logged = false;
+/** Whether a POSIX `/bin/sh` is present, once asked: Windows has none, and the band starts no CLI there. */
+let shell: boolean | undefined;
 /** The git root (else the working directory) the session started in: dismissals are kept per repository. */
 let repoRoot: string | undefined;
 
@@ -232,55 +240,68 @@ export async function rememberRepo(cwd: string, exists: (path: string) => Promis
 	return root;
 }
 
+/** Whether a POSIX `/bin/sh` is present (Windows has none), asked once per load. */
+async function hasShell(exists: (path: string) => Promise<boolean>): Promise<boolean> {
+	shell ??= await exists('/bin/sh');
+	return shell;
+}
+
 /**
  * Reads back the key the CLI stored, or undefined: never logged or shown.
  * A login `/bin/sh` reads `~/.profile`, where the CLI writes the key, whatever
  * the person's shell; the empty override keeps an inherited key from masking
- * it. A run that fails or runs past the timeout counts as no key. Where `sh`
- * cannot run (Windows: the engine exposes no OS), the registry is read.
+ * it. A run that fails or runs past the timeout counts as no key. Only where
+ * there is no `/bin/sh` (Windows: the engine exposes no OS) is the registry read.
  */
-export async function storedKey(run: Run): Promise<string | undefined> {
+export async function storedKey(ports: Pick<OnboardingPorts, 'run' | 'exists'>): Promise<string | undefined> {
 	try {
-		const r = await run(['/bin/sh', '-lc', 'printenv CONSTELLATION_ACCESS_KEY'], {
-			env: { CONSTELLATION_ACCESS_KEY: '' },
-			timeoutMs: READ_BACK_MS,
-		});
-		return r.exitCode === 0 ? parseStoredKey(r.stdout) : undefined;
-	} catch {
-		// sh could not start or ran past the timeout: try the registry.
-	}
-	try {
-		const r = await run(['reg', 'query', 'HKCU\\Environment', '/v', 'CONSTELLATION_ACCESS_KEY'], { timeoutMs: READ_BACK_MS });
+		const r = (await hasShell(ports.exists))
+			? await ports.run(['/bin/sh', '-lc', 'printenv CONSTELLATION_ACCESS_KEY'], {
+					env: { CONSTELLATION_ACCESS_KEY: '' },
+					timeoutMs: READ_BACK_MS,
+				})
+			: await ports.run([REG, 'query', 'HKCU\\Environment', '/v', 'CONSTELLATION_ACCESS_KEY'], { timeoutMs: READ_BACK_MS });
 		return r.exitCode === 0 ? parseStoredKey(r.stdout) : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
-/** Where the CLI is (undefined when not found), and whether a login `sh` could run to look. */
-export type CliLookup = { path: string | undefined; shell: boolean };
+/** The PATH a `CLI_LOOKUP` run printed, else undefined. */
+export function parseShellPath(output: string): string | undefined {
+	let found: string | undefined;
+	for (const line of output.split('\n')) {
+		if (line.startsWith('PATH=')) found = line.slice('PATH='.length).trim();
+	}
+	return found;
+}
+
+/** Where the CLI is (undefined when not found), and what its child's environment sets over the host's. */
+export type CliLookup = { path: string | undefined; env: Record<string, string> };
 
 /**
- * Finds the CLI the way a terminal would: a login `/bin/sh` runs
- * `command -v`, so a PATH the profile sets counts. Where `sh` cannot start
- * (Windows), `where` names it, its first line taken. Never rejects.
+ * Finds the CLI the way a terminal would: a plain `/bin/sh` looks on the
+ * host's PATH, then a login one on the PATH the profile sets. A CLI only the
+ * login shell finds runs with that PATH before the host's, so its
+ * `#!/usr/bin/env node` finds the same node. A path inside one of `untrusted`
+ * (the session's directory and its git root) is a repository's file and
+ * counts as not found. Never rejects.
  */
-export async function cliPath(run: Run): Promise<CliLookup> {
+export async function cliPath(run: Run, untrusted: readonly string[]): Promise<CliLookup> {
+	const look = async (flag: '-c' | '-lc') => {
+		const r = await run(['/bin/sh', flag, CLI_LOOKUP], { timeoutMs: READ_BACK_MS });
+		const path = r.exitCode === 0 ? parseCliPath(r.stdout) : undefined;
+		const trusted = path !== undefined && untrusted.every((dir) => relativeTo(dir, absolute(path, dir)) === null);
+		return { path: trusted ? path : undefined, PATH: parseShellPath(r.stdout) };
+	};
 	try {
-		const r = await run(['/bin/sh', '-lc', 'command -v constellation'], { timeoutMs: READ_BACK_MS });
-		return { path: r.exitCode === 0 ? parseCliPath(r.stdout) : undefined, shell: true };
+		const host = await look('-c');
+		if (host.path !== undefined) return { path: host.path, env: {} };
+		const login = await look('-lc');
+		if (login.path === undefined) return { path: undefined, env: {} };
+		return { path: login.path, env: { PATH: [login.PATH, host.PATH].filter((p) => p !== undefined && p !== '').join(':') } };
 	} catch {
-		// sh could not start or ran past the timeout: ask where.
-	}
-	try {
-		const r = await run(['where', 'constellation'], { timeoutMs: READ_BACK_MS });
-		const first = r.stdout
-			.split('\n')
-			.map((line) => line.trim())
-			.find((line) => line !== '');
-		return { path: r.exitCode === 0 ? first : undefined, shell: false };
-	} catch {
-		return { path: undefined, shell: false };
+		return { path: undefined, env: {} };
 	}
 }
 
@@ -298,7 +319,7 @@ export async function readStoredKeyAtStart(
 	ports: Pick<OnboardingPorts, 'run' | 'exists'> & Notify,
 ): Promise<FoundKey | undefined> {
 	if ((await rememberRepo(cwd, ports.exists)) === null) return undefined;
-	const key = await storedKey(ports.run);
+	const key = await storedKey(ports);
 	if (key === undefined) {
 		apply(onboardingState({ configured: false, stored: false }), ports);
 		return undefined;
@@ -412,8 +433,8 @@ export type ButtonPorts = OnboardingPorts & {
 	cwd: () => Promise<string>;
 };
 
-/** A claimed CLI run: the generation it started in and the CLI it runs. */
-type Claim = { gen: number; cli: string; shell: boolean };
+/** A claimed CLI run: the generation it started in, the CLI it runs and what its environment sets. */
+type Claim = { gen: number; cli: string; env: Record<string, string> };
 
 /**
  * Claims the band for `task` before anything is awaited, so a second press
@@ -426,10 +447,13 @@ async function claim(task: Task, ports: ButtonPorts): Promise<Claim | undefined>
 	const prior = state;
 	const gen = startTask(task, ports);
 	if (gen === undefined) return undefined;
-	const { path, shell } = await cliPath(ports.run);
+	const { path, env } = await ports
+		.cwd()
+		.then(async (cwd) => cliPath(ports.run, [cwd, (await gitRoot(cwd, ports.exists)) ?? cwd]))
+		.catch((): CliLookup => ({ path: undefined, env: {} }));
 	if (path !== undefined && generation === gen) {
 		cliMissing = false;
-		return { gen, cli: path, shell };
+		return { gen, cli: path, env };
 	}
 	endTask();
 	if (generation === gen) {
@@ -469,8 +493,8 @@ async function follow(start: () => AsyncIterable<ProcessSpawnChunk>, gen: number
 export async function startSignIn(ports: ButtonPorts): Promise<void> {
 	const claimed = await claim('auth', ports);
 	if (claimed === undefined) return;
-	const { gen, cli, shell } = claimed;
-	const before = await storedKey(ports.run);
+	const { gen, cli, env } = claimed;
+	const before = await storedKey(ports);
 	if (generation !== gen) {
 		endTask();
 		return;
@@ -480,11 +504,12 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 		let root: string | null | undefined;
 		try {
 			const started = await follow(
-				() => ports.spawn({ argv: [cli, 'auth'], env: { CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }),
+				// Never through a login shell: its profile would export the stored key again over the empty one.
+				() => ports.spawn({ argv: [cli, 'auth'], env: { ...env, CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }),
 				gen,
 				ports,
 			);
-			if (started && generation === gen) after = await storedKey(ports.run);
+			if (started && generation === gen) after = await storedKey(ports);
 			if (after !== undefined && after !== before) {
 				root = await ports
 					.cwd()
@@ -503,7 +528,7 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 				// The key could not be set: the sign-in failed.
 			}
 		}
-		apply('sign-in-again', ports, (shell ? lastLine(buffer) : undefined) ?? AUTH_IN_TERMINAL);
+		apply('sign-in-again', ports, lastLine(buffer) ?? AUTH_IN_TERMINAL);
 	})();
 }
 
@@ -519,7 +544,7 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 	const prior = state;
 	const claimed = await claim('index', ports);
 	if (claimed === undefined) return;
-	const { gen, cli } = claimed;
+	const { gen, cli, env } = claimed;
 	const root = await ports
 		.cwd()
 		.then((cwd) => projectRoot(cwd, ports.exists))
@@ -532,7 +557,7 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 	void (async () => {
 		let ping: CodeIntelEnvelope | undefined;
 		try {
-			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { NO_COLOR: '1' } }), gen, ports);
+			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { ...env, NO_COLOR: '1' } }), gen, ports);
 			if (generation === gen) ping = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		} finally {
 			endTask();
@@ -605,6 +630,8 @@ export type BandView = {
 	url?: string;
 	/** The last press found no CLI: how to install it shows above the buttons. */
 	cliMissing?: boolean;
+	/** No `/bin/sh` runs here (Windows): the band names the command to run in a terminal instead of a button. */
+	noShell?: boolean;
 	dismiss: () => void;
 	signIn: () => void;
 	index: () => void;
@@ -634,12 +661,18 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 	// A run passes on its own, so it is never dismissed: a dismissal would hide every later run.
 	if (view.state === 'working') return el.Box({ flexDirection: 'column', children: rows });
 	const dismiss = { key: 'onboarding-dismiss', label: 'Dismiss', onPress: view.dismiss };
+	const signsIn = view.state === 'not-set-up' || view.state === 'sign-in-again';
+	if (view.noShell === true && (signsIn || view.state === 'not-indexed')) {
+		rows.push(el.Text({ children: signsIn ? AUTH_IN_TERMINAL : INDEX_IN_PROJECT }));
+	}
 	const action =
-		view.state === 'not-set-up' || view.state === 'sign-in-again'
-			? { key: 'onboarding-sign-in', label: 'Sign in', onPress: view.signIn }
-			: view.state === 'not-indexed'
-				? { key: 'onboarding-index', label: 'Index this project', onPress: view.index }
-				: undefined;
+		view.noShell === true
+			? undefined
+			: signsIn
+				? { key: 'onboarding-sign-in', label: 'Sign in', onPress: view.signIn }
+				: view.state === 'not-indexed'
+					? { key: 'onboarding-index', label: 'Index this project', onPress: view.index }
+					: undefined;
 	if (action !== undefined && view.cliMissing === true) {
 		rows.push(el.Text({ children: `Install the Constellation CLI, then press ${action.label} again: ${INSTALL_COMMAND}` }), el.Link({ href: INSTALL_DOCS }));
 	}
@@ -665,6 +698,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 	cliMissing = false;
 	logged = false;
 	repoRoot = undefined;
+	shell = undefined;
 
 	on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
 		const shown = state;
@@ -681,6 +715,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 		} catch {
 			tint = scheme(options.colors, undefined);
 		}
+		const noShell = !(await hasShell((p) => $.fs.exists(p)));
 		// While a run goes, its latest line; then the line it ended on.
 		const line = running === undefined ? detail : lastLine(buffer);
 		// Only complete lines: a URL still being written is not offered.
@@ -692,6 +727,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 			...(running === undefined ? {} : { task: running }),
 			...(url === undefined ? {} : { url }),
 			...(cliMissing ? { cliMissing } : {}),
+			...(noShell ? { noShell } : {}),
 			dismiss: async () => {
 				try {
 					await $.store.set(key, shown);
