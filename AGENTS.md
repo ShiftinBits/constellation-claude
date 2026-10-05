@@ -57,7 +57,9 @@ hooks/                       In-process hooks module (no settings hooks, no node
 ├── toolrows.test.ts         Tests for toolrows.ts (claude plugin test)
 ├── explain.ts               Error layout for people: explain (headline, detail, notes, steps, docs, code), explainLines
 ├── explain.test.ts          Tests for explain.ts, from constellation-mcp's own error guidance
-├── lib.ts                   Shared helpers: isConfigured, projectRoot, codeIntel, parseEnvelope, isRecord, num, projectName, stringArg, relativeTo, strings, plural, withinDeadline
+├── onboarding.ts            Onboarding band: registerOnboarding, resetOnboarding, observeCodeIntel, onboardingState, band, startSignIn, startIndex; ui.render on AbovePrompt, Button onPress handlers; imports only lib.ts, theme.ts and explain.ts
+├── onboarding.test.ts       Tests for onboarding.ts (claude plugin test)
+├── lib.ts                   Shared helpers: isConfigured, projectRoot, gitRoot, codeIntel, parseEnvelope, isRecord, num, projectName, stringArg, relativeTo, strings, plural, withinDeadline
 ├── lib.test.ts              Tests for lib.ts (claude plugin test)
 ├── command.ts               /constellation command and five-tab pane (status, diagnose, deps, unused, explore): registerCommand, parseArgs, summarize; session.start, command.run, ui.render, ui.close
 ├── command.test.ts          Tests for command.ts (claude plugin test)
@@ -125,6 +127,14 @@ All hooks live in the hooks module and run in-process. `hooks/nudge.ts` exports 
 
 - **`tool.describe`** (matcher `{ tool: /^(Grep|Glob|Bash)$/ }`, in `hooks/describe.ts`): when the key starts with `ak:` and a `constellation.json` sits in the session cwd or a parent, appends the constant `GUIDANCE` paragraph to the description from `next(e)`, keeping its `isDeferred`. Bash is included because native macOS and Linux builds register no Grep or Glob, so the Bash description is the only search tool description the model sees there. The engine asks once per tool per session and caches the answer, so the text must stay constant.
 - **`classic.CwdChanged`**: when the last description was built with the gate closed, recomputes it for `e.new_cwd` and calls `$.ui.invalidate('tool.describe')` once it opens. Once the guidance is in, it stays (a module variable): it is harmless outside a project, and taking it out again would change the tools block, and so rewrite the whole prompt cache, every time Claude `cd`s out of and back into an indexed project. Nothing is invalidated per turn.
+
+- **Onboarding** (`hooks/onboarding.ts`, `registerOnboarding(on, options)`): a `ui.render { component: 'AbovePrompt' }` band that tells a person what is missing and offers buttons. States: `not-set-up` (no stored key or no CLI), `sign-in-again` (the key is rejected), `no-project` (no `constellation.json` in the repo), `not-registered`, `not-indexed` and `working` (a sign-in or index task is running). Dismissal is kept per repository in `$.store`. Sessions that cannot draw (`canDraw(await $.session.surfaces())` is false) get one `$.ui.log` line per session instead.
+  - Session-start work (reading the stored key, `$.env.set` before `next(e)`, scheduling the connection check) lives in `command.ts`'s unmatched `session.start`, because validate refuses two unmatched ones.
+  - The observer, `observeCodeIntel`, is called from `budget.ts`'s `code_intel` `tool.call` hook, inside the `engine` origin gate, so the plugin's own pings never feed it. A second `tool.call { tool: /code_intel$/ }` hook would be refused.
+  - `not-registered` is read from the CLI's output (`Project not registered`), because the MCP server maps that 404 to `PROJECT_NOT_INDEXED`.
+  - Verify the end state, not the CLI exit code: check the resulting state (a readable key, a registered and indexed project) after `constellation auth` and `constellation index --wait` finish.
+  - `reload-plugins` goes through `$.clock.after(0, ...)`, because `$.command.run` is refused inside a `command.run` hook. Spawn loops (`$.process.spawn`) check a generation token so a superseded task stops acting. `resetOnboarding()` is called from `session.ts`'s clear/resume/fork hook and clears the module state.
+  - `gitRoot(cwd, exists)` in `lib.ts` shares `projectRoot`'s walk-up and looks for `.git` (a directory, or a worktree's file); no git process runs.
 
 - **Nudge budget** (`hooks/budget.ts`, `registerBudget(on, options)`): `classic.PreToolUse` checks the read-only `usedCodeIntelThisTurn(e)` and `hasNudgeLeft(e)` before it walks the filesystem for `constellation.json`, and spends with `spendNudge(e)` last, after every condition holds. The session and subagent awareness text and the tool descriptions are never budgeted.
   - `nudgeLimit` is a `userConfig` option in `plugin.json` (number, default 3, minimum 0). `register(on, options)` passes `options` to `registerBudget`; users set it with `/config` or `claude plugin configure constellation`. In `claude plugin test`, `test(name, { options: { nudgeLimit: 2 } }, ...)` supplies it.

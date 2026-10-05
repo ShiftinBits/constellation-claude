@@ -29,6 +29,8 @@ Check error.code:
 - API_UNREACHABLE --> Connectivity section
 ```
 
+In the terminal and the desktop app, the Constellation onboarding band above the prompt offers **Sign in** and **Index this project** buttons. The manual steps below still apply.
+
 ## MCP Server Issues
 
 **Symptom:** "Failed to reconnect to plugin:constellation:constellation" or tool calls fail entirely.
