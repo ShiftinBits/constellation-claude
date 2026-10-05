@@ -11,6 +11,8 @@ import { orphanCode } from './unused';
 
 const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
+/** The checkout HEAD, two commits past COMMIT. */
+const LOCAL_HEAD = 'fedcba9876543210fedcba9876543210fedcba98';
 const INDEXED_AT = '2026-01-01T00:00:00.000Z';
 const SURFACES = ['terminal', 'desktop'] as const;
 /** A key in the CLI's format, compared and never printed. */
@@ -1701,10 +1703,20 @@ describe('registration', () => {
 	/**
 	 * A session start in /work/app, a git repository, whose login shell reads
 	 * back a stored key. `project: false` leaves out constellation.json, and
-	 * `config` is its text. Each code_intel call answers PROJECT_NOT_INDEXED.
+	 * `config` is its text. `key` is the session's own key, which skips the
+	 * read-back. Each code_intel call answers `ping`, PROJECT_NOT_INDEXED by
+	 * default, and git says HEAD is two commits past the index.
 	 */
-	function storedKeyWorld(on: On, { project = true, config = JSON.stringify({ projectId: 'p' }) }: { project?: boolean; config?: string } = {}) {
-		mock.env(on, {});
+	function storedKeyWorld(
+		on: On,
+		{
+			project = true,
+			config = JSON.stringify({ projectId: 'p' }),
+			key,
+			ping = failure('PROJECT_NOT_INDEXED', 'Project not indexed'),
+		}: { project?: boolean; config?: string; key?: string; ping?: McpToolResult } = {},
+	) {
+		mock.env(on, key === undefined ? {} : { CONSTELLATION_ACCESS_KEY: key });
 		const clock = mock.clock(on);
 		const codes: string[] = [];
 		const runs: string[] = [];
@@ -1716,7 +1728,9 @@ describe('registration', () => {
 		});
 		on('process.run', (_, e) => {
 			runs.push(e.argv.join(' '));
-			return { value: { exitCode: 0, stdout: `${STORED_KEY}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
+			const git = e.argv[0] === 'git';
+			const stdout = !git ? `${STORED_KEY}\n` : e.argv.includes('rev-parse') ? `${LOCAL_HEAD}\nrefs/heads/main\n` : e.argv.includes('rev-list') ? '2\n' : '';
+			return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
 		});
 		on('env.set', (_, e) => {
 			set.push(e.value);
@@ -1728,11 +1742,15 @@ describe('registration', () => {
 		on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
 		on('mcp.call', (_, e) => {
 			codes.push(String(e.args.code));
-			return { value: failure('PROJECT_NOT_INDEXED', 'Project not indexed') };
+			return { value: ping };
 		});
 		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
-		return { clock, codes, runs, keySet: () => set.length === 1 && set[0] === STORED_KEY };
+		const revParses = () => runs.filter((r) => r.includes('rev-parse')).length;
+		return { clock, codes, runs, revParses, keySet: () => set.length === 1 && set[0] === STORED_KEY };
 	}
+
+	/** Five minutes, the git-only re-check's interval. */
+	const TICK = 5 * 60_000;
 
 	const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} };
 
@@ -1745,6 +1763,59 @@ describe('registration', () => {
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
 		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
 		expect(await ui.find({ type: 'Button', key: 'onboarding-index' })).toBeDefined();
+		await clock.advance(TICK);
+		expect(codes).toEqual(['return await api.ping()']);
+	});
+
+	test("the stored key's ping tells the freshness indicator what is indexed, then git alone re-checks every five minutes", async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		expect(revParses()).toBe(0);
+		await clock.advance(0);
+		expect(codes).toEqual(['return await api.ping()']);
+		const first = revParses();
+		expect(first > 0).toBe(true);
+		await clock.advance(TICK);
+		expect(revParses()).toBe(first + 1);
+		await clock.advance(TICK);
+		expect(revParses()).toBe(first + 2);
+		expect(codes).toEqual(['return await api.ping()']);
+	});
+
+	test('with the key already set, a project is pinged once on the timer and re-checked every five minutes', async ($, on) => {
+		const { clock, codes, runs, revParses } = storedKeyWorld(on, { key: STORED_KEY, ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		expect(codes).toEqual([]);
+		expect(runs.some((r) => r.includes('printenv'))).toBe(false);
+		await clock.advance(0);
+		expect(codes).toEqual(['return await api.ping()']);
+		const first = revParses();
+		expect(first > 0).toBe(true);
+		await clock.advance(TICK);
+		expect(revParses()).toBe(first + 1);
+		expect(codes).toEqual(['return await api.ping()']);
+	});
+
+	test('with the key already set, an AUTH_ERROR ping does not reload the plugins', async ($, on) => {
+		const { clock, codes } = storedKeyWorld(on, { key: STORED_KEY, ping: failure('AUTH_ERROR', 'Bad key') });
+		const reloads: string[] = [];
+		on('command.run', (_, e) => {
+			reloads.push(e.command);
+			return {};
+		});
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		await clock.advance(0);
+		expect(codes).toEqual(['return await api.ping()']);
+		expect(reloads).toEqual([]);
+	});
+
+	test('with the key set but no constellation.json, nothing is pinged or re-checked', async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { key: STORED_KEY, project: false, ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(TICK);
+		expect(codes).toEqual([]);
+		expect(revParses()).toBe(0);
 	});
 
 	test('with no constellation.json the stored key is set, nothing is pinged and the band stays down', async ($, on) => {

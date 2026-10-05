@@ -1,6 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
 import { background, noteCodeIntelCall, save, showsAdoption } from './adoption';
-import { canDraw, isConfigured, parseToolText, stringArg } from './lib';
+import { observeEnvelope } from './freshness';
+import { absolute, canDraw, isConfigured, parseToolText, projectRoot, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
 
@@ -88,7 +89,7 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
 		const r = await next(e);
 		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis,
-		// and the onboarding acts on its own pings itself.
+		// and the onboarding and the freshness indicator act on its own pings themselves.
 		if (next.origin.plugin === 'engine') {
 			noteCodeIntel(key, e, r);
 			try {
@@ -118,6 +119,25 @@ export function registerBudget(on: On, options: PluginOptions): void {
 						del: (k) => $.store.delete(k),
 					}),
 				);
+				try {
+					// The index the answer came from, for the project the call ran in. The answer does not wait for git.
+					const session = await $.session.cwd();
+					const cwd = stringArg(e, 'cwd');
+					const root = await projectRoot(cwd === undefined ? session : absolute(cwd, session), (p) => $.fs.exists(p));
+					if (root !== null) {
+						void observeEnvelope(
+							parseToolText(r.text, r.isError === true),
+							root,
+							(argv, init) => $.process.run(argv, init),
+							() => $.ui.invalidate('ui.render'),
+							async (text) => {
+								if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+							},
+						).catch(() => undefined);
+					}
+				} catch {
+					// The indicator stays as it was.
+				}
 			}
 		}
 		return r;

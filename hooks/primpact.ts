@@ -1,7 +1,7 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { type Blast, blastRadius } from './blast';
 import { type GhPrCreate, ghPrCreate } from './classify';
-import { absolute, isConfigured, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
+import { absolute, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
 
 /** What happens before `gh pr create`. */
 type Mode = 'require' | 'inform' | 'off';
@@ -15,18 +15,6 @@ const MODES: readonly Mode[] = ['require', 'inform', 'off'];
  * full timeout.
  */
 export const PR_DEADLINE_MS = 8000;
-
-/** How long each git command may run. */
-const GIT_TIMEOUT_MS = 5000;
-
-/**
- * git with the repository's fsmonitor, hooks and network transports turned
- * off, since the command runs before Claude Code asks about the Bash call it
- * guards. The diff skips rename detection, which is what would fetch missing
- * objects in a partial clone, and `GIT_NO_LAZY_FETCH` stops any other fetch.
- */
-const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never'];
-const GIT_ENV = { GIT_NO_LAZY_FETCH: '1' };
 
 /** An `## Impact` heading at a line start or after whitespace or a quote (`--body "## Impact`). */
 const HEADING = /(^|[\s"'])##\s+Impact\b/m;

@@ -2,6 +2,7 @@ import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerAdoption, sessionCounts, settled, total } from './adoption';
 import { registerBudget } from './budget';
+import { freshnessLine, registerFreshness, track } from './freshness';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerOnboarding } from './onboarding';
@@ -9,6 +10,8 @@ import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
+/** A second project beside the first, as in a monorepo. */
+const OTHER = '/work/other';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
 type Answer = { additionalContext?: string[]; context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
@@ -35,6 +38,9 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 /** How many `$.fs.exists` calls the handlers made. */
 let existsCalls = 0;
 
+/** The `constellation.json` files that exist. */
+let projectFiles: string[] = [];
+
 /** Elements as plain data: the type and the props. */
 const make =
 	(type: string) =>
@@ -55,23 +61,43 @@ let invalidations = 0;
 /** The session's access key as `$.env.get` answers it. */
 let sessionKey: string | undefined = KEY;
 
+/** The git commands the handlers ran, and the commit HEAD is at. */
+const gitRuns: string[][] = [];
+/** How many `$.config.list` reads were made, the surfaces the session has and what `$.ui.log` got. */
+let configReads = 0;
+let surfaces: string[] = ['terminal'];
+const logLines: string[] = [];
+const HEAD = '0123456789abcdef0123456789abcdef01234567';
+
 const $ = {
 	env: { get: async () => sessionKey },
-	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'], id: async () => 'session-1' },
+	session: { cwd: async () => PROJECT, surfaces: async () => surfaces, id: async () => 'session-1' },
 	ui: {
 		invalidate: () => {
 			invalidations += 1;
 		},
 		resolve: () => EL,
-		log: () => undefined,
+		log: (text: string) => void logLines.push(text),
 	},
 	store: { get: async () => undefined, set: async () => undefined, keys: async () => [], delete: async () => undefined },
-	config: { list: async () => [] },
-	clock: { now: async () => 0 },
+	config: {
+		list: async () => {
+			configReads += 1;
+			return [];
+		},
+	},
+	clock: { now: async () => Date.now() },
+	process: {
+		run: async (argv: readonly string[]) => {
+			gitRuns.push([...argv]);
+			if (argv.includes('rev-parse')) return { exitCode: 0, stdout: `${HEAD}\nrefs/heads/main\n` };
+			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : '' };
+		},
+	},
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
-			return path === `${PROJECT}/constellation.json`;
+			return projectFiles.includes(path);
 		},
 	},
 };
@@ -93,7 +119,13 @@ function load(options: PluginOptions) {
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On, options);
+	registerFreshness(capture as unknown as On, options);
 	invalidations = 0;
+	gitRuns.length = 0;
+	configReads = 0;
+	surfaces = ['terminal'];
+	logLines.length = 0;
+	projectFiles = [`${PROJECT}/constellation.json`];
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -116,11 +148,14 @@ function load(options: PluginOptions) {
 	return {
 		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
-		/** A code_intel call running `code` for `agentId`, raised by `origin`, over a bottom that answers `answer`. */
-		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
-			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
+		/** A code_intel call running `code` for `agentId` in `cwd` (the session's when absent), raised by `origin`, over a bottom that answers `answer`. */
+		program: (agentId: string, code: string, answer: Answer, origin = ENGINE, cwd?: string) =>
+			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code, ...(cwd === undefined ? {} : { cwd }) }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
+		/** The raw tree the band returns over a `bottom` that draws `beneath`, with the survey flag as given. */
+		draw: (beneath: object = { type: 'Text', props: { children: 'beneath' } }, hasSurvey = false) =>
+			raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey } }, async () => beneath),
 		band: async () => shown(await raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } }, async () => ({ text: 'beneath' }))),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/** What the search handler adds for a Grep of a symbol by `agentId`, the main conversation when absent. */
@@ -377,12 +412,141 @@ describe('nudge budget', () => {
 		expect(sessionCounts().subagents.symbol).toBe(1);
 	});
 
+	test("an agent's code_intel answer with a newer index commit updates the freshness indicator", async () => {
+		const m = load({});
+		track(PROJECT);
+		const old = 'fedcba9876543210fedcba9876543210fedcba98';
+		await m.program('main', 'return await api.ping()', { text: JSON.stringify({ success: true, result: {}, asOfCommit: old }) });
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
+		expect(freshnessLine(0)?.text).toBe('✦ index 3 commits behind');
+		expect(invalidations).toBe(1);
+	});
+
+	test("a plugin's own code_intel answer and a denied call leave the freshness indicator alone", async () => {
+		const m = load({});
+		track(PROJECT);
+		const text = JSON.stringify({ success: true, result: {}, asOfCommit: 'fedcba9876543210fedcba9876543210fedcba98' });
+		await m.program('main', 'return await api.ping()', { text }, { plugin: 'constellation', tier: 'user' });
+		await m.program('main', 'return await api.ping()', { deny: 'no', text });
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+		expect(gitRuns).toEqual([]);
+		expect(freshnessLine(0)).toBeUndefined();
+		expect(invalidations).toBe(0);
+	});
+
 	test('a SessionStart reset clears subagent budgets too', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		await m.search('agent-1');
 		await m.sessionStart('clear');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
+	});
+});
+
+describe('freshness band above the prompt', () => {
+	const OLD = 'fedcba9876543210fedcba9876543210fedcba98';
+	const staleAnswer = (asOfCommit = OLD): Answer => ({
+		text: JSON.stringify({ success: true, result: {}, asOfCommit, lastIndexedAt: new Date(Date.now() - 7_200_000).toISOString() }),
+	});
+	const settle = async () => {
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+	};
+	/** Loads the module with the index behind HEAD by three commits. */
+	const behind = async (state: { cannotDraw?: boolean } = {}) => {
+		const m = load({});
+		track(PROJECT);
+		if (state.cannotDraw === true) surfaces = [];
+		await m.program('main', 'return await api.ping()', staleAnswer());
+		await settle();
+		return m;
+	};
+	/** The row's text as the terminal joins its pieces: no space between them. */
+	const flat = (tree: unknown) => shown(tree).replace(/ {2,}/g, ' ');
+	const BENEATH = { type: 'Text', props: { children: 'beneath' } };
+
+	test('a fresh index returns what the lower mod returned and reads no store, clock or config', async () => {
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(HEAD));
+		await settle();
+		expect(await m.draw(BENEATH)).toBe(BENEATH);
+		expect(configReads).toBe(0);
+	});
+
+	test('behind shows the state and index age above a lower mod element', async () => {
+		const m = await behind();
+		const tree = await m.draw();
+		expect(flat(tree)).toBe('✦ index 3 commits behind · indexed 2h ago beneath');
+		expect(Reflect.get(Reflect.get(tree, 'props'), 'flexDirection')).toBe('column');
+		expect(configReads).toBe(1);
+	});
+
+	test('draws the row alone when nothing draws beneath', async () => {
+		const m = await behind();
+		for (const none of [{ type: 'engine', ref: 0 }, { type: 'Box', props: { children: [] } }]) {
+			expect(flat(await m.draw(none))).toBe('✦ index 3 commits behind · indexed 2h ago');
+		}
+	});
+
+	test('an error with no index shows its code and guidance', async () => {
+		const m = load({});
+		track(PROJECT);
+		const failed = { success: false, error: { code: 'API_UNREACHABLE', message: 'unreachable' } };
+		await m.program('main', 'return await api.ping()', { text: JSON.stringify(failed) });
+		expect(shown(await m.draw())).toContain('✦ API_UNREACHABLE');
+	});
+
+	test('yields to a survey', async () => {
+		const m = await behind();
+		const before = configReads;
+		expect(await m.draw(BENEATH, true)).toBe(BENEATH);
+		expect(configReads).toBe(before);
+	});
+
+	test('an onboarding state, shown or dismissed, hides the freshness row', async () => {
+		const m = await behind();
+		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		const tree = await m.draw();
+		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).not.toContain('index 3 commits behind');
+	});
+
+	test("an agent's call in another project runs no git and leaves the indicator alone", async () => {
+		const m = await behind();
+		const before = { runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations };
+		projectFiles.push(`${OTHER}/constellation.json`);
+		const newer = { text: JSON.stringify({ success: true, result: {}, asOfCommit: 'ab' + OLD.slice(2), lastIndexedAt: new Date().toISOString() }) };
+		await m.program('main', 'return await api.ping()', newer, ENGINE, OTHER);
+		await settle();
+		expect({ runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations }).toEqual(before);
+	});
+
+	test("an agent's call with a relative cwd resolves under the session's and updates the indicator", async () => {
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, 'src/lib');
+		await settle();
+		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
+		expect(freshnessLine(Date.now())?.text).toBe('✦ index 3 commits behind · indexed 2h ago');
+	});
+
+	test("an agent's call outside any project runs no git", async () => {
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, '/elsewhere/app');
+		await settle();
+		expect(gitRuns).toEqual([]);
+		expect(freshnessLine(0)).toBeUndefined();
+		expect(invalidations).toBe(0);
+	});
+
+	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
+		const m = await behind({ cannotDraw: true });
+		expect(logLines).toEqual(['✦ index 3 commits behind · indexed 2h ago']);
+		await m.program('main', 'return await api.ping()', staleAnswer('ab' + OLD.slice(2)));
+		await settle();
+		expect(logLines).toHaveLength(1);
 	});
 });
 
