@@ -260,7 +260,7 @@ describe('search result augment', () => {
 		expect(await $.tool.call(SEARCH)).toEqual(errored);
 	});
 
-	test('a search that is also reminded carries the line and the reminder', async ($, on) => {
+	test('the line and a reminder share the result context, the line first', async ($, on) => {
 		world(on);
 		const r = await $.tool.call(SEARCH);
 		expect(r.context).toEqual([LINE, REMINDER_TEXT]);
