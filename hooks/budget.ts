@@ -1,5 +1,5 @@
 import type { On, PluginOptions } from 'claude-code';
-import { canDraw, stringArg } from './lib';
+import { canDraw, isConfigured, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
 
@@ -101,13 +101,18 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		// and the onboarding acts on its own pings itself.
 		if (next.origin.plugin === 'engine') {
 			noteCodeIntel(key, e, r);
-			observeCodeIntel(
-				r,
-				() => $.ui.invalidate('ui.render'),
-				async (text) => {
-					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
-				},
-			);
+			try {
+				observeCodeIntel(
+					r,
+					isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')),
+					() => $.ui.invalidate('ui.render'),
+					async (text) => {
+						if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+					},
+				);
+			} catch {
+				// The band stays as it was; the agent's answer goes back untouched.
+			}
 		}
 		return r;
 	});

@@ -51,8 +51,11 @@ function shown(tree: unknown): string {
 /** How many times a handler asked for a redraw. */
 let invalidations = 0;
 
+/** The session's access key as `$.env.get` answers it. */
+let sessionKey: string | undefined = KEY;
+
 const $ = {
-	env: { get: async () => KEY },
+	env: { get: async () => sessionKey },
 	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
 	ui: {
 		invalidate: () => {
@@ -336,6 +339,17 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
 		expect(invalidations).toBe(1);
 		expect(await m.band()).toContain('Constellation sign-in failed');
+	});
+
+	test("with no key set, the agent's AUTH_ERROR says not signed in", async () => {
+		const m = load({});
+		sessionKey = undefined;
+		try {
+			await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
+		} finally {
+			sessionKey = KEY;
+		}
+		expect(await m.band()).toContain("Constellation isn't signed in");
 	});
 
 	test('a SessionStart clear takes the onboarding band down', async () => {

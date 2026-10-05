@@ -428,7 +428,7 @@ describe('checkConnection', () => {
 describe('connect', () => {
 	test('sets the key, takes the band down and reloads on a timer', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const { ports, seen, timers, fire } = fakePorts();
 		await connect(KEY, ports);
 		expect(seen.envSet.map(isKey)).toEqual([true]);
@@ -442,10 +442,10 @@ describe('connect', () => {
 });
 
 describe('observeCodeIntel', () => {
-	const observed = async (r: { deny?: string; text?: string }) => {
+	const observed = async (r: Parameters<typeof observeCodeIntel>[0]) => {
 		const band = loadBand();
 		let invalidations = 0;
-		observeCodeIntel(r, () => {
+		observeCodeIntel(r, true, () => {
 			invalidations += 1;
 		});
 		const tree = await band.draw();
@@ -485,9 +485,9 @@ describe('observeCodeIntel', () => {
 	test('a success takes down the states an error put up', async () => {
 		for (const code of ['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'PROJECT_NOT_REGISTERED', 'CWD_NOT_INDEXED']) {
 			const band = loadBand();
-			observeCodeIntel(errored(code, []), () => undefined);
+			observeCodeIntel(errored(code, []), true, () => undefined);
 			expect(await band.draw()).not.toBe(FALLTHROUGH);
-			observeCodeIntel(OK, () => undefined);
+			observeCodeIntel(OK, true, () => undefined);
 			expect(await band.draw()).toBe(FALLTHROUGH);
 		}
 	});
@@ -496,12 +496,12 @@ describe('observeCodeIntel', () => {
 		const band = loadBand();
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
-		observeCodeIntel(OK, () => undefined);
+		observeCodeIntel(OK, false, () => undefined);
 		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
 
 		const again = loadBand();
 		startTask('index', { invalidate: () => undefined });
-		observeCodeIntel(OK, () => undefined);
+		observeCodeIntel(OK, true, () => undefined);
 		expect(shown(await again.draw())).toContain('Indexing this project');
 		endTask();
 	});
@@ -510,21 +510,40 @@ describe('observeCodeIntel', () => {
 		const band = loadBand();
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
 		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+	});
+
+	test('with no key set, not signed in outlasts a reset and an AUTH_ERROR after it', async () => {
+		const band = loadBand();
+		await readStoredKeyAtStart(REPO, fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) }).ports);
+		resetOnboarding();
+		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
+		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+	});
+
+	test('a reset keeps no project and takes down the states a conversation put up', async () => {
+		const band = loadBand();
+		observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined);
+		resetOnboarding();
+		expect(shown(await band.draw())).toContain('Not set up for this project');
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		resetOnboarding();
+		expect(await band.draw()).toBe(FALLTHROUGH);
 	});
 
 	test('a CLI run holds the band: nothing is written while it is live', async () => {
 		const band = loadBand();
 		let invalidations = 0;
 		expect(startTask('auth', { invalidate: () => undefined })).toBeDefined();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => {
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => {
 			invalidations += 1;
 		});
 		expect(invalidations).toBe(0);
 		expect(shown(await band.draw())).toContain('Signing in to Constellation');
 		endTask();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		expect(shown(await band.draw())).toContain("This project isn't indexed yet");
 	});
 
@@ -539,10 +558,10 @@ describe('observeCodeIntel', () => {
 		const log = async (text: string) => {
 			logs.push(text);
 		};
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined, log);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined, log);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined, log);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined, log);
 		resetOnboarding();
-		observeCodeIntel(errored('CWD_NOT_INDEXED'), () => undefined, log);
+		observeCodeIntel(errored('CWD_NOT_INDEXED'), true, () => undefined, log);
 		expect(logs).toEqual([
 			'>_CONSTELLATION:// sign-in failed: run constellation auth',
 			'>_CONSTELLATION:// not set up for this project: run constellation init',
@@ -647,7 +666,7 @@ describe('the band above the prompt', () => {
 	test('passes with no state, and while a survey holds the band', async () => {
 		const band = loadBand();
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		expect(await band.draw({ hasSurvey: true })).toBe(FALLTHROUGH);
 		expect(await band.draw()).not.toBe(FALLTHROUGH);
 	});
@@ -661,14 +680,14 @@ describe('the band above the prompt', () => {
 				"Constellation isn't signed in",
 				['onboarding-dismiss', 'onboarding-sign-in'],
 			],
-			[() => observeCodeIntel(errored('AUTH_ERROR'), () => undefined), 'Constellation sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
+			[() => observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined), 'Constellation sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
 			[() => checkConnection(null, fakePorts().ports), 'Not set up for this project', ['onboarding-dismiss']],
 			[
-				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), () => undefined),
+				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 				"This project isn't registered with Constellation",
 				['onboarding-dismiss'],
 			],
-			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined), "This project isn't indexed yet", ['onboarding-dismiss', 'onboarding-index']],
+			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined), "This project isn't indexed yet", ['onboarding-dismiss', 'onboarding-index']],
 			[
 				() => {
 					startTask('auth', { invalidate: () => undefined });
@@ -689,24 +708,24 @@ describe('the band above the prompt', () => {
 
 	test('the theme row and the colors option pick the scheme', async () => {
 		const light = loadBand({ colors: 'none' });
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		expect(nodes(await light.draw()).every((n) => n.props['color'] === undefined)).toBe(true);
 	});
 
 	test('Dismiss hides the band for the repository until a different state comes', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-dismiss');
 		expect(band.store.get(`onboarding-dismissed:${REPO}`)).toBe('sign-in-again');
 		expect(band.seen.invalidations).toBe(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		expect(shown(await band.draw())).toContain("This project isn't indexed yet");
 	});
 
 	test('an unavailable store shows the band', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		band.flags.storeDown = true;
 		expect(shown(await band.draw())).toContain('Constellation sign-in failed');
 	});
@@ -954,7 +973,7 @@ describe('the Sign in button', () => {
 	test('spawns constellation auth with the inherited key emptied and no color', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Opening browser for authentication...\n')] });
 		const band = loadBand({}, new Map(), world);
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
 		expect(spawns).toEqual([{ argv: [CLI, 'auth'], env: { CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }]);
@@ -992,7 +1011,7 @@ describe('the Sign in button', () => {
 
 	test('a new stored key sets the env, takes the band down and reloads only through after(0)', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const { ports, seen, timers, fire } = buttonPorts({ run: host({ keys: [undefined, KEY] }).run, child: { code: 1 } });
 		await startSignIn(ports);
 		await settle();
@@ -1023,7 +1042,7 @@ describe('the Sign in button', () => {
 
 	test('while it runs the band says so with no Sign in, and the manual URL is a Link', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const held = gate();
 		const printed = `Could not open browser automatically.\n  Please open this URL manually:\n\n    ${MANUAL}\n`;
 		const { ports } = buttonPorts({ run: host().run, child: { chunks: [err(printed)], hold: held.promise } });
@@ -1041,7 +1060,7 @@ describe('the Sign in button', () => {
 
 	test('a URL still being written is not offered', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const held = gate();
 		const { ports } = buttonPorts({
 			run: host().run,
@@ -1070,7 +1089,7 @@ describe('the Sign in button', () => {
 
 	test('a second press is refused while the child is live, and a loop that ends after a reset does nothing', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const held = gate();
 		const { run, readBacks } = host({ keys: [undefined, KEY, undefined, undefined] });
 		const { ports, seen, timers, spawns } = buttonPorts({ run, child: { hold: held.promise } });
@@ -1085,7 +1104,7 @@ describe('the Sign in button', () => {
 		expect(seen.envSet).toEqual([]);
 		expect(timers).toHaveLength(0);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await startSignIn(ports);
 		await settle();
 		expect(spawns).toHaveLength(2);
@@ -1093,7 +1112,7 @@ describe('the Sign in button', () => {
 
 	test('a missing CLI shows the install hint and spawns nothing, and a press after installing runs', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const installed = { cli: null as string | null };
 		const run: Run = (argv, init) => host({ cli: installed.cli }).run(argv, init);
 		const { ports, spawns } = buttonPorts({ run });
@@ -1117,7 +1136,7 @@ describe('the Index button', () => {
 	test('spawns constellation index --wait in the project root, with no --dirty', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Indexing...\n')] });
 		const band = loadBand({}, new Map(), world);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-index');
 		await settle();
 		expect(spawns).toEqual([{ argv: [CLI, 'index', '--wait'], cwd: REPO, env: { NO_COLOR: '1' } }]);
@@ -1126,7 +1145,7 @@ describe('the Index button', () => {
 
 	test('an exit 1 with a successful ping takes the band down and says so', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const { ports, seen } = buttonPorts({ run: host().run, child: { chunks: [err('Upload failed\n')], code: 1 } });
 		await startIndex(ports);
 		await settle();
@@ -1137,7 +1156,7 @@ describe('the Index button', () => {
 
 	test('an exit 0 with PROJECT_NOT_INDEXED stays not indexed, with the last line', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const { ports, seen } = buttonPorts({
 			run: host().run,
 			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
@@ -1154,7 +1173,7 @@ describe('the Index button', () => {
 
 	test('Project not registered in the output with PROJECT_NOT_INDEXED says not registered', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const { ports } = buttonPorts({
 			run: host().run,
 			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
@@ -1169,7 +1188,7 @@ describe('the Index button', () => {
 
 	test('a loop that ends after a reset neither pings nor writes the band', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const held = gate();
 		const { ports, seen, spawns } = buttonPorts({ run: host().run, child: { chunks: [out('Indexing...\n')], hold: held.promise } });
 		await startIndex(ports);
@@ -1185,7 +1204,7 @@ describe('the Index button', () => {
 
 	test('with no constellation.json above the session directory nothing spawns, and the band says where to run it', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const { ports, spawns } = buttonPorts({ run: host().run, exists: (p) => p === `${REPO}/.git` });
 		await startIndex(ports);
 		await settle();
@@ -1197,7 +1216,7 @@ describe('the Index button', () => {
 
 	test('a missing CLI shows the install hint and spawns nothing', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), () => undefined);
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		const { ports, spawns } = buttonPorts({ run: host({ cli: null }).run });
 		await startIndex(ports);
 		await settle();
@@ -1212,7 +1231,7 @@ describe('states with no button', () => {
 	test('no project and not registered offer only Dismiss, and nothing spawns', async () => {
 		for (const put of [
 			() => checkConnection(null, fakePorts().ports),
-			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), () => undefined),
+			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 		]) {
 			const { world, spawns } = buttonWorld(host().run);
 			const band = loadBand({}, new Map(), world);
@@ -1291,7 +1310,7 @@ describe('the key stays out of what is shown', () => {
 		await fire();
 		const drawn: string[] = [];
 		for (const code of ['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'PROJECT_NOT_REGISTERED', 'CWD_NOT_INDEXED']) {
-			observeCodeIntel(errored(code, []), () => undefined, ports.log);
+			observeCodeIntel(errored(code, []), true, () => undefined, ports.log);
 			drawn.push(shown(await band.draw()));
 		}
 		const everything = [...seen.logs, ...seen.toasts, ...band.seen.logs, ...band.seen.toasts, ...drawn];
@@ -1302,13 +1321,13 @@ describe('the key stays out of what is shown', () => {
 	test('no toast, log or drawn text holds the key through a failed and a successful sign-in', async () => {
 		const drawn: string[] = [];
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const unchanged = buttonPorts({ run: host({ keys: [KEY, KEY] }).run, child: { chunks: [out('Waiting for authentication...\n')] } });
 		await startSignIn(unchanged.ports);
 		await settle();
 		drawn.push(shown(await band.draw()));
 		const again = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), () => undefined);
+		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const held = gate();
 		const signedIn = buttonPorts({
 			run: host({ keys: [undefined, KEY] }).run,

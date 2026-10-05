@@ -360,10 +360,12 @@ export async function checkConnection(root: string | null, ports: OnboardingPort
  * its state, and a success takes down a state an error put up. A run of the
  * CLI holds the band, and `MCP_UNAVAILABLE` (the server is not connected) and
  * a `CWD_NOT_INDEXED` that lists project roots (a monorepo) change nothing.
- * With no key set, `AUTH_ERROR` keeps "not signed in": the server then got no key.
+ * `configured` is whether the session's key starts with `ak:`; with none,
+ * `AUTH_ERROR` says "not signed in": the server then got no key.
  */
 export function observeCodeIntel(
 	r: { deny?: string; text?: string; isError?: boolean },
+	configured: boolean,
 	invalidate: () => void,
 	log?: (text: string) => Promise<void>,
 ): void {
@@ -376,7 +378,7 @@ export function observeCodeIntel(
 	}
 	const error = envelope.error;
 	if (error === undefined || error.code === 'MCP_UNAVAILABLE') return;
-	const next = onboardingState({ configured: state !== 'not-set-up', code: error.code, candidates: error.candidates });
+	const next = onboardingState({ configured, code: error.code, candidates: error.candidates });
 	if (next !== undefined) apply(next, notify);
 }
 
@@ -675,15 +677,18 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 
 /**
  * Starts the band over for a new conversation (`/clear`, `/resume`, `/branch`).
- * A CLI run still going keeps `running`: its loop clears it when the child
- * exits, so sign-in and indexing never overlap, and the changed generation
- * tells it not to act on what it finds.
+ * Not set up and no project stay: they describe the process and the
+ * repository, not the conversation. A CLI run still going keeps `running`: its
+ * loop clears it when the child exits, so sign-in and indexing never overlap,
+ * and the changed generation tells it not to act on what it finds.
  */
 export function resetOnboarding(): void {
 	generation += 1;
-	state = undefined;
+	if (state !== 'not-set-up' && state !== 'no-project') {
+		state = undefined;
+		detail = undefined;
+	}
 	buffer = '';
-	detail = undefined;
 	cliMissing = false;
 	logged = false;
 }
