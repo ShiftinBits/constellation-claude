@@ -29,6 +29,18 @@ export type CodeIntelEnvelope = {
 	reason?: string;
 };
 
+/** How long each git command may run. */
+export const GIT_TIMEOUT_MS = 5000;
+
+/**
+ * git with the repository's fsmonitor, hooks and network transports turned
+ * off, since the command runs before Claude Code asks about the Bash call it
+ * guards. The diff skips rename detection, which is what would fetch missing
+ * objects in a partial clone, and `GIT_NO_LAZY_FETCH` stops any other fetch.
+ */
+export const GIT = ['git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'protocol.allow=never'];
+export const GIT_ENV = { GIT_NO_LAZY_FETCH: '1' };
+
 const SERVER_KEY = 'constellation';
 const PROJECT_FILE = 'constellation.json';
 

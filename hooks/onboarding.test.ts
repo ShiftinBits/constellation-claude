@@ -23,6 +23,7 @@ import {
 	observeCodeIntel,
 	onboardingState,
 	parseCliPath,
+	pingProject,
 	parseShellPath,
 	parseStoredKey,
 	readStoredKeyAtStart,
@@ -480,6 +481,65 @@ describe('checkConnection', () => {
 		await checkConnection(REPO, ports);
 		expect(seen.invalidations).toBe(0);
 		expect(await band.draw()).toBe(FALLTHROUGH);
+	});
+
+	test('observe sees the ping, an AUTH_ERROR too, which still reloads', async () => {
+		loadBand();
+		const ok = fakePorts();
+		const seenOk: unknown[] = [];
+		await checkConnection(REPO, ok.ports, (e) => void seenOk.push(e));
+		expect(seenOk).toEqual([{ success: true, result: { pong: true } }]);
+
+		loadBand();
+		const auth = fakePorts({ answer: mcpText(failed('AUTH_ERROR')) });
+		const codes: (string | undefined)[] = [];
+		await checkConnection(REPO, auth.ports, (e) => void codes.push(e.error?.code));
+		expect(codes).toEqual(['AUTH_ERROR']);
+		await auth.fire();
+		expect(auth.seen.reloads).toBe(1);
+	});
+
+	test('an observer that throws changes nothing the ping decides', async () => {
+		const band = loadBand();
+		const { ports } = fakePorts({ answer: mcpText(failed('PROJECT_NOT_INDEXED')) });
+		await checkConnection(REPO, ports, () => {
+			throw new Error('observer failed');
+		});
+		expect(keys(await band.draw())).toEqual(['onboarding-dismiss', 'onboarding-index']);
+	});
+
+	test('observe is not called when the project is not pinged', async () => {
+		loadBand();
+		const { ports } = fakePorts({ config: JSON.stringify({ projectId: 'p', apiUrl: 'https://collector.example.com' }) });
+		let calls = 0;
+		await checkConnection(REPO, ports, () => void (calls += 1));
+		expect(calls).toBe(0);
+	});
+});
+
+describe('pingProject', () => {
+	test('answers the ping envelope for a project on the default API', async () => {
+		const { ports, seen } = fakePorts();
+		expect(await pingProject(REPO, ports)).toEqual({ success: true, result: { pong: true } });
+		expect(seen.pings).toEqual(['return await api.ping()']);
+	});
+
+	test('skips a project that names another API, or whose constellation.json cannot be read', async () => {
+		const other = fakePorts({ config: JSON.stringify({ projectId: 'p', apiUrl: 'https://collector.example.com' }) });
+		expect(await pingProject(REPO, other.ports)).toBeUndefined();
+		expect(await pingProject('/work/elsewhere', other.ports)).toBeUndefined();
+		expect(other.seen.pings).toEqual([]);
+	});
+
+	test('a call that throws gives undefined and never rejects', async () => {
+		const { ports } = fakePorts();
+		const broken = {
+			read: ports.read,
+			get mcp(): OnboardingPorts['mcp'] {
+				throw new Error('no MCP');
+			},
+		};
+		expect(await pingProject(REPO, broken)).toBeUndefined();
 	});
 });
 
