@@ -1,9 +1,10 @@
 import type { On, RenderPropsOf } from 'claude-code';
-import { describe, expect, test } from 'claude-code/testing';
+import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine, Mounted } from 'claude-code/testing';
 import { palette } from './theme';
 import { registerSession } from './session';
-import { methodsOf, outputText, projectName, registerToolRows, resetToolRows } from './toolrows';
+import { projectName } from './lib';
+import { methodsOf, outputText, registerToolRows, resetToolRows } from './toolrows';
 
 const TOOL = 'mcp__plugin_constellation_constellation__code_intel';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -88,8 +89,9 @@ const NOT_INDEXED = {
 	docs: 'https://docs.constellationdev.io/setup',
 };
 
-/** A stand-in for Claude Code's own row beneath the plugin, and the `/config` rows the plugin reads. */
+/** A stand-in for Claude Code's own row beneath the plugin, the clock, and the `/config` rows the plugin reads. */
 function world(on: On, { theme = 'dark', verbose = false }: { theme?: string; verbose?: boolean } = {}): void {
+	mock.clock(on);
 	on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
 	on('config.list', () => ({
 		value: [
@@ -142,6 +144,11 @@ describe('methodsOf', () => {
 		expect(methodsOf('await api.ping(); await api.searchSymbols({}); await api.ping()')).toEqual(['ping', 'searchSymbols']);
 		expect(methodsOf('return 1')).toEqual([]);
 	});
+
+	test('reads optional and spaced calls, and only the api object', () => {
+		expect(methodsOf('await api?.searchSymbols({}); await api . getDependents ({})')).toEqual(['searchSymbols', 'getDependents']);
+		expect(methodsOf('openapi.parse(x); myapi.ping()')).toEqual([]);
+	});
 });
 
 describe('projectName', () => {
@@ -186,6 +193,21 @@ describe('call row', () => {
 		}
 	});
 
+	test('marks a call still running', async ($, on) => {
+		world(on);
+		const props = { ...useProps('running', { code: 'return await api.ping()', cwd: '/x/app' }), isRunning: true };
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'ToolUse', requestId: 'running', props });
+		expect(await line(ui)).toBe('✦ code_intel · ping · app · running');
+		expect((await exact(ui, 'running'))?.props['dimColor']).toBe(true);
+	});
+
+	test('an interrupted call keeps Claude Code row', async ($, on) => {
+		world(on);
+		const props = { ...useProps('cut', { code: 'return await api.ping()' }), isInterrupted: true };
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'ToolUse', requestId: 'cut', props });
+		expect(await line(ui)).toBe('fallthrough');
+	});
+
 	test('an input without code keeps Claude Code row', async ($, on) => {
 		world(on);
 		for (const surface of SURFACES) {
@@ -201,7 +223,7 @@ describe('result row', () => {
 	const cases: [string, unknown, string][] = [
 		['impactAnalysis', IMPACT, '✗ HIGH · 8 dependents · 1 test file'],
 		['getDependents', DEPENDENTS, '3 dependent files · 1 test file'],
-		['getDependencies', DEPENDENCIES, '2 dependency files'],
+		['getDependencies', DEPENDENCIES, '1 dependency file · 1 package'],
 		['searchSymbols', SEARCH, '12 symbols · GraphService, GraphNode, graphOf'],
 		['findOrphanedCode', ORPHANS, '5 exports'],
 		['getCallGraph', CALLS, '3 nodes · depth 2'],
@@ -224,6 +246,33 @@ describe('result row', () => {
 		const ui = await mountResult($, 'terminal', 'bold', reply(IMPACT));
 		expect((await exact(ui, '8'))?.props['bold']).toBe(true);
 		expect((await exact(ui, '✗ HIGH'))?.props['color']).toBe(palette.stellar);
+	});
+
+	test('an impact result with no test file leaves the test count out', async ($, on) => {
+		world(on);
+		const result = { ...IMPACT, summary: { ...IMPACT.summary, testFileCount: 0 } };
+		const ui = await mountResult($, 'terminal', 'impact-no-tests', reply(result));
+		expect(await line(ui)).toBe('✗ HIGH · 8 dependents · 140 ms · as of 0123456');
+	});
+
+	test('a dependents page counts the server total and leaves out a partial test count', async ($, on) => {
+		world(on);
+		const ui = await mountResult($, 'terminal', 'paged', reply({ ...DEPENDENTS, pagination: { total: 84, offset: 0, limit: 3, hasMore: true } }));
+		expect(await line(ui)).toBe('84 dependent files · 140 ms · as of 0123456');
+	});
+
+	test('a dependencies result with no package leaves the package count out', async ($, on) => {
+		world(on);
+		const ui = await mountResult($, 'terminal', 'files-only', reply({ file: 'src/app.ts', directDependencies: [{ type: 'file', filePath: 'src/lib.ts' }] }));
+		expect(await line(ui)).toBe('1 dependency file · 140 ms · as of 0123456');
+	});
+
+	test('an empty result names the reason the server gave', async ($, on) => {
+		world(on);
+		const text = JSON.stringify({ success: true, result: { symbols: [] }, resultContext: { reason: 'branch_not_indexed' }, time: 9 });
+		const ui = await mountResult($, 'terminal', 'reason', text);
+		expect(await line(ui)).toBe('0 symbols · branch not indexed · 9 ms');
+		expect((await exact(ui, 'branch not indexed'))?.props['dimColor']).toBe(true);
 	});
 
 	test('a dependents result with no test file leaves the test count out', async ($, on) => {
@@ -272,43 +321,58 @@ describe('result row', () => {
 		}
 	});
 
-	test('unreadable output draws the generic line', async ($, on) => {
+	test('unreadable output keeps Claude Code row', async ($, on) => {
 		world(on);
+		const capped = 'Error: result (83,881 characters) exceeds maximum allowed tokens. Output has been saved to /tmp/out.txt';
 		for (const surface of SURFACES) {
-			expect(await line(await mountResult($, surface, `bad-${surface}`, 'not json'))).toBe('result: unreadable');
-			expect(await line(await mountResult($, surface, `empty-${surface}`, undefined))).toBe('result: unreadable');
+			expect(await line(await mountResult($, surface, `bad-${surface}`, 'not json'))).toBe('fallthrough');
+			expect(await line(await mountResult($, surface, `empty-${surface}`, undefined))).toBe('fallthrough');
+			expect(await line(await mountResult($, surface, `capped-${surface}`, capped))).toBe('fallthrough');
 		}
 	});
 
-	test('a redraw reuses the parsed envelope', async ($, on) => {
+	test('a failure whose error is not an object keeps Claude Code row', async ($, on) => {
+		world(on);
+		const text = JSON.stringify({ success: false, error: 'Code validation failed: require is not allowed' });
+		expect(await line(await mountResult($, 'terminal', 'string-error', text))).toBe('fallthrough');
+	});
+
+	test('a redraw draws the output it is given', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'redraw', reply(DEPENDENCIES));
-		await ui.redraw(resultProps('redraw', 'not json'));
-		expect(await line(ui)).toBe('2 dependency files · 140 ms · as of 0123456');
+		await ui.redraw(resultProps('redraw', reply(PING)));
+		expect(await line(ui)).toBe('✓ connected · 140 ms · as of 0123456');
 	});
 });
 
 describe('error row', () => {
-	test("shows the code in the error color and the person's step, not the agent's", async ($, on) => {
+	test("shows the code in the error color, the headline and the person's step, not the agent's", async ($, on) => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountResult($, surface, `auth-${surface}`, errored(AUTH), true);
-			expect(await line(ui)).toBe('✗ AUTH_ERROR · constellation auth');
+			expect(await line(ui)).toBe("✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth");
 			expect(await line(ui)).not.toContain('code_intel');
 			expect((await exact(ui, '✗ AUTH_ERROR'))?.props['color']).toBe(palette.stellar);
 		}
 	});
 
-	test('the error a workspace root gets reads its note for a person', async ($, on) => {
+	test('the error a workspace root gets reads its headline for a person', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'not-indexed', errored(NOT_INDEXED), true);
-		expect(await line(ui)).toBe('✗ CWD_NOT_INDEXED · The Constellation workspace is multi-project: each project owns its own constellation.json at its repo root.');
+		expect(await line(ui)).toBe("✗ CWD_NOT_INDEXED · This folder isn't a Constellation project");
+	});
+
+	test('an error with no headline of its own shows the server message, not generic guidance', async ($, on) => {
+		world(on);
+		const error = { code: 'EXECUTION_ERROR', message: 'api.nope is not a function', guidance: ['Verify all api.* calls use await (they are async)'] };
+		const ui = await mountResult($, 'terminal', 'execution', errored(error), true);
+		expect(await line(ui)).toBe('✗ EXECUTION_ERROR · api.nope is not a function');
 	});
 
 	test('an error envelope not marked as errored is an error row too', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'unmarked', JSON.stringify({ success: false, error: AUTH, time: 12 }));
-		expect(await line(ui)).toBe('✗ AUTH_ERROR · constellation auth · 12 ms');
+		expect(await line(ui)).toBe("✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth · 12 ms");
 	});
 
 	test('an errored call whose output is not an envelope keeps Claude Code row', async ($, on) => {
@@ -329,6 +393,12 @@ describe('passthrough', () => {
 			const result = await mountResult($, surface, `bash-${surface}`, { stdout: 'a', stderr: '', interrupted: false }, false, 'Bash');
 			expect(await result.drawn()).toEqual({ type: 'Text', children: ['fallthrough'] });
 		}
+	});
+
+	test("another server's tool that ends in code_intel passes through", async ($, on) => {
+		world(on);
+		expect(await line(await mountUse($, 'terminal', 'acme', { code: CALL_CODE }, 'mcp__acme__get_code_intel'))).toBe('fallthrough');
+		expect(await line(await mountResult($, 'terminal', 'acme', reply(PING), false, 'mcp__acme__get_code_intel'))).toBe('fallthrough');
 	});
 
 	test('a surface that is neither terminal nor desktop passes through', async ($, on) => {
@@ -416,7 +486,7 @@ const TABLE = { Text: element('Text'), Box: element('Box') };
  * that `resetToolRows` clears (the plugin the kit loads is a separate module
  * instance). `el` and `list` stand in for `$.ui.resolve(e)` and `$.config.list()`.
  */
-function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () => Promise<unknown[]> } = {}) {
+function direct({ el = TABLE, list = async () => [], now = () => 0 }: { el?: object; list?: () => Promise<unknown[]>; now?: () => number } = {}) {
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]): void => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -425,7 +495,7 @@ function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () 
 	};
 	registerToolRows(capture as unknown as On, {});
 	registerSession(capture as unknown as On);
-	const $ = { ui: { resolve: () => el }, config: { list } };
+	const $ = { ui: { resolve: () => el, invalidate: () => {} }, config: { list }, clock: { now: async () => now() } };
 	const raise = async (event: string, e: object, bottom: () => Promise<unknown>): Promise<unknown> => {
 		const chain = registered.filter((r) => r.event === event && matches(r.matcher, e));
 		const step =
@@ -444,6 +514,7 @@ function direct({ el = TABLE, list = async () => [] }: { el?: object; list?: () 
 		/** The result row's drawn tree, not flattened. */
 		drawn: (id: string) => draw('ToolResult', id, resultProps(id, reply(PING))),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }, async () => ({})),
+		configSet: (key: string) => raise('config.set', { key }, async () => ({})),
 	};
 }
 
@@ -510,6 +581,46 @@ describe('fail-safe', () => {
 		const rows = direct({ el: broken });
 		expect(await rows.use('throws', '/x/app')).toBe('fallthrough');
 		expect(await rows.result('throws')).toBe('fallthrough');
+	});
+
+	test('the settings are read once, and again after theme or verbose changes', async () => {
+		resetToolRows();
+		let verbose = false;
+		let reads = 0;
+		const rows = direct({
+			list: async () => {
+				reads++;
+				return [{ key: 'verbose', value: verbose }];
+			},
+		});
+		expect(((await rows.drawn('first')) as Element).type).toBe('Text');
+		await rows.drawn('second');
+		expect(reads).toBe(1);
+		verbose = true;
+		await rows.configSet('verbose');
+		expect(((await rows.drawn('third')) as Element).type).toBe('Box');
+		expect(reads).toBe(2);
+	});
+
+	test('the settings are read again once a read is over a second old', async () => {
+		resetToolRows();
+		let clock = 1_000_000;
+		let theme = 'dark';
+		let reads = 0;
+		const rows = direct({
+			list: async () => {
+				reads++;
+				return [{ key: 'theme', value: theme }];
+			},
+			now: () => clock,
+		});
+		expect(within(await rows.drawn('dark'), '✓ connected')?.props['color']).toBe(palette.cosmic);
+		theme = 'light';
+		clock += 1000;
+		expect(within(await rows.drawn('still-dark'), '✓ connected')?.props['color']).toBe(palette.cosmic);
+		clock += 1;
+		expect(within(await rows.drawn('light'), '✓ connected')?.props['color']).toBe('success');
+		expect(reads).toBe(2);
 	});
 
 	test('a settings read that fails draws the summary in the default colors, with verbose off', async () => {

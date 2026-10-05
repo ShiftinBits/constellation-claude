@@ -1,3 +1,5 @@
+import { isRecord, num } from './lib';
+
 /** One unused export as the pane lists it and the removal prompt names it. */
 export type OrphanRow = {
 	symbolId: string;
@@ -8,16 +10,8 @@ export type OrphanRow = {
 	lineEnd?: number;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function str(value: unknown): string | undefined {
 	return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
-function num(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /**

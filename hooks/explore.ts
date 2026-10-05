@@ -1,3 +1,5 @@
+import { isRecord, num } from './lib';
+
 /** One symbol a search found, as the explorer lists and drills into it. */
 export type Hit = {
 	id: string;
@@ -24,16 +26,8 @@ export type CallLine = { text: string; depth: number };
 const TOP_DEPENDENTS = 10;
 const USAGE_ROWS = 15;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function str(value: unknown): string | undefined {
 	return typeof value === 'string' && value !== '' ? value : undefined;
-}
-
-function num(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function entries(value: unknown): Record<string, unknown>[] {

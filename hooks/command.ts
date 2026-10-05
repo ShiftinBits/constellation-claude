@@ -1,5 +1,5 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { canDraw, codeIntel } from './lib';
+import { canDraw, codeIntel, isRecord, projectName } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
@@ -104,10 +104,6 @@ export function parseArgs(args: string): { tab: Tab; path?: string; kind?: strin
 	}
 	if (tab === 'explore') return rest === '' ? { tab } : { tab, query: rest };
 	return tab === 'deps' && rest !== '' ? { tab, path: rest } : { tab };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function records(value: unknown): Record<string, unknown>[] {
@@ -538,10 +534,6 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 	if (!detailsPending.delete(root)) return;
 	details.set(root, envelope);
 	$.ui.invalidate('ui.render');
-}
-
-function projectName(cwd: string | undefined): string | undefined {
-	return cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop();
 }
 
 export function registerCommand(on: On, options: PluginOptions): void {
