@@ -1,5 +1,6 @@
 import type { On } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
+import { registerAdoption } from './adoption';
 import { registerBudget } from './budget';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 
@@ -10,11 +11,18 @@ type Answer = { context?: string[]; deny?: string };
 type Handler = (
 	$: {
 		env: { get: (name: string) => Promise<string | undefined> };
-		session: { cwd: () => Promise<string> };
+		session: { cwd: () => Promise<string>; id: () => Promise<string> };
 		fs: { exists: (path: string) => Promise<boolean> };
+		store: {
+			get: (key: string) => Promise<unknown>;
+			set: (key: string, value: unknown) => Promise<void>;
+			keys: () => Promise<string[]>;
+			delete: (key: string) => Promise<void>;
+		};
+		clock: { now: () => Promise<number> };
 	},
 	e: object,
-	next: (e: object) => Promise<Answer>,
+	next: ((e: object) => Promise<Answer>) & { origin: { plugin: string; tier: string } },
 ) => Promise<Answer>;
 
 const PROJECT = '/work/app';
@@ -29,6 +37,7 @@ function searchCall(): Handler {
 	const capture = (pattern: string, ...rest: unknown[]) => {
 		if (pattern === 'tool.call') handler = rest[rest.length - 1] as Handler;
 	};
+	registerAdoption((() => {}) as unknown as On, {});
 	registerBudget((() => {}) as unknown as On, {});
 	registerNudges(capture as unknown as On);
 	if (!handler) throw new Error('no tool.call handler registered');
@@ -48,10 +57,13 @@ async function nudgesFor(
 ): Promise<Answer> {
 	const $ = {
 		env: { get: async () => key },
-		session: { cwd: async () => cwd },
+		session: { cwd: async () => cwd, id: async () => 'session-1' },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
+		store: { get: async () => undefined, set: async () => undefined, keys: async () => [], delete: async () => undefined },
+		clock: { now: async () => 0 },
 	};
-	return searchCall()($, e, async () => beneath);
+	// The model's own call: the engine raises it.
+	return searchCall()($, e, Object.assign(async () => beneath, { origin: { plugin: 'engine', tier: 'core' } }));
 }
 
 const CASES: ReadonlyArray<readonly [string, object]> = [

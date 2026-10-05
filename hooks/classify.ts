@@ -289,6 +289,8 @@ export function globHasSymbolStem(glob: string): boolean {
 export type SearchTarget = {
 	/** True when it searches for something that looks like a symbol. */
 	symbolLike: boolean;
+	/** True when the call is a text search at all: every Grep and Glob, and a Bash command that runs one. */
+	isSearch: boolean;
 	/** The identifier a Grep or shell search looks for, or null (always null for Glob). */
 	symbol: string | null;
 	/** The path the call searches (Grep and Glob `path`, the shell search's path); undefined means the working directory. */
@@ -300,16 +302,16 @@ export function searchTarget(e: { tool: unknown }): SearchTarget {
 	switch (String(e.tool)) {
 		case 'Grep': {
 			const symbol = symbolOf(stringArg(e, 'pattern') ?? '');
-			return { symbolLike: symbol !== null, symbol, path: stringArg(e, 'path') };
+			return { symbolLike: symbol !== null, isSearch: true, symbol, path: stringArg(e, 'path') };
 		}
 		case 'Glob':
-			return { symbolLike: globHasSymbolStem(stringArg(e, 'pattern') ?? ''), symbol: null, path: stringArg(e, 'path') };
+			return { symbolLike: globHasSymbolStem(stringArg(e, 'pattern') ?? ''), isSearch: true, symbol: null, path: stringArg(e, 'path') };
 		case 'Bash': {
 			const search = bashSearch(stringArg(e, 'command') ?? '');
 			const symbol = symbolOf(search?.pattern ?? '');
-			return { symbolLike: symbol !== null, symbol, path: search?.path };
+			return { symbolLike: symbol !== null, isSearch: search !== null, symbol, path: search?.path };
 		}
 		default:
-			return { symbolLike: false, symbol: null, path: undefined };
+			return { symbolLike: false, isSearch: false, symbol: null, path: undefined };
 	}
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { bashSearch, bashSearchPattern, type GhPrCreate, ghPrCreate, globHasSymbolStem, isSymbolLike, symbolOf } from './classify';
+import { bashSearch, bashSearchPattern, type GhPrCreate, ghPrCreate, globHasSymbolStem, isSymbolLike, searchTarget, symbolOf } from './classify';
 
 describe('symbolOf', () => {
 	const rows: ReadonlyArray<readonly [string, string | null]> = [
@@ -214,6 +214,23 @@ describe('ghPrCreate', () => {
 	for (const line of misses) {
 		test(`does not match ${line}`, () => {
 			expect(ghPrCreate(line)).toBeNull();
+		});
+	}
+});
+
+describe('searchTarget', () => {
+	const rows: [string, object, boolean, boolean][] = [
+		['Bash ls -la', { tool: 'Bash', command: 'ls -la' }, false, false],
+		['Bash grep of quoted text', { tool: 'Bash', command: 'grep "connection refused"' }, true, false],
+		['Bash rg of a symbol', { tool: 'Bash', command: 'rg AuthService' }, true, true],
+		['Glob of an extension', { tool: 'Glob', pattern: '**/*.ts' }, true, false],
+		['Grep of a symbol', { tool: 'Grep', pattern: 'AuthService' }, true, true],
+		['another tool', { tool: 'Read', pattern: 'AuthService' }, false, false],
+	];
+	for (const [name, e, isSearch, symbolLike] of rows) {
+		test(`${name} is ${isSearch ? 'a search' : 'not a search'} and ${symbolLike ? 'symbol-like' : 'not symbol-like'}`, () => {
+			const target = searchTarget(e as { tool: unknown });
+			expect([target.isSearch, target.symbolLike]).toEqual([isSearch, symbolLike]);
 		});
 	}
 });

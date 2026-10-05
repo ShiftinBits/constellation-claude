@@ -1,8 +1,10 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot } from './lib';
+import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
+import type { Buckets, Stats } from './adoption';
+import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot, withinDeadline } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
-import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
+import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
 import type { Hit } from './explore';
 import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
@@ -23,8 +25,10 @@ export const COMMAND = 'constellation';
 /** The id of the pane the command opens; the `requestId` its tree is drawn under. */
 const PANE = 'constellation';
 
-const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore'] as const;
+const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore', 'stats'] as const;
 export type Tab = (typeof TABS)[number];
+/** A tab that shows a code_intel query's answer. Stats shows counts kept on this machine and never queries. */
+type QueryTab = Exclude<Tab, 'stats'>;
 type Direction = 'dependencies' | 'dependents';
 
 const TAB_LABEL: Readonly<Record<Tab, string>> = {
@@ -33,6 +37,7 @@ const TAB_LABEL: Readonly<Record<Tab, string>> = {
 	deps: 'Deps',
 	unused: 'Unused',
 	explore: 'Explore',
+	stats: 'Stats',
 };
 
 /** One line under the tab row saying what the tab shows. */
@@ -42,6 +47,7 @@ const TAB_HINT: Readonly<Record<Tab, string>> = {
 	deps: 'What a file imports, or what imports it.',
 	unused: 'Exports nothing imports. Verify each one before deleting it.',
 	explore: 'Search the graph and drill into a symbol without a Claude turn.',
+	stats: 'How often Claude called code_intel, beside its text searches. Counted on this machine only.',
 };
 
 /** The column a labeled row's value starts in. */
@@ -251,7 +257,7 @@ function exploreItems(result: unknown, query: string | undefined): Item[] {
  * each field is narrowed against the executor schemas before it is read; on
  * error the code, message and guidance are returned.
  */
-export function summarize(tab: Tab, envelope: CodeIntelEnvelope, options: SummaryOptions = {}): Summary {
+export function summarize(tab: QueryTab, envelope: CodeIntelEnvelope, options: SummaryOptions = {}): Summary {
 	if (!envelope.success) return failure(envelope.error ?? { code: 'UNKNOWN', message: 'The request failed' });
 	const { result } = envelope;
 	switch (tab) {
@@ -315,7 +321,7 @@ function unusedFilter(): { filterByKind?: string[] } {
 	return unusedKind === undefined ? {} : { filterByKind: [unusedKind] };
 }
 
-function codeFor(tab: Tab, direction: Direction, path: string): string {
+function codeFor(tab: QueryTab, direction: Direction, path: string): string {
 	switch (tab) {
 		case 'status':
 			return 'return await api.ping()';
@@ -343,9 +349,9 @@ let launchCwd: string | undefined;
  * and used only while the session is still in `from`.
  */
 let chosen: { from: string; root: string } | undefined;
-const cache = new Map<Tab, CodeIntelEnvelope>();
-const pending = new Set<Tab>();
-const generations = new Map<Tab, number>();
+const cache = new Map<QueryTab, CodeIntelEnvelope>();
+const pending = new Set<QueryTab>();
+const generations = new Map<QueryTab, number>();
 /** The picker's per-project `getCapabilities` envelopes, by project root. */
 const details = new Map<string, CodeIntelEnvelope>();
 const detailsPending = new Set<string>();
@@ -366,6 +372,13 @@ let section: Section = 'details';
 const drill = new Map<string, CodeIntelEnvelope>();
 const drillPending = new Set<string>();
 let exploreNote: string | undefined;
+/** How long a read of the stored counts waits for counts still being saved. */
+const SETTLE_MS = 1000;
+/** The session's counts and the stored ones, read together so the rows agree; `stored` is unset when the store cannot be read. */
+type Snapshot = { session: Buckets; stored: Stats | undefined };
+/** The Stats tab's counts: unset until the tab shows, then being read, then read. Cleared by `drop('stats')`. */
+let history: Snapshot | 'reading' | undefined;
+let historyRead = 0;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
 function pickKey(from: string): string {
@@ -373,6 +386,11 @@ function pickKey(from: string): string {
 }
 
 function drop(tab: Tab): void {
+	if (tab === 'stats') {
+		history = undefined;
+		historyRead += 1;
+		return;
+	}
 	cache.delete(tab);
 	pending.delete(tab);
 	generations.set(tab, (generations.get(tab) ?? 0) + 1);
@@ -415,7 +433,7 @@ function target(cwd: string): string {
  * tab was dropped (refresh, a new path, the pane closing) is discarded. The
  * redraw is asked for once the envelope is cached.
  */
-async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
+async function runQuery($: EngineInterface, tab: QueryTab): Promise<void> {
 	const generation = generations.get(tab) ?? 0;
 	pending.add(tab);
 	let envelope: CodeIntelEnvelope;
@@ -433,6 +451,36 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	pending.delete(tab);
 	cache.set(tab, envelope);
 	if (tab === 'unused' && envelope.success) nextOffset = orphanPage(envelope.result).nextOffset;
+	$.ui.invalidate('ui.render');
+}
+
+/**
+ * The session's counts with the stored ones, deleting the entries past their 30
+ * days. Counts are saved in the background, so it first waits, for at most
+ * `SETTLE_MS`, for the saves still running: today's row is then never behind
+ * the session's. With no store only the session's counts come back.
+ */
+async function readStats($: EngineInterface): Promise<Snapshot> {
+	try {
+		await withinDeadline((ms, o) => $.clock.sleep(ms, o), settled(), SETTLE_MS, new AbortController().signal);
+	} catch {
+		// No timer: the stored counts are read as they are.
+	}
+	const session = sessionCounts();
+	try {
+		return { session, stored: await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k)) };
+	} catch {
+		return { session, stored: undefined };
+	}
+}
+
+/** Reads the Stats tab's counts; a read that lands after the tab was dropped is discarded. */
+async function readHistory($: EngineInterface): Promise<void> {
+	const read = (historyRead += 1);
+	history = 'reading';
+	const snapshot = await readStats($);
+	if (historyRead !== read) return;
+	history = snapshot;
 	$.ui.invalidate('ui.render');
 }
 
@@ -610,8 +658,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		try {
 			await $.command.register({
 				name: COMMAND,
-				description: 'Constellation status, diagnose, deps, unused code and symbol explorer',
-				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]]',
+				description: 'Constellation status, diagnose, deps, unused code, symbol explorer and code_intel usage stats',
+				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]|stats]',
 				immediate: true,
 			});
 		} catch {
@@ -622,6 +670,11 @@ export function registerCommand(on: On, options: PluginOptions): void {
 
 	on('command.run', { command: COMMAND }, async ($, e) => {
 		const { tab, path, kind, query } = parseArgs(e.args);
+		const draws = canDraw(await $.session.surfaces());
+		if (tab === 'stats' && !draws) {
+			const { session, stored } = await readStats($);
+			return { text: [`${PROMPT} ${tab}`, ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
+		}
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
 			try {
@@ -634,7 +687,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const dir = target(cwd);
 		unusedKind = kind;
 		exploreQuery = query ?? '';
-		if (!canDraw(await $.session.surfaces())) {
+		if (!draws && tab !== 'stats') {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
 			if (tab === 'explore' && query === undefined) return { text: 'Usage: /constellation explore <symbol>' };
 			const envelope = await codeIntel(
@@ -668,17 +721,34 @@ export function registerCommand(on: On, options: PluginOptions): void {
 	on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
 		if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e);
 		const el = $.ui.resolve(e);
-		const envelope = cache.get(selected);
+		const envelope = selected === 'stats' ? undefined : cache.get(selected);
 		const needsPath = selected === 'deps' && depsPath === '';
 		const needsQuery = selected === 'explore' && exploreQuery === '';
-		if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
-		const isPending = pending.has(selected);
+		if (selected === 'stats') {
+			if (history === undefined) void readHistory($);
+		} else if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
+		const isPending = selected !== 'stats' && pending.has(selected);
 
 		const redraw = (): void => $.ui.invalidate('ui.render');
 		// In a row that may be wider than the pane, the name and kind keep their width and a long location
 		// shortens in the middle, instead of every item shrinking and wrapping onto a second line.
 		const fixed = (children: RenderElement[]): RenderElement => el.Box({ flexDirection: 'row', columnGap: 1, flexShrink: 0, children });
 		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
+		// Desktop has no monospace grid, so rows padded into columns do not line up there: it gets markdown tables.
+		const grid = e.surface !== 'desktop';
+		// A table of Boxes, each column a share of the width, so cells keep their colors and still line up without a
+		// monospace grid. Never markdown: the cells hold graph text, which a markdown parser would read as links.
+		const boxTable = (widths: readonly string[], rows: readonly { key?: string; cells: readonly RenderElement[] }[], head?: readonly string[]): RenderElement => {
+			const line = (cells: readonly RenderElement[], key?: string): RenderElement =>
+				el.Box({ ...(key === undefined ? {} : { key }), flexDirection: 'row', children: cells.map((cell, i) => el.Box({ width: widths[i] ?? 'auto', children: [cell] })) });
+			return el.Box({
+				flexDirection: 'column',
+				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ bold: true, children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
+			});
+		};
+		// Label and value rows, the label dim: the Desktop form of rows padded into a label column.
+		const factTable = (rows: readonly (readonly [string, string])[]): RenderElement =>
+			boxTable(['25%', '75%'], rows.map(([label, value]) => ({ cells: [el.Text({ dimColor: true, children: label }), el.Text({ children: value })] })));
 		const showDeps = (path: string): void => {
 			depsPath = path;
 			drop('deps');
@@ -709,7 +779,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				// A pick left in the store is offered again and can be switched again.
 			}
 		};
-		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
+		const summary = selected === 'stats' || envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
 
 		const body: RenderElement[] = [];
 		if (selected === 'deps') {
@@ -820,6 +890,67 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				}
 				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
 			}
+		} else if (selected === 'stats') {
+			const cosmic = paint(palette.cosmic, tint);
+			const solar = paint(palette.solar, tint);
+			// Every row from one snapshot; while it is being read, the session's counts as they stand.
+			const snapshot = typeof history === 'object' ? history : undefined;
+			if (!grid) {
+				const colored = (color: string | undefined, text: string): RenderElement => el.Text({ ...(color === undefined ? {} : { color }), children: text });
+				body.push(
+					boxTable(
+						['24%', '19%', '19%', '19%', '19%'],
+						statsCells(snapshot?.session ?? sessionCounts(), snapshot?.stored).map(({ label, figures: f }) => ({
+							key: `stats:${label}`,
+							cells: [
+								el.Text({ dimColor: true, children: label }),
+								colored(cosmic, f.calls),
+								colored(solar, f.symbol),
+								el.Text({ dimColor: true, children: f.literal }),
+								el.Text({ bold: true, children: f.share }),
+							],
+						})),
+						['', 'code_intel calls', 'symbol-like', 'literal', SHARE_LABEL],
+					),
+				);
+			} else {
+				for (const row of statRows(snapshot?.session ?? sessionCounts(), snapshot?.stored)) {
+					const f = figures(row.counts);
+					body.push(
+						el.Box({
+							key: `stats:${row.label}`,
+							flexDirection: 'row',
+							children: [
+								el.Text({ dimColor: true, children: row.label.padEnd(LABEL_WIDTH) }),
+								el.Box({
+									flexDirection: 'column',
+									children: [
+										el.Box({
+											flexDirection: 'row',
+											columnGap: 2,
+											flexWrap: 'wrap',
+											children: [
+												el.Text({ ...(cosmic === undefined ? {} : { color: cosmic }), children: f.calls }),
+												el.Text({ ...(solar === undefined ? {} : { color: solar }), children: f.symbol }),
+												el.Text({ dimColor: true, children: f.literal }),
+												el.Box({
+													flexDirection: 'row',
+													columnGap: 1,
+													children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
+												}),
+											],
+										}),
+										...(row.split === undefined ? [] : [el.Text({ dimColor: true, children: row.split })]),
+									],
+								}),
+							],
+						}),
+					);
+				}
+			}
+			if (snapshot === undefined) body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			else if (snapshot.stored === undefined) body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
+			body.push(el.Text({ dimColor: true, children: SHARE_NOTE }));
 		} else if (selected === 'explore' && summary !== undefined && summary.explanation === undefined) {
 			const labeled = (label: string, value: string): RenderElement =>
 				el.Box({ flexDirection: 'row', children: [el.Text({ dimColor: true, children: label.padEnd(LABEL_WIDTH) }), el.Text({ children: value })] });
@@ -927,26 +1058,39 @@ export function registerCommand(on: On, options: PluginOptions): void {
 											children: (() => {
 												if (section === 'details') {
 													const lines = detailLines(result['details']);
-													return lines.length === 0 ? [el.Text({ dimColor: true, children: 'No details returned' })] : lines.map((l) => el.Text({ children: l }));
+													if (lines.length === 0) return [el.Text({ dimColor: true, children: 'No details returned' })];
+													return grid ? lines.map((l) => el.Text({ children: l })) : [factTable(detailRows(result['details']))];
 												}
 												if (section === 'usages') {
 													const lines = usageLines(result['usages']);
+													if (lines.length === 0) return [el.Text({ dimColor: true, children: 'No usages found' }), aliasNote];
+													if (grid) return [...lines.map((l) => el.Text({ children: l })), aliasNote];
+													const total = usageTotal(result['usages']);
+													const rows = usageRows(result['usages']);
 													return [
-														...(lines.length === 0 ? [el.Text({ dimColor: true, children: 'No usages found' })] : lines.map((l) => el.Text({ children: l }))),
+														...(total === undefined ? [] : [el.Text({ children: total })]),
+														...(rows.length === 0 ? [] : [boxTable(['75%', '25%'], rows.map((r) => ({ cells: r.map((t) => el.Text({ children: t })) })), ['Location', 'Usage'])]),
 														aliasNote,
 													];
 												}
 												if (section === 'impact') {
 													const view = impactView(result['impact']);
-													return [
-														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
-														...(view.files === undefined ? [] : [labeled('Files', String(view.files))]),
-														...(view.direct === undefined ? [] : [labeled('Direct', String(view.direct))]),
-														...(view.transitive === undefined ? [] : [labeled('Transitive', String(view.transitive))]),
+													const facts: [string, string][] = [
+														...(view.files === undefined ? [] : [['Files', String(view.files)] as [string, string]]),
+														...(view.direct === undefined ? [] : [['Direct', String(view.direct)] as [string, string]]),
+														...(view.transitive === undefined ? [] : [['Transitive', String(view.transitive)] as [string, string]]),
 														...(view.tests === undefined && view.production === undefined
 															? []
-															: [labeled('Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`)]),
-														...view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint))),
+															: [['Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`] as [string, string]]),
+													];
+													return [
+														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
+														...(grid ? facts.map(([label, value]) => labeled(label, value)) : facts.length === 0 ? [] : [factTable(facts)]),
+														...(grid
+															? view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint)))
+															: view.top.length === 0
+																? []
+																: [boxTable(['60%', '40%'], view.top.map((d) => ({ cells: [el.Text({ children: d.name }), badge(el, '', forTheme(kind(d.kind), tint))] })), ['Dependent', 'Kind'])]),
 														aliasNote,
 													];
 												}
@@ -965,9 +1109,21 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			body.push(errorView(el, summary.explanation, tint));
 		} else if (summary !== undefined) {
 			let row = 0;
+			// On Desktop, each run of labeled facts is one table.
+			const facts: RenderElement[][] = [];
+			const flush = (): void => {
+				if (facts.length > 0) body.push(boxTable(['25%', '75%'], facts.splice(0).map((cells) => ({ cells }))));
+			};
 			for (const item of summary.items) {
 				const path = item.path;
 				const project = item.project;
+				if (!grid && item.label !== undefined && project === undefined && path === undefined) {
+					const tone =
+						item.badge === undefined ? undefined : forTheme(item.badge.kind === 'status' ? status(item.badge.value) : kind(item.badge.value), tint);
+					facts.push([el.Text({ dimColor: true, children: item.label }), tone === undefined ? el.Text({ children: item.text }) : badge(el, item.text, tone)]);
+					continue;
+				}
+				flush();
 				if (project !== undefined) {
 					// The tabs are hidden while picking, so the digits are free for the rows.
 					const n = row++;
@@ -1015,6 +1171,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					body.push(el.Text(item.dim ? { dimColor: true, children: item.text } : { children: item.text }));
 				}
 			}
+			flush();
 		} else if (isPending) {
 			body.push(badge(el, 'querying Constellation', forTheme(status('pending'), tint)));
 		} else if (needsPath) {
@@ -1056,12 +1213,16 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		// The pane's width less its padding; Claude Code redraws when it changes.
 		const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns - 2 : 0;
 		const head = header(el, columns, e.surface === 'terminal', tint);
-		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
+		// Desktop draws text in a proportional font, where a row of `─` overruns the pane and wraps.
+		const rule =
+			e.surface === 'desktop'
+				? el.Markdown({ text: '---' })
+				: el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
 			: selected === 'explore'
-					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
-					: `1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
+					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-6 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
+					: `1-6 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
 
 		return el.Box({
 			flexDirection: 'column',

@@ -1,4 +1,5 @@
 import type { Register } from 'claude-code';
+import { registerAdoption } from './adoption';
 import { registerAugment } from './augment';
 import { registerBudget } from './budget';
 import { registerCommand } from './command';
@@ -15,6 +16,7 @@ import { registerTurnSummary } from './turnsummary';
 export const register: Register = (on, options) => {
 	registerBudget(on, options);
 	registerNudges(on);
+	registerAdoption(on, options);
 	registerDescribe(on);
 	registerAugment(on, options);
 	registerSession(on);

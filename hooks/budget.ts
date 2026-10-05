@@ -1,4 +1,5 @@
 import type { On, PluginOptions } from 'claude-code';
+import { background, noteCodeIntelCall, save, showsAdoption } from './adoption';
 import { observeEnvelope } from './freshness';
 import { absolute, canDraw, isConfigured, parseToolText, projectRoot, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
@@ -8,7 +9,7 @@ import { noteCodeIntel } from './risk';
 const DEFAULT_NUDGE_LIMIT = 3;
 
 /** The agent key of the main conversation. */
-const MAIN = 'main';
+export const MAIN = 'main';
 
 type AgentBudget = {
 	/** Nudges spent so far. */
@@ -103,7 +104,21 @@ export function registerBudget(on: On, options: PluginOptions): void {
 			} catch {
 				// The band stays as it was; the agent's answer goes back untouched.
 			}
+			// A refused call never ran; an errored one is still the agent reaching for code_intel.
 			if (r.deny === undefined) {
+				const counted = noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time);
+				if (showsAdoption()) $.ui.invalidate('ui.render');
+				// Saved in the background: the agent's answer never waits on the store.
+				background(() =>
+					save(counted, {
+						now: () => $.clock.now(),
+						sessionId: () => $.session.id(),
+						get: (k) => $.store.get(k),
+						set: (k, entry) => $.store.set(k, entry),
+						keys: () => $.store.keys(),
+						del: (k) => $.store.delete(k),
+					}),
+				);
 				try {
 					// The index the answer came from, for the project the call ran in. The answer does not wait for git.
 					const session = await $.session.cwd();

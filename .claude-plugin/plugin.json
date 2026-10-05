@@ -64,6 +64,12 @@
 			"description": "After a turn that changed files, show one line under the answer with how many files changed and how many files depend on them (from the last indexed commit).",
 			"default": true
 		},
+		"showAdoption": {
+			"type": "boolean",
+			"title": "Adoption count on the spinner",
+			"description": "Show, beside the spinner, how many code_intel calls and symbol text searches the session has made.",
+			"default": false
+		},
 		"prImpact": {
 			"type": "string",
 			"title": "PR impact section",

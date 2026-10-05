@@ -1,5 +1,6 @@
 import type { McpToolResult, On, PluginOptions, ToolCallArgs } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
+import { registerAdoption } from './adoption';
 import { probe } from './blast';
 import { registerBudget, usedCodeIntelThisTurn } from './budget';
 import { collectEvidence, hasEvidence } from './risk';
@@ -80,6 +81,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
+	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 	registerTurnSummary(capture as unknown as On, options);
@@ -94,7 +96,8 @@ function load(options: PluginOptions = {}, world: World = {}) {
 				return typeof world.key === 'function' ? world.key() : (world.key ?? KEY);
 			},
 		},
-		session: { cwd: async () => PROJECT },
+		session: { cwd: async () => PROJECT, id: async () => 'session-1' },
+		store: { get: async () => undefined, set: async () => undefined },
 		fs: {
 			exists: async (path: string) => {
 				if (world.rejects === 'exists' && path.endsWith('/constellation.json')) throw new Error('fs unavailable');
@@ -126,6 +129,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 			},
 		},
 		clock: {
+			now: async () => 0,
 			// The deadline passes at once in a slow world; otherwise it waits until the hook aborts it.
 			sleep: (ms: number, opts?: { signal?: AbortSignal }) => {
 				calls.sleeps.push(ms);
