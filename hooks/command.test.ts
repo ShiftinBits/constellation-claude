@@ -245,8 +245,8 @@ async function reads(ui: Awaited<ReturnType<typeof mountPane>>, pattern: RegExp)
 	return (await ui.find({ type: 'Text', text: pattern })) !== undefined;
 }
 
-/** The text of every markdown table the pane drew, one table per line block: what Desktop draws for rows of facts. */
-async function tableText(ui: Awaited<ReturnType<typeof mountPane>>): Promise<string> {
+/** The text of every Markdown element the pane drew: on Desktop only the rule, since graph text never goes through markdown. */
+async function markdownText(ui: Awaited<ReturnType<typeof mountPane>>): Promise<string> {
 	return (await ui.findAll({ type: 'Markdown' })).map((m) => String(m.props['text'])).join('\n');
 }
 
@@ -1221,8 +1221,10 @@ describe('the symbol explorer', () => {
 			expect(drill).not.toContain('getCallGraph');
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeUndefined();
 			if (surface === 'desktop') {
-				expect(await tableText(ui)).toContain('| Signature | class Graph |');
-				expect(await tableText(ui)).toContain('| Exported | yes |');
+				expect((await exact(ui, 'Signature'))?.props['dimColor']).toBe(true);
+				expect(await exact(ui, 'class Graph')).toBeDefined();
+				expect(await exact(ui, 'yes')).toBeDefined();
+				expect(await markdownText(ui)).toBe('---');
 			} else {
 				expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
 				expect(await reads(ui, /^Exported: yes$/)).toBe(true);
@@ -1260,7 +1262,10 @@ describe('the symbol explorer', () => {
 			await ui.press({ key: 'section-usages' });
 			await settle();
 			expect(await reads(ui, /^2 usages in 1 file$/)).toBe(true);
-			if (surface === 'desktop') expect(await tableText(ui)).toContain('| src/use.ts:4 | call |');
+			if (surface === 'desktop') {
+				expect(await exact(ui, 'src/use.ts:4')).toBeDefined();
+				expect(await exact(ui, 'call')).toBeDefined();
+			}
 			else expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
 			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: { label: '▸ Usages' } });
@@ -1270,8 +1275,9 @@ describe('the symbol explorer', () => {
 			const risk = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✗ HIGH'));
 			expect(risk?.props['color']).toBe(palette.stellar);
 			if (surface === 'desktop') {
-				expect(await tableText(ui)).toMatch(/\| Renderer \| \S+ \w+ \|/);
-				expect(await tableText(ui)).toContain('| Tests | 1 test · 3 production |');
+				expect(await exact(ui, 'Renderer')).toBeDefined();
+				expect(await exact(ui, '1 test · 3 production')).toBeDefined();
+				expect(await markdownText(ui)).toBe('---');
 			} else {
 				expect(await reads(ui, /Renderer/)).toBe(true);
 				expect(await reads(ui, /1 test · 3 production/)).toBe(true);
@@ -1283,7 +1289,7 @@ describe('the symbol explorer', () => {
 
 			await ui.press({ key: 'section-details' });
 			await settle();
-			if (surface === 'desktop') expect(await tableText(ui)).toContain('| Kind | class |');
+			if (surface === 'desktop') expect(await exact(ui, 'class')).toBeDefined();
 			else expect(await reads(ui, /^Kind: class$/)).toBe(true);
 		});
 

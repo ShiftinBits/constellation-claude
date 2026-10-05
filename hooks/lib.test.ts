@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { canDraw, codeIntel, gitRoot, isConfigured, markdownTable, parseToolText, projectRoot, type McpPort } from './lib';
+import { canDraw, codeIntel, gitRoot, isConfigured, parseToolText, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -293,15 +293,5 @@ describe('canDraw', () => {
 
 	test('is true when any surface can draw', () => {
 		expect(canDraw(['vscode', 'terminal'])).toBe(true);
-	});
-});
-
-describe('markdownTable', () => {
-	test('draws the head, the separator and a row per entry', () => {
-		expect(markdownTable(['Field', 'Value'], [['Kind', 'class']])).toBe('| Field | Value |\n| :- | :- |\n| Kind | class |');
-	});
-
-	test('escapes a pipe and flattens a line break, so a signature cannot break the table', () => {
-		expect(markdownTable(['Field', 'Value'], [['Signature', 'type A = B | C\n  | D']])).toBe('| Field | Value |\n| :- | :- |\n| Signature | type A = B \\| C \\| D |');
 	});
 });

@@ -1,7 +1,7 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
 import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
 import type { Buckets, Stats } from './adoption';
-import { canDraw, codeIntel, isConfigured, isRecord, markdownTable, projectName, withinDeadline } from './lib';
+import { canDraw, codeIntel, isConfigured, isRecord, projectName, withinDeadline } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
@@ -12,7 +12,7 @@ import type { Explanation } from './explain';
 import { checkConnection, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
-import type { Scheme, Tone } from './theme';
+import type { Scheme } from './theme';
 
 /**
  * The command's name. Mod commands allow letters, digits, `_` and `-`, so the
@@ -709,10 +709,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
 		// Desktop has no monospace grid, so rows padded into columns do not line up there: it gets markdown tables.
 		const grid = e.surface !== 'desktop';
-		const table = (head: readonly string[], rows: readonly (readonly string[])[]): RenderElement => el.Markdown({ text: markdownTable(head, rows) });
-		const badgeText = (tone: Tone, text: string): string => `${tone.glyph} ${tone.word}${text === '' ? '' : ` ${text}`}`;
-		// Where a cell's color carries meaning, a table of Boxes instead: each column a share of the width, so cells
-		// keep their colors and still line up without a monospace grid.
+		// A table of Boxes, each column a share of the width, so cells keep their colors and still line up without a
+		// monospace grid. Never markdown: the cells hold graph text, which a markdown parser would read as links.
 		const boxTable = (widths: readonly string[], rows: readonly { key?: string; cells: readonly RenderElement[] }[], head?: readonly string[]): RenderElement => {
 			const line = (cells: readonly RenderElement[], key?: string): RenderElement =>
 				el.Box({ ...(key === undefined ? {} : { key }), flexDirection: 'row', children: cells.map((cell, i) => el.Box({ width: widths[i] ?? 'auto', children: [cell] })) });
@@ -721,6 +719,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ bold: true, children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
 			});
 		};
+		// Label and value rows, the label dim: the Desktop form of rows padded into a label column.
+		const factTable = (rows: readonly (readonly [string, string])[]): RenderElement =>
+			boxTable(['25%', '75%'], rows.map(([label, value]) => ({ cells: [el.Text({ dimColor: true, children: label }), el.Text({ children: value })] })));
 		const showDeps = (path: string): void => {
 			depsPath = path;
 			drop('deps');
@@ -1031,7 +1032,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 												if (section === 'details') {
 													const lines = detailLines(result['details']);
 													if (lines.length === 0) return [el.Text({ dimColor: true, children: 'No details returned' })];
-													return grid ? lines.map((l) => el.Text({ children: l })) : [table(['Field', 'Value'], detailRows(result['details']))];
+													return grid ? lines.map((l) => el.Text({ children: l })) : [factTable(detailRows(result['details']))];
 												}
 												if (section === 'usages') {
 													const lines = usageLines(result['usages']);
@@ -1041,7 +1042,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 													const rows = usageRows(result['usages']);
 													return [
 														...(total === undefined ? [] : [el.Text({ children: total })]),
-														...(rows.length === 0 ? [] : [table(['Location', 'Usage'], rows)]),
+														...(rows.length === 0 ? [] : [boxTable(['75%', '25%'], rows.map((r) => ({ cells: r.map((t) => el.Text({ children: t })) })), ['Location', 'Usage'])]),
 														aliasNote,
 													];
 												}
@@ -1057,12 +1058,12 @@ export function registerCommand(on: On, options: PluginOptions): void {
 													];
 													return [
 														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
-														...(grid ? facts.map(([label, value]) => labeled(label, value)) : facts.length === 0 ? [] : [table(['Field', 'Value'], facts)]),
+														...(grid ? facts.map(([label, value]) => labeled(label, value)) : facts.length === 0 ? [] : [factTable(facts)]),
 														...(grid
 															? view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint)))
 															: view.top.length === 0
 																? []
-																: [table(['Dependent', 'Kind'], view.top.map((d) => [d.name, badgeText(kind(d.kind), '')]))]),
+																: [boxTable(['60%', '40%'], view.top.map((d) => ({ cells: [el.Text({ children: d.name }), badge(el, '', forTheme(kind(d.kind), tint))] })), ['Dependent', 'Kind'])]),
 														aliasNote,
 													];
 												}
