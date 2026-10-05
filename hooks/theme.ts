@@ -94,13 +94,12 @@ const KIND: Readonly<Record<string, string>> = {
 
 /**
  * The tones of the onboarding band: not set up and pending are gold, failed is
- * red and connected is green. Each carries a word and a glyph and no background.
+ * red. Each carries a word and a glyph and no background.
  */
 export const onboarding = {
 	notSetUp: { color: palette.solar, glyph: '✦', word: 'setup' },
 	pending: { color: palette.solar, glyph: '◐', word: 'working' },
 	failed: { color: palette.stellar, glyph: '✦', word: 'failed' },
-	connected: { color: palette.cosmic, glyph: '✦', word: 'connected' },
 } as const satisfies Readonly<Record<string, Tone>>;
 
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {

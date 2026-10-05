@@ -294,7 +294,6 @@ describe('onboarding tones', () => {
 		['notSetUp', palette.solar],
 		['pending', palette.solar],
 		['failed', palette.stellar],
-		['connected', palette.cosmic],
 	];
 	for (const [name, color] of cases) {
 		test(`${name} carries a word, a glyph and its accent, and no background`, () => {
