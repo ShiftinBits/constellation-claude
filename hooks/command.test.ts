@@ -256,6 +256,12 @@ async function expectKeys(ui: Awaited<ReturnType<typeof mountPane>>, surface: (t
 	else expect(await ui.find({ type: 'Text', text: /switch tabs|esc close/ })).toBeUndefined();
 }
 
+/** A checkbox as drawn: `[x]` and `[ ]` in the terminal, ballot boxes on Desktop (the check forced to text, not emoji). */
+function box(surface: (typeof SURFACES)[number], isChecked: boolean): string {
+	if (surface === 'terminal') return isChecked ? '[x]' : '[ ]';
+	return isChecked ? '\u2611\uFE0E' : '\u2610';
+}
+
 /** How the selected one of a row of tab-like buttons is drawn: `▸` in the terminal, Desktop's primary button there. */
 function selectedProps(surface: (typeof SURFACES)[number], label: string): Record<string, unknown> {
 	return surface === 'terminal' ? { label: `▸ ${label}`, plain: true } : { label, variant: 'primary' };
@@ -519,7 +525,7 @@ describe('the pane', () => {
 			await run($, 'unused');
 			const ui = await mountPane($, surface);
 			await settle();
-			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[ ] src/util.ts' } });
+			expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: `${box(surface, false)} src/util.ts` } });
 			expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toBeDefined();
 			expect(await ui.find({ type: 'Button', key: 'orphan:b' })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /• function/ })).toBeDefined();
@@ -553,7 +559,8 @@ describe('the pane', () => {
 				await ui.press({ key: 'orphan:a' });
 				await settle();
 				expect(await reads(ui, /^1 selected$/)).toBe(true);
-				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: '[x]' } });
+				// Desktop puts the name in the checkbox, a larger target than the box alone.
+				expect(await ui.find({ type: 'Button', key: 'orphan:a' })).toMatchObject({ props: { label: surface === 'terminal' ? '[x]' : `${box(surface, true)} helper` } });
 				await ui.press({ key: 'orphan:a' });
 				await settle();
 				expect(await reads(ui, /^0 selected$/)).toBe(true);
@@ -577,8 +584,12 @@ describe('the pane', () => {
 				world(on, { surfaces: [surface] });
 				const ui = await openUnused($, surface);
 				const locations = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && String(t.children[0]).startsWith('src/util.ts'));
-				expect(locations.length).toBeGreaterThan(0);
-				for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
+				// Desktop names only the line under the file header, so no row repeats the path.
+				if (surface === 'desktop') expect(locations).toEqual([]);
+				else {
+					expect(locations.length).toBeGreaterThan(0);
+					for (const t of locations) expect(t.props['wrap']).toBe('truncate-middle');
+				}
 			});
 
 			test(`a file header selects and clears all its symbols on ${surface}`, async ($, on) => {
@@ -587,7 +598,7 @@ describe('the pane', () => {
 				await ui.press({ key: 'orphan-file:src/util.ts' });
 				await settle();
 				expect(await reads(ui, /^2 selected$/)).toBe(true);
-				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: '[x] src/util.ts' } });
+				expect(await ui.find({ type: 'Button', key: 'orphan-file:src/util.ts' })).toMatchObject({ props: { label: `${box(surface, true)} src/util.ts` } });
 				await ui.press({ key: 'orphan-file:src/util.ts' });
 				await settle();
 				expect(await reads(ui, /^0 selected$/)).toBe(true);
@@ -613,7 +624,7 @@ describe('the pane', () => {
 				await settle();
 				expect(codes.at(-1)).toBe(orphanCode({ limit: 50, offset: 50 }));
 				expect(await ui.find({ type: 'Button', key: 'orphan:c' })).toBeDefined();
-				expect(await reads(ui, /src\/more\.ts:9/)).toBe(true);
+				expect(await reads(ui, surface === 'terminal' ? /src\/more\.ts:9/ : /^line 9$/)).toBe(true);
 				expect(await ui.find({ key: 'load-more' })).toBeUndefined();
 			});
 

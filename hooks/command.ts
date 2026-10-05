@@ -742,6 +742,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		// Desktop has no monospace grid, so rows padded into columns do not line up there: it gets markdown tables.
 		const grid = e.surface !== 'desktop';
 		// The selected one of a row of tab-like buttons: `▸` in the terminal, Desktop's own primary button there.
+		// A checkbox: `[x]` in the terminal; on Desktop ballot boxes, the check forced to text (U+FE0E), not an emoji.
+		const check = (isChecked: boolean): string => (grid ? (isChecked ? '[x]' : '[ ]') : isChecked ? '\u2611\uFE0E' : '\u2610');
 		const choice = (isSelected: boolean, label: string): Pick<ButtonProps, 'label' | 'plain' | 'variant'> =>
 			grid ? { label: isSelected ? `▸ ${label}` : label, plain: true } : isSelected ? { label, variant: 'primary' } : { label, plain: true };
 		// A table of Boxes, each column a share of the width, so cells keep their colors and still line up without a
@@ -898,9 +900,32 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					const ids = rows.map((r) => r.symbolId);
 					const all = ids.every((id) => picked.has(id));
 					body.push(
-						el.Button({ key: `orphan-file:${file}`, label: `${all ? '[x]' : '[ ]'} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
+						el.Button({ key: `orphan-file:${file}`, label: `${check(all)} ${file}`, plain: true, onPress: () => toggle(ids, !all) }),
 						...rows.map((row) =>
-							el.Box({
+							// Desktop: the name is part of the checkbox, so it is a larger target, and the columns are shares
+							// of the width; the file is the header above, so a row names only its line.
+							!grid
+								? el.Box({
+										key: `row:${row.symbolId}`,
+										flexDirection: 'row',
+										paddingLeft: 2,
+										children: [
+											el.Box({
+												width: '50%',
+												children: [
+													el.Button({
+														key: `orphan:${row.symbolId}`,
+														label: `${check(picked.has(row.symbolId))} ${row.name}`,
+														plain: true,
+														onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
+													}),
+												],
+											}),
+											el.Box({ width: '25%', children: [badge(el, '', forTheme(kind(row.kind), tint))] }),
+											el.Box({ width: '25%', children: row.lineEnd === undefined ? [] : [el.Text({ dimColor: true, children: `line ${row.lineEnd}` })] }),
+										],
+									})
+								: el.Box({
 								key: `row:${row.symbolId}`,
 								flexDirection: 'row',
 								columnGap: 1,
@@ -909,7 +934,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 									fixed([
 										el.Button({
 											key: `orphan:${row.symbolId}`,
-											label: picked.has(row.symbolId) ? '[x]' : '[ ]',
+											label: check(picked.has(row.symbolId)),
 											plain: true,
 											onPress: () => toggle([row.symbolId], !picked.has(row.symbolId)),
 										}),
