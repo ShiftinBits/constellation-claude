@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing';
-import { canDraw, codeIntel, isConfigured, projectRoot, type McpPort } from './lib';
+import { canDraw, codeIntel, gitRoot, isConfigured, parseToolText, projectRoot, type McpPort } from './lib';
 
 type Connection = Awaited<ReturnType<McpPort['connect']>>;
 
@@ -162,6 +162,19 @@ describe('codeIntel', () => {
 	});
 });
 
+describe('parseToolText', () => {
+	const body = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
+
+	test('an errored call drops the Error: prefix before the envelope', () => {
+		expect(parseToolText(`Error: ${body}`, true).error?.code).toBe('AUTH_ERROR');
+	});
+
+	test('a call that did not error is read as it is', () => {
+		expect(parseToolText(body, false).error?.code).toBe('AUTH_ERROR');
+		expect(parseToolText(`Error: ${body}`, false).error?.code).toBe('INVALID_RESPONSE');
+	});
+});
+
 describe('isConfigured', () => {
 	test('is false with no key', () => {
 		expect(isConfigured(undefined)).toBe(false);
@@ -216,6 +229,44 @@ describe('projectRoot', () => {
 	test('returns null when no ancestor has one', async () => {
 		const exists = existsIn(['/other/constellation.json']);
 		expect(await projectRoot('/work', exists, '/repo/src/file.ts')).toBeNull();
+	});
+});
+
+describe('gitRoot', () => {
+	const existsIn = (entries: readonly string[]) => async (path: string) => entries.includes(path);
+
+	test('finds .git in the working directory', async () => {
+		expect(await gitRoot('/repo', existsIn(['/repo/.git']))).toBe('/repo');
+	});
+
+	test('finds .git above the working directory, the nearest first', async () => {
+		const exists = existsIn(['/repo/.git', '/repo/vendor/lib/.git']);
+		expect(await gitRoot('/repo/src/deep', exists)).toBe('/repo');
+		expect(await gitRoot('/repo/vendor/lib/src', exists)).toBe('/repo/vendor/lib');
+	});
+
+	test('counts any entry named .git, such as a worktree file', async () => {
+		const asked: string[] = [];
+		const exists = async (path: string) => {
+			asked.push(path);
+			return path === '/trees/feature/.git';
+		};
+		expect(await gitRoot('/trees/feature/src', exists)).toBe('/trees/feature');
+		expect(asked).toEqual(['/trees/feature/src/.git', '/trees/feature/.git']);
+	});
+
+	test('returns null at the filesystem root outside a repository', async () => {
+		const asked: string[] = [];
+		const exists = async (path: string) => {
+			asked.push(path);
+			return false;
+		};
+		expect(await gitRoot('/work/app', exists)).toBeNull();
+		expect(asked).toEqual(['/work/app/.git', '/work/.git', '/.git']);
+	});
+
+	test('does not take constellation.json for a repository', async () => {
+		expect(await gitRoot('/repo', existsIn(['/repo/constellation.json']))).toBeNull();
 	});
 });
 
