@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { registerOnboarding } from './onboarding';
 import { registerSession } from './session';
 
 const KEY = 'ak:test-key';
@@ -33,9 +34,35 @@ function matches(matcher: Record<string, unknown>, e: object): boolean {
 /** How many `$.fs.exists` calls the handlers made. */
 let existsCalls = 0;
 
+/** Elements as plain data: the type and the props. */
+const make =
+	(type: string) =>
+	(props: Record<string, unknown>) => ({ type, props });
+const EL = { Box: make('Box'), Text: make('Text'), Button: make('Button'), Link: make('Link') };
+
+/** The text a drawn tree shows. */
+function shown(tree: unknown): string {
+	if (typeof tree === 'string') return tree;
+	if (Array.isArray(tree)) return tree.map(shown).join(' ');
+	if (typeof tree !== 'object' || tree === null) return '';
+	return shown(Reflect.get(Reflect.get(tree, 'props') ?? {}, 'children'));
+}
+
+/** How many times a handler asked for a redraw. */
+let invalidations = 0;
+
 const $ = {
 	env: { get: async () => KEY },
-	session: { cwd: async () => PROJECT },
+	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
+	ui: {
+		invalidate: () => {
+			invalidations += 1;
+		},
+		resolve: () => EL,
+		log: () => undefined,
+	},
+	store: { get: async () => undefined },
+	config: { list: async () => [] },
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
@@ -59,6 +86,8 @@ function load(options: PluginOptions) {
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
+	registerOnboarding(capture as unknown as On, options);
+	invalidations = 0;
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -88,6 +117,8 @@ function load(options: PluginOptions) {
 		program: (agentId: string, code: string, answer: Answer, origin = ENGINE) =>
 			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code }, async () => answer, origin),
 		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		/** The band above the prompt as drawn, or the marker beneath when it passes. */
+		band: async () => shown(await raise('ui.render', { component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false } }, async () => ({ text: 'beneath' }))),
 		runEnds: (agentId: string) => raise('turn.complete', { turnId: 'r', agentId }),
 		/**
 		 * What the PreToolUse handler adds for a Grep of a symbol. As in the engine, the
@@ -294,6 +325,30 @@ describe('nudge budget', () => {
 		expect(hasEvidence('agent-1', ['src/core.ts'], ['Core'])).toBe(false);
 		collectEvidence(false);
 		expect(await m.search('agent-1')).toBeUndefined();
+	});
+
+	test('an AUTH_ERROR from the agent\'s code_intel call reaches the onboarding band', async () => {
+		const m = load({});
+		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
+		await m.program('main', 'return await api.ping()', { result: authError, text: authError });
+		expect(invalidations).toBe(1);
+		expect(await m.band()).toContain('Constellation sign-in failed');
+	});
+
+	test('a SessionStart clear takes the onboarding band down', async () => {
+		const m = load({});
+		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
+		await m.program('main', 'return await api.ping()', { result: authError, text: authError });
+		await m.sessionStart('clear');
+		expect(await m.band()).toBe('');
+	});
+
+	test("a plugin's own code_intel error leaves the onboarding band alone", async () => {
+		const m = load({});
+		const authError = JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } });
+		await m.program('main', 'return await api.ping()', { result: authError, text: authError }, { plugin: 'constellation', tier: 'user' });
+		expect(invalidations).toBe(0);
+		expect(await m.band()).toBe('');
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

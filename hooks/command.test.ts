@@ -1,5 +1,5 @@
 import type { McpToolResult, On, PaneOpenArgs, RenderSurface } from 'claude-code';
-import { describe, expect, test } from 'claude-code/testing';
+import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { COMMAND, parseArgs, summarize } from './command';
 import type { Tab } from './command';
@@ -11,6 +11,8 @@ const SERVER = 'plugin:constellation:constellation';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const INDEXED_AT = '2026-01-01T00:00:00.000Z';
 const SURFACES = ['terminal', 'desktop'] as const;
+/** A key in the CLI's format, compared and never printed. */
+const STORED_KEY = 'ak:0123456789abcdef0123456789abcdef';
 const TAB_HINT_STATUS = 'Whether Constellation is reachable and your access key is accepted.';
 
 const PING = { pong: true };
@@ -1310,5 +1312,52 @@ describe('registration', () => {
 		});
 		const r = await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
 		expect(r.cwd).toBe('/work/app');
+	});
+
+	test('a stored key is set before the session start beneath runs, and the command is still registered', async ($, on) => {
+		const order: string[] = [];
+		let setValue: string | undefined;
+		mock.env(on, {});
+		mock.clock(on);
+		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/.git' || e.path === '/work/app/constellation.json' }));
+		on('process.run', () => ({
+			value: { exitCode: 0, stdout: `${STORED_KEY}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+		}));
+		on('env.set', (_, e) => {
+			order.push(`env.set:${e.name}`);
+			setValue = e.value;
+			return { value: undefined };
+		});
+		on('session.start', (_, e) => {
+			order.push('session.start');
+			return { cwd: e.cwd };
+		});
+		on('command.register', (_, e) => {
+			order.push('command.register');
+			return { value: { command: e.name } };
+		});
+		const r = await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		expect(r.cwd).toBe('/work/app');
+		expect(order).toEqual(['env.set:CONSTELLATION_ACCESS_KEY', 'session.start', 'command.register']);
+		expect(setValue === STORED_KEY).toBe(true);
+	});
+
+	test('an onboarding failure still registers the command and returns the cwd', async ($, on) => {
+		const registered: string[] = [];
+		mock.env(on, {});
+		on('fs.exists', () => {
+			throw new Error('no file system');
+		});
+		on('process.run', () => {
+			throw new Error('cannot start');
+		});
+		on('session.start', (_, e) => ({ cwd: e.cwd }));
+		on('command.register', (_, e) => {
+			registered.push(e.name);
+			return { value: { command: e.name } };
+		});
+		const r = await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		expect(r).toEqual({ cwd: '/work/app' });
+		expect(registered).toEqual([COMMAND]);
 	});
 });

@@ -1,5 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
-import { stringArg } from './lib';
+import { canDraw, stringArg } from './lib';
+import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
 
 /** How many nudges one agent gets when the option is unset. */
@@ -91,13 +92,23 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		return next(e);
 	});
 
-	on('tool.call', { tool: /code_intel$/ }, async (_$, e, next) => {
+	on('tool.call', { tool: /code_intel$/ }, async ($, e, next) => {
 		const key = agentKey(e);
 		const turn = turnOf(key);
 		if (turn !== undefined) budgetOf(key).codeIntelTurn = turn;
 		const r = await next(e);
-		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis.
-		if (next.origin.plugin === 'engine') noteCodeIntel(key, e, r);
+		// A plugin's own `$.mcp.call` of code_intel (this one's risk lookups among them) is not the agent's analysis,
+		// and the onboarding acts on its own pings itself.
+		if (next.origin.plugin === 'engine') {
+			noteCodeIntel(key, e, r);
+			observeCodeIntel(
+				r,
+				() => $.ui.invalidate('ui.render'),
+				async (text) => {
+					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+				},
+			);
+		}
 		return r;
 	});
 

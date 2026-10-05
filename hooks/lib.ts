@@ -87,26 +87,42 @@ export function plural(count: number, word: string): string {
 }
 
 /**
- * The nearest directory at or above `path` (default: `cwd`) that holds a
- * `constellation.json`, or null. `path` may be a file or a directory; a
- * relative one is resolved against `cwd`.
- *
- * Walks up with `exists` (`(p) => $.fs.exists(p)`) because `$.fs.ancestors`
- * only accepts `.md` file names.
+ * The nearest directory at or above `path` (default: `cwd`) that holds an
+ * entry called `name`, or null. Walks up with `exists` (`(p) => $.fs.exists(p)`)
+ * because `$.fs.ancestors` only accepts `.md` file names.
  */
-export async function projectRoot(
+async function findUp(
 	cwd: string,
 	exists: (path: string) => Promise<boolean>,
+	name: string,
 	path?: string,
 ): Promise<string | null> {
 	let dir = absolute(path ?? cwd, cwd);
 	for (;;) {
 		const prefix = dir.endsWith('/') ? dir : `${dir}/`;
-		if (await exists(prefix + PROJECT_FILE)) return dir;
+		if (await exists(prefix + name)) return dir;
 		const parent = absolute('..', dir);
 		if (parent === dir) return null;
 		dir = parent;
 	}
+}
+
+/**
+ * The nearest directory at or above `path` (default: `cwd`) that holds a
+ * `constellation.json`, or null. `path` may be a file or a directory; a
+ * relative one is resolved against `cwd`.
+ */
+export function projectRoot(cwd: string, exists: (path: string) => Promise<boolean>, path?: string): Promise<string | null> {
+	return findUp(cwd, exists, PROJECT_FILE, path);
+}
+
+/**
+ * The nearest directory at or above `cwd` that holds `.git`, or null outside a
+ * git repository. `$.fs.exists` answers for any entry, so a `.git` directory
+ * and a worktree's `.git` file both count. No git process runs.
+ */
+export function gitRoot(cwd: string, exists: (path: string) => Promise<boolean>): Promise<string | null> {
+	return findUp(cwd, exists, '.git');
 }
 
 function failure(code: string, message: string): CodeIntelEnvelope {
