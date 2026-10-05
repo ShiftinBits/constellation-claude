@@ -7,6 +7,7 @@ import { registerImpactGate } from './impact';
 import { registerNudges } from './nudge';
 import { registerPrImpact } from './primpact';
 import { registerSession } from './session';
+import { registerToolRows } from './toolrows';
 import { registerTurnSummary } from './turnsummary';
 
 export const register: Register = (on, options) => {
@@ -19,4 +20,5 @@ export const register: Register = (on, options) => {
 	registerImpactGate(on, options);
 	registerTurnSummary(on, options);
 	registerPrImpact(on, options);
+	registerToolRows(on, options);
 };
