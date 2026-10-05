@@ -1,10 +1,11 @@
-import type { McpToolResult, On, PluginOptions, ProcessRunInit } from 'claude-code';
+import type { McpToolResult, On, PluginOptions, ProcessRunInit, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import {
 	KEY_PATTERN,
 	NOT_REGISTERED_OUTPUT,
 	band,
 	checkConnection,
+	cliPath,
 	connect,
 	endTask,
 	lastLine,
@@ -16,10 +17,12 @@ import {
 	readStoredKeyAtStart,
 	registerOnboarding,
 	resetOnboarding,
+	startIndex,
+	startSignIn,
 	startTask,
 	storedKey,
 } from './onboarding';
-import type { BandView, OnboardingPorts, OnboardingState, Run } from './onboarding';
+import type { BandView, ButtonPorts, OnboardingPorts, OnboardingState, Run } from './onboarding';
 import { onboarding, palette } from './theme';
 
 /** A key in the CLI's format. Compared, never printed: a failing check shows a boolean, not the key. */
@@ -118,7 +121,7 @@ const FALLTHROUGH = { type: 'fallthrough', props: {} };
  * The band's render hook as `registerOnboarding` registers it, raised through
  * a stand-in `on` with a fake `$`: the store, theme row and element table.
  */
-function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>()) {
+function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
 	let handler: RenderHandler | undefined;
 	let matcher: unknown;
 	const capture = (event: string, ...rest: unknown[]) => {
@@ -130,6 +133,7 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[] };
 	const flags = { storeDown: false };
 	const $ = {
+		...world,
 		ui: {
 			resolve: () => EL,
 			invalidate: () => {
@@ -763,6 +767,461 @@ describe('the band as a loaded plugin', () => {
 	});
 });
 
+const CLI = '/usr/local/bin/constellation';
+const INIT_HINT = '✦ Constellation connected. Run constellation init in this repo to set it up';
+const MANUAL = 'https://app.constellationdev.io/auth/cli?callback_port=5555&state=abc';
+
+/** Lets every chain of resolved promises a press started run to its end. */
+async function settle(): Promise<void> {
+	for (let i = 0; i < 200; i++) await Promise.resolve();
+}
+
+/** A promise the test resolves: a child held open until then. */
+function gate() {
+	let open: () => void = () => undefined;
+	const promise = new Promise<void>((resolve) => {
+		open = resolve;
+	});
+	return { promise, open };
+}
+
+/**
+ * The host a button's run reads: each `printenv` read-back answers the next of
+ * `keys` (none when it is undefined or used up), `command -v` and `where` name
+ * `cli` (null: not installed), and `sh: false` is a host with no `/bin/sh`.
+ */
+function host(world: { keys?: (string | undefined)[]; cli?: string | null; sh?: boolean } = {}) {
+	const keys = [...(world.keys ?? [])];
+	const cli = world.cli === undefined ? CLI : world.cli;
+	const argvs: (readonly string[])[] = [];
+	const run: Run = async (argv) => {
+		argvs.push(argv);
+		if (argv[0] === '/bin/sh' && world.sh === false) throw new Error('cannot start /bin/sh');
+		if (argv[2] === 'printenv CONSTELLATION_ACCESS_KEY') return { exitCode: 0, stdout: `${keys.shift() ?? ''}\n` };
+		if (argv[2] === 'command -v constellation') return cli === null ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${cli}\n` };
+		if (argv[0] === 'where') return cli === null ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `${cli}\r\n` };
+		if (argv[0] === 'reg') {
+			const key = keys.shift();
+			return key === undefined ? { exitCode: 1, stdout: '' } : { exitCode: 0, stdout: `    CONSTELLATION_ACCESS_KEY    REG_SZ    ${key}\r\n` };
+		}
+		throw new Error(`unexpected command ${argv[0]}`);
+	};
+	const readBacks = () => argvs.filter((argv) => argv[2] === 'printenv CONSTELLATION_ACCESS_KEY' || argv[0] === 'reg').length;
+	return { run, argvs, readBacks };
+}
+
+/** A spawned child: what it prints, its exit code, a failure to start, and a gate that holds it open. */
+type Child = { chunks?: ProcessSpawnChunk[]; code?: number; fail?: boolean; hold?: Promise<void> };
+const out = (text: string): ProcessSpawnChunk => ({ stream: 'stdout', text });
+const err = (text: string): ProcessSpawnChunk => ({ stream: 'stderr', text });
+
+async function* child(c: Child): AsyncGenerator<ProcessSpawnChunk, ProcessSpawnResult> {
+	if (c.fail === true) throw new Error('cannot start');
+	for (const chunk of c.chunks ?? []) yield chunk;
+	await c.hold;
+	return { code: c.code ?? 0, signal: null };
+}
+
+/** The fake ports with a spawn that records each request and runs `world.child`. */
+function buttonPorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: string) => boolean; child?: Child } = {}) {
+	const base = fakePorts(world);
+	const spawns: ProcessSpawnRequest[] = [];
+	const ports: ButtonPorts = {
+		...base.ports,
+		spawn: (request) => {
+			spawns.push(request);
+			return child(world.child ?? {});
+		},
+		cwd: async () => REPO,
+	};
+	return { ...base, ports, spawns };
+}
+
+/** The `$` members a pressed button reaches through the render hook, for `loadBand`. */
+function buttonWorld(run: Run, c: Child = {}) {
+	const spawns: ProcessSpawnRequest[] = [];
+	const world = {
+		process: {
+			run: (argv: readonly string[], init?: ProcessRunInit) => run(argv, init ?? {}),
+			spawn: (request: ProcessSpawnRequest) => {
+				spawns.push(request);
+				return child(c);
+			},
+		},
+		fs: { exists: async (p: string) => p === `${REPO}/.git` || p === `${REPO}/constellation.json` },
+		env: { set: async () => undefined },
+		clock: { after: () => undefined },
+		mcp: { connect: async () => ({ isConnected: true, server: 's' }), call: async () => mcpText(OK) },
+		command: { run: async () => ({}) },
+	};
+	return { world, spawns };
+}
+
+const stellarBadge = (tree: unknown) => nodes(tree).find((n) => n.props['children'] === '✦ failed')?.props['color'];
+
+describe('cliPath', () => {
+	test('a login sh finds the CLI on the PATH its profile sets, with a timeout', async () => {
+		const calls: { argv: readonly string[]; init: ProcessRunInit }[] = [];
+		const found = await cliPath(async (argv, init) => {
+			calls.push({ argv, init });
+			return { exitCode: 0, stdout: `Welcome back\n${CLI}\n` };
+		});
+		expect(found).toEqual({ path: CLI, shell: true });
+		expect(calls).toEqual([{ argv: ['/bin/sh', '-lc', 'command -v constellation'], init: { timeoutMs: 5000 } }]);
+	});
+
+	test('not found by sh is missing, and where is not asked', async () => {
+		const { run, argvs } = host({ cli: null });
+		expect(await cliPath(run)).toEqual({ path: undefined, shell: true });
+		expect(argvs).toHaveLength(1);
+	});
+
+	test('where names it when sh cannot start, its first line taken', async () => {
+		const found = await cliPath(async (argv) => {
+			if (argv[0] === '/bin/sh') throw new Error('cannot start /bin/sh');
+			return { exitCode: 0, stdout: '\r\nC:\\npm\\constellation.cmd\r\nC:\\npm\\constellation\r\n' };
+		});
+		expect(found).toEqual({ path: 'C:\\npm\\constellation.cmd', shell: false });
+	});
+
+	test('nothing that can look counts as missing', async () => {
+		const found = await cliPath(async () => {
+			throw new Error('cannot start');
+		});
+		expect(found).toEqual({ path: undefined, shell: false });
+	});
+});
+
+describe('the Sign in button', () => {
+	test('spawns constellation auth with the inherited key emptied and no color', async () => {
+		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Opening browser for authentication...\n')] });
+		const band = loadBand({}, new Map(), world);
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		await band.press(await band.draw(), 'onboarding-sign-in');
+		await settle();
+		expect(spawns).toEqual([{ argv: [CLI, 'auth'], env: { CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }]);
+	});
+
+	test('an exit 0 with the stored key unchanged shows the stellar error and the last line', async () => {
+		const band = loadBand();
+		const { ports, seen, timers } = buttonPorts({
+			run: host({ keys: [KEY, KEY] }).run,
+			child: { chunks: [out('Opening browser for authentication...\n'), err('Waiting for authentication...\n')], code: 0 },
+		});
+		await startSignIn(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Waiting for authentication...');
+		expect(stellarBadge(tree)).toBe(palette.stellar);
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
+		expect(seen.envSet).toEqual([]);
+		expect(timers).toHaveLength(0);
+	});
+
+	test('a spawn that cannot start is a failure, with no read-back after it', async () => {
+		const band = loadBand();
+		const { run, readBacks } = host({ keys: [undefined, KEY] });
+		const { ports, seen } = buttonPorts({ run, child: { fail: true } });
+		await startSignIn(ports);
+		await settle();
+		expect(readBacks()).toBe(1);
+		expect(seen.envSet).toEqual([]);
+		const text = shown(await band.draw());
+		expect(text).toContain('Constellation sign-in failed');
+		expect(text).toContain('Run `constellation auth` in a terminal');
+	});
+
+	test('a new stored key sets the env, takes the band down and reloads only through after(0)', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const { ports, seen, timers, fire } = buttonPorts({ run: host({ keys: [undefined, KEY] }).run, child: { code: 1 } });
+		await startSignIn(ports);
+		await settle();
+		expect(seen.envSet.map(isKey)).toEqual([true]);
+		expect(seen.reloads).toBe(0);
+		expect(timers).toHaveLength(1);
+		expect(await band.draw()).toBe(FALLTHROUGH);
+		await fire();
+		expect(seen.reloads).toBe(1);
+		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+	});
+
+	test('a new key with no project toasts the init hint before the reload, and only that', async () => {
+		loadBand();
+		const { ports, seen, timers, fire } = buttonPorts({
+			run: host({ keys: [undefined, KEY] }).run,
+			exists: (p) => p === `${REPO}/.git`,
+		});
+		await startSignIn(ports);
+		await settle();
+		expect(seen.toasts).toEqual([INIT_HINT]);
+		expect(seen.reloads).toBe(0);
+		expect(timers).toHaveLength(1);
+		await fire();
+		expect(seen.reloads).toBe(1);
+		expect(seen.toasts).toEqual([INIT_HINT]);
+	});
+
+	test('while it runs the band says so with no Sign in, and the manual URL is a Link', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const held = gate();
+		const printed = `Could not open browser automatically.\n  Please open this URL manually:\n\n    ${MANUAL}\n`;
+		const { ports } = buttonPorts({ run: host().run, child: { chunks: [err(printed)], hold: held.promise } });
+		await startSignIn(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain('Signing in to Constellation');
+		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+		const link = nodes(tree).find((n) => n.type === 'Link');
+		expect(link?.props).toEqual({ href: MANUAL, label: MANUAL });
+		held.open();
+		await settle();
+		expect(nodes(await band.draw()).some((n) => n.type === 'Link')).toBe(false);
+	});
+
+	test('a URL still being written is not offered', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const held = gate();
+		const { ports } = buttonPorts({
+			run: host().run,
+			child: { chunks: [err('Please open this URL manually:\n\n    https://app.constellationdev.io/auth/cli?callback_po')], hold: held.promise },
+		});
+		await startSignIn(ports);
+		await settle();
+		expect(nodes(await band.draw()).some((n) => n.type === 'Link')).toBe(false);
+		held.open();
+		await settle();
+	});
+
+	test('where no login sh runs, a failure says to run constellation auth in a terminal', async () => {
+		const band = loadBand();
+		const { ports, spawns } = buttonPorts({
+			run: host({ sh: false, keys: [undefined, undefined], cli: 'C:\\npm\\constellation.cmd' }).run,
+			child: { chunks: [out('Opening browser for authentication...\n')] },
+		});
+		await startSignIn(ports);
+		await settle();
+		expect(spawns[0]?.argv).toEqual(['C:\\npm\\constellation.cmd', 'auth']);
+		const text = shown(await band.draw());
+		expect(text).toContain('Run `constellation auth` in a terminal');
+		expect(text).not.toContain('Opening browser');
+	});
+
+	test('a second press is refused while the child is live, and a loop that ends after a reset does nothing', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const held = gate();
+		const { run, readBacks } = host({ keys: [undefined, KEY, undefined, undefined] });
+		const { ports, seen, timers, spawns } = buttonPorts({ run, child: { hold: held.promise } });
+		await startSignIn(ports);
+		await startSignIn(ports);
+		await startIndex(ports);
+		expect(spawns).toHaveLength(1);
+		resetOnboarding();
+		held.open();
+		await settle();
+		expect(readBacks()).toBe(1);
+		expect(seen.envSet).toEqual([]);
+		expect(timers).toHaveLength(0);
+		expect(await band.draw()).toBe(FALLTHROUGH);
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		await startSignIn(ports);
+		await settle();
+		expect(spawns).toHaveLength(2);
+	});
+
+	test('a missing CLI shows the install hint and spawns nothing, and a press after installing runs', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const installed = { cli: null as string | null };
+		const run: Run = (argv, init) => host({ cli: installed.cli }).run(argv, init);
+		const { ports, spawns } = buttonPorts({ run });
+		await startSignIn(ports);
+		await settle();
+		expect(spawns).toEqual([]);
+		const tree = await band.draw();
+		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('npm i -g @constellationdev/cli');
+		expect(nodes(tree).find((n) => n.type === 'Link')?.props['href']).toBe('https://docs.constellationdev.io/cli/#installation');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
+		installed.cli = CLI;
+		await startSignIn(ports);
+		await settle();
+		expect(spawns).toHaveLength(1);
+		expect(shown(await band.draw())).not.toContain('npm i -g');
+	});
+});
+
+describe('the Index button', () => {
+	test('spawns constellation index --wait in the project root, with no --dirty', async () => {
+		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Indexing...\n')] });
+		const band = loadBand({}, new Map(), world);
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		await band.press(await band.draw(), 'onboarding-index');
+		await settle();
+		expect(spawns).toEqual([{ argv: [CLI, 'index', '--wait'], cwd: REPO, env: { NO_COLOR: '1' } }]);
+		expect(spawns[0]?.argv.includes('--dirty')).toBe(false);
+	});
+
+	test('an exit 1 with a successful ping takes the band down and says so', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const { ports, seen } = buttonPorts({ run: host().run, child: { chunks: [err('Upload failed\n')], code: 1 } });
+		await startIndex(ports);
+		await settle();
+		expect(seen.pings).toEqual(['return await api.ping()']);
+		expect(await band.draw()).toBe(FALLTHROUGH);
+		expect(seen.toasts).toEqual(['✦ Constellation indexed this project']);
+	});
+
+	test('an exit 0 with PROJECT_NOT_INDEXED stays not indexed, with the last line', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const { ports, seen } = buttonPorts({
+			run: host().run,
+			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
+			child: { chunks: [out('Uploading 10%\rUploading 100%\n'), out('Waiting for indexing\n')], code: 0 },
+		});
+		await startIndex(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain("This project isn't indexed yet");
+		expect(shown(tree)).toContain('Waiting for indexing');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-index']);
+		expect(seen.toasts).toEqual([]);
+	});
+
+	test('Project not registered in the output with PROJECT_NOT_INDEXED says not registered', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const { ports } = buttonPorts({
+			run: host().run,
+			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
+			child: { chunks: [err('✗ Project not registered\n'), out('  is not associated with your Constellation account.\n')], code: 1 },
+		});
+		await startIndex(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain("This project isn't registered with Constellation");
+		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+	});
+
+	test('a loop that ends after a reset neither pings nor writes the band', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const held = gate();
+		const { ports, seen, spawns } = buttonPorts({ run: host().run, child: { chunks: [out('Indexing...\n')], hold: held.promise } });
+		await startIndex(ports);
+		await startIndex(ports);
+		expect(spawns).toHaveLength(1);
+		resetOnboarding();
+		held.open();
+		await settle();
+		expect(seen.pings).toEqual([]);
+		expect(seen.toasts).toEqual([]);
+		expect(await band.draw()).toBe(FALLTHROUGH);
+	});
+
+	test('with no constellation.json above the session directory nothing spawns, and the band says where to run it', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const { ports, spawns } = buttonPorts({ run: host().run, exists: (p) => p === `${REPO}/.git` });
+		await startIndex(ports);
+		await settle();
+		expect(spawns).toEqual([]);
+		const text = shown(await band.draw());
+		expect(text).toContain("This project isn't indexed yet");
+		expect(text).toContain('Run `constellation index` in a terminal, in the project directory');
+	});
+
+	test('a missing CLI shows the install hint and spawns nothing', async () => {
+		const band = loadBand();
+		observeCodeIntel(failed('PROJECT_NOT_INDEXED'), () => undefined);
+		const { ports, spawns } = buttonPorts({ run: host({ cli: null }).run });
+		await startIndex(ports);
+		await settle();
+		expect(spawns).toEqual([]);
+		const tree = await band.draw();
+		expect(shown(tree)).toContain('npm i -g @constellationdev/cli');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-index']);
+	});
+});
+
+describe('states with no button', () => {
+	test('no project and not registered offer only Dismiss, and nothing spawns', async () => {
+		for (const put of [
+			() => checkConnection(null, fakePorts().ports),
+			async () => observeCodeIntel(failed('PROJECT_NOT_REGISTERED'), () => undefined),
+		]) {
+			const { world, spawns } = buttonWorld(host().run);
+			const band = loadBand({}, new Map(), world);
+			await put();
+			const tree = await band.draw();
+			expect(keys(tree)).toEqual(['onboarding-dismiss']);
+			await band.press(tree, 'onboarding-dismiss');
+			await settle();
+			expect(spawns).toEqual([]);
+		}
+	});
+});
+
+describe('Sign in as a loaded plugin', () => {
+	test('the press spawns the CLI, sets the new key and reloads on the clock', async ($, on) => {
+		mock.env(on, {});
+		mock.store(on);
+		const clock = mock.clock(on);
+		const keys: (string | undefined)[] = [undefined, undefined, KEY];
+		const spawned: ProcessSpawnRequest[] = [];
+		const commands: string[] = [];
+		const toasts: string[] = [];
+		let setKey: string | undefined;
+		on('fs.exists', (_$, e) => ({ value: e.path === `${REPO}/.git` || e.path === `${REPO}/constellation.json` }));
+		on('process.run', (_$, e) => {
+			if (e.argv[2] === 'command -v constellation') {
+				return { value: { exitCode: 0, stdout: `${CLI}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
+			}
+			return { value: { exitCode: 0, stdout: `${keys.shift() ?? ''}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
+		});
+		on('process.spawn', async function* (_$, e) {
+			spawned.push(e);
+			yield { stream: 'stdout' as const, text: 'Opening browser for authentication...\n' };
+			return { value: { code: 0, signal: null } };
+		});
+		on('env.set', (_$, e) => {
+			setKey = e.value;
+			return { value: undefined };
+		});
+		on('command.run', (_$, e) => {
+			commands.push(e.command);
+			return {};
+		});
+		on('ui.toast', (_$, e) => {
+			toasts.push(e.text);
+			return { value: undefined };
+		});
+		on('session.start', (_$, e) => ({ cwd: e.cwd }));
+		on('session.surfaces', () => ({ value: ['terminal'] }));
+		on('command.register', (_$, e) => ({ value: { command: e.name } }));
+		on('ui.render', ($, e) => $.ui.resolve(e).Text({ children: 'fallthrough' }));
+		await $.session.start({ cwd: REPO, surface: 'terminal', isInteractive: true });
+		const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} };
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props });
+		expect(await ui.find({ type: 'Text', text: "Constellation isn't signed in" })).toBeDefined();
+		// The press settles with the child's loop; the reload waits on the clock.
+		await ui.press({ key: 'onboarding-sign-in' });
+		await ui.unmount();
+		expect(spawned.map((e) => e.argv)).toEqual([[CLI, 'auth']]);
+		expect(isKey(setKey)).toBe(true);
+		expect(commands).toEqual([]);
+		await clock.advance(0);
+		expect(commands).toEqual(['reload-plugins']);
+		expect(toasts.some((t) => t.includes(KEY))).toBe(false);
+	});
+});
+
 describe('the key stays out of what is shown', () => {
 	test('no log, toast or drawn text holds the key through start, ping, reload and every state', async () => {
 		const band = loadBand();
@@ -778,6 +1237,44 @@ describe('the key stays out of what is shown', () => {
 			drawn.push(shown(await band.draw()));
 		}
 		const everything = [...seen.logs, ...seen.toasts, ...band.seen.logs, ...band.seen.toasts, ...drawn];
+		expect(everything.length > 0).toBe(true);
+		expect(everything.some((line) => line.includes(KEY) || line.includes(KEY.slice(3)))).toBe(false);
+	});
+
+	test('no toast, log or drawn text holds the key through a failed and a successful sign-in', async () => {
+		const drawn: string[] = [];
+		const band = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const unchanged = buttonPorts({ run: host({ keys: [KEY, KEY] }).run, child: { chunks: [out('Waiting for authentication...\n')] } });
+		await startSignIn(unchanged.ports);
+		await settle();
+		drawn.push(shown(await band.draw()));
+		const again = loadBand();
+		observeCodeIntel(failed('AUTH_ERROR'), () => undefined);
+		const held = gate();
+		const signedIn = buttonPorts({
+			run: host({ keys: [undefined, KEY] }).run,
+			exists: (p) => p === `${REPO}/.git`,
+			child: { chunks: [out('Opening browser for authentication...\n')], hold: held.promise },
+		});
+		await startSignIn(signedIn.ports);
+		await settle();
+		drawn.push(shown(await again.draw()));
+		held.open();
+		await settle();
+		await signedIn.fire();
+		expect(isKey(signedIn.seen.envSet[0])).toBe(true);
+		const everything = [
+			...unchanged.seen.logs,
+			...unchanged.seen.toasts,
+			...signedIn.seen.logs,
+			...signedIn.seen.toasts,
+			...band.seen.logs,
+			...band.seen.toasts,
+			...again.seen.logs,
+			...again.seen.toasts,
+			...drawn,
+		];
 		expect(everything.length > 0).toBe(true);
 		expect(everything.some((line) => line.includes(KEY) || line.includes(KEY.slice(3)))).toBe(false);
 	});

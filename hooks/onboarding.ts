@@ -1,4 +1,14 @@
-import type { ElementTable, EngineInterface, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement } from 'claude-code';
+import type {
+	ElementTable,
+	EngineInterface,
+	On,
+	PluginOptions,
+	ProcessRunInit,
+	ProcessRunResult,
+	ProcessSpawnChunk,
+	ProcessSpawnRequest,
+	RenderElement,
+} from 'claude-code';
 import { canDraw, codeIntel, gitRoot, parseEnvelope, projectRoot } from './lib';
 import type { McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
@@ -15,6 +25,16 @@ const WEB_APP = 'https://app.constellationdev.io';
 
 /** How long the stored key read-back may take: a profile that prompts must not hold up the session. */
 const READ_BACK_MS = 5000;
+
+/** How the CLI is installed, and where the docs say so. */
+const INSTALL_COMMAND = 'npm i -g @constellationdev/cli';
+const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
+
+/** A failed sign-in's line where the CLI said nothing, or where no login `sh` reads its key back. */
+const AUTH_IN_TERMINAL = 'Run `constellation auth` in a terminal';
+
+/** An index press where no `constellation.json` sits at or above the session's directory. */
+const INDEX_IN_PROJECT = 'Run `constellation index` in a terminal, in the project directory';
 
 /** The band's states. The first that holds wins, in this order. */
 export type OnboardingState = 'not-set-up' | 'sign-in-again' | 'no-project' | 'not-registered' | 'not-indexed' | 'working';
@@ -150,20 +170,30 @@ let state: OnboardingState | undefined;
 let running: Task | undefined;
 /** What the running or last CLI run printed. */
 let buffer = '';
+/** The line under the state's headline once a CLI run has ended, such as its last output line. */
+let detail: string | undefined;
+/** The last button press found no CLI: the band says how to install it. */
+let cliMissing = false;
 /** A session that cannot draw gets one line. */
 let logged = false;
 /** The git root (else the working directory) the session started in: dismissals are kept per repository. */
 let repoRoot: string | undefined;
 
-/** Puts up `next` and tells the band, unless a CLI run holds the band. */
-function apply(next: OnboardingState | undefined, notify: Notify): void {
-	if (running !== undefined || next === state) return;
-	state = next;
+/** Draws the band again. */
+function redraw(notify: Pick<OnboardingPorts, 'invalidate'>): void {
 	try {
 		notify.invalidate();
 	} catch {
 		// Refused while a band draws: the next draw reads the new state.
 	}
+}
+
+/** Puts up `next`, with `line` under its headline, and tells the band, unless a CLI run holds the band. */
+function apply(next: OnboardingState | undefined, notify: Notify, line?: string): void {
+	if (running !== undefined || next === state) return;
+	state = next;
+	detail = line;
+	redraw(notify);
 	if (next === undefined || next === 'working' || logged || notify.log === undefined) return;
 	logged = true;
 	notify.log(LOG_LINE[next]).catch(() => undefined);
@@ -223,6 +253,33 @@ export async function storedKey(run: Run): Promise<string | undefined> {
 	}
 }
 
+/** Where the CLI is (undefined when not found), and whether a login `sh` could run to look. */
+export type CliLookup = { path: string | undefined; shell: boolean };
+
+/**
+ * Finds the CLI the way a terminal would: a login `/bin/sh` runs
+ * `command -v`, so a PATH the profile sets counts. Where `sh` cannot start
+ * (Windows), `where` names it, its first line taken. Never rejects.
+ */
+export async function cliPath(run: Run): Promise<CliLookup> {
+	try {
+		const r = await run(['/bin/sh', '-lc', 'command -v constellation'], { timeoutMs: READ_BACK_MS });
+		return { path: r.exitCode === 0 ? parseCliPath(r.stdout) : undefined, shell: true };
+	} catch {
+		// sh could not start or ran past the timeout: ask where.
+	}
+	try {
+		const r = await run(['where', 'constellation'], { timeoutMs: READ_BACK_MS });
+		const first = r.stdout
+			.split('\n')
+			.map((line) => line.trim())
+			.find((line) => line !== '');
+		return { path: r.exitCode === 0 ? first : undefined, shell: false };
+	} catch {
+		return { path: undefined, shell: false };
+	}
+}
+
 /** A stored key found at session start, for the caller to set before the session goes on. */
 export type FoundKey = { key: string; projectRoot: string | null };
 
@@ -244,28 +301,32 @@ export async function readStoredKeyAtStart(
 	return { key, projectRoot: await projectRoot(cwd, ports.exists) };
 }
 
-/** Takes the band down and reloads the plugins on a timer, then says so. */
-function reloadPlugins(ports: OnboardingPorts): void {
+/** Takes the band down and reloads the plugins on a timer, then says so unless `announce` is false. */
+function reloadPlugins(ports: OnboardingPorts, announce = true): void {
 	state = undefined;
+	detail = undefined;
 	buffer = '';
 	ports.invalidate();
 	// `$.command.run` is refused inside a hook the turn waits on, so it always goes through the timer.
 	ports.after(0, () => {
 		ports
 			.reload()
-			.then(() => ports.toast('✦ Constellation connected'))
+			.then(() => {
+				if (announce) ports.toast('✦ Constellation connected');
+			})
 			.catch(() => undefined);
 	});
 }
 
 /**
  * Sets `key` for the session, then reloads the plugins so the MCP server
- * starts with it. A reload unloads the module and kills a running child, so
- * call it once a CLI run has ended (`endTask`).
+ * starts with it, and says so after unless `announce` is false. A reload
+ * unloads the module and kills a running child, so call it once a CLI run has
+ * ended (`endTask`).
  */
-export async function connect(key: string, ports: OnboardingPorts): Promise<void> {
+export async function connect(key: string, ports: OnboardingPorts, announce = true): Promise<void> {
 	await ports.envSet(key);
-	reloadPlugins(ports);
+	reloadPlugins(ports, announce);
 }
 
 /**
@@ -315,9 +376,151 @@ export function observeCodeIntel(r: { deny?: string; text?: string }, invalidate
 	if (next !== undefined) apply(next, notify);
 }
 
+/** What the band's buttons call beyond the session start's ports. */
+export type ButtonPorts = OnboardingPorts & {
+	/** Starts a child, as `$.process.spawn`: the loop over its pieces is its life. */
+	spawn: (request: ProcessSpawnRequest) => AsyncIterable<ProcessSpawnChunk>;
+	/** The session's working directory. */
+	cwd: () => Promise<string>;
+};
+
+/** A claimed CLI run: the generation it started in and the CLI it runs. */
+type Claim = { gen: number; cli: string; shell: boolean };
+
+/**
+ * Claims the band for `task` before anything is awaited, so a second press
+ * is refused at once, then finds the CLI. Undefined when a run is live, or
+ * when no CLI is found: the band then goes back to what it showed and says
+ * how to install it, and nothing is spawned.
+ */
+async function claim(task: Task, ports: ButtonPorts): Promise<Claim | undefined> {
+	const prior = state;
+	const gen = startTask(task, ports);
+	if (gen === undefined) return undefined;
+	const { path, shell } = await cliPath(ports.run);
+	if (path !== undefined) {
+		cliMissing = false;
+		return { gen, cli: path, shell };
+	}
+	endTask();
+	if (generation === gen) {
+		cliMissing = true;
+		apply(prior, ports);
+	}
+	return undefined;
+}
+
+/**
+ * Reads a CLI run's child to its end, both streams into `buffer`, and draws
+ * the band again when its latest line changes. False when the child could not
+ * start. What it prints after a reset is not kept: the band it was for is gone.
+ */
+async function follow(start: () => AsyncIterable<ProcessSpawnChunk>, gen: number, notify: Pick<OnboardingPorts, 'invalidate'>): Promise<boolean> {
+	try {
+		for await (const { text } of start()) {
+			if (generation !== gen) continue;
+			const was = lastLine(buffer);
+			buffer += text;
+			if (lastLine(buffer) !== was) redraw(notify);
+		}
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The Sign in button: runs `constellation auth` with the inherited key
+ * emptied, so the CLI neither reuses nor asks to replace it, then reads the
+ * stored key back. A new key connects; anything else (the exit code is not
+ * read) says the sign-in failed. The run holds the band until that is
+ * decided, and the plugins reload only after the child has exited, since a
+ * reload kills it. A run that outlives a reset acts on nothing.
+ */
+export async function startSignIn(ports: ButtonPorts): Promise<void> {
+	const claimed = await claim('auth', ports);
+	if (claimed === undefined) return;
+	const { gen, cli, shell } = claimed;
+	const before = await storedKey(ports.run);
+	void (async () => {
+		let after: string | undefined;
+		let root: string | null | undefined;
+		try {
+			const started = await follow(
+				() => ports.spawn({ argv: [cli, 'auth'], env: { CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }),
+				gen,
+				ports,
+			);
+			if (started && generation === gen) after = await storedKey(ports.run);
+			if (after !== undefined && after !== before) {
+				root = await ports
+					.cwd()
+					.then((cwd) => projectRoot(cwd, ports.exists))
+					.catch(() => undefined);
+			}
+		} finally {
+			endTask();
+		}
+		if (generation !== gen) return;
+		if (after !== undefined && after !== before) {
+			try {
+				// The reload wipes module state, so the init hint goes out before it.
+				if (root === null) ports.toast('✦ Constellation connected. Run constellation init in this repo to set it up');
+				await connect(after, ports, root !== null);
+				return;
+			} catch {
+				// The key could not be set: the sign-in failed.
+			}
+		}
+		apply('sign-in-again', ports, (shell ? lastLine(buffer) : undefined) ?? AUTH_IN_TERMINAL);
+	})();
+}
+
+/**
+ * The Index button: runs `constellation index --wait` in the project root,
+ * then a ping decides (the exit code is not read). Indexed takes the band
+ * down; still not indexed stays, or says not registered when the CLI said
+ * so. The run holds the band until the ping answers. A run that outlives a
+ * reset acts on nothing.
+ */
+export async function startIndex(ports: ButtonPorts): Promise<void> {
+	const prior = state;
+	const claimed = await claim('index', ports);
+	if (claimed === undefined) return;
+	const { gen, cli } = claimed;
+	const root = await ports
+		.cwd()
+		.then((cwd) => projectRoot(cwd, ports.exists))
+		.catch(() => null);
+	if (root === null) {
+		endTask();
+		if (generation === gen) apply(prior, ports, INDEX_IN_PROJECT);
+		return;
+	}
+	void (async () => {
+		let code: string | undefined;
+		try {
+			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { NO_COLOR: '1' } }), gen, ports);
+			if (generation === gen) code = (await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root })).error?.code;
+		} finally {
+			endTask();
+		}
+		if (generation !== gen) return;
+		if (code !== 'PROJECT_NOT_INDEXED') {
+			buffer = '';
+			apply(undefined, ports);
+			ports.toast('✦ Constellation indexed this project');
+			return;
+		}
+		apply(NOT_REGISTERED_OUTPUT.test(buffer) ? 'not-registered' : 'not-indexed', ports, lastLine(buffer));
+	})();
+}
+
 /** The second spelling of the ports, for the band's buttons; the first is the session start's in `command.ts`. */
-function portsOf($: EngineInterface): OnboardingPorts {
+function portsOf($: EngineInterface): ButtonPorts {
 	return {
+		spawn: (request) => $.process.spawn(request),
+		cwd: () => $.session.cwd(),
 		run: (argv, init) => $.process.run(argv, init),
 		exists: (p) => $.fs.exists(p),
 		envSet: (key) => $.env.set('CONSTELLATION_ACCESS_KEY', key),
@@ -360,10 +563,14 @@ const HEADLINE: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = 
 export type BandView = {
 	state: OnboardingState;
 	tint: Scheme;
-	/** The CLI's latest output line. */
+	/** The CLI's latest output line, or what to do next. */
 	detail?: string;
 	/** The CLI run behind `working`. */
 	task?: Task;
+	/** The address a sign-in asks to be opened when no browser opened. */
+	url?: string;
+	/** The last press found no CLI: how to install it shows above the buttons. */
+	cliMissing?: boolean;
 	dismiss: () => void;
 	signIn: () => void;
 	index: () => void;
@@ -388,6 +595,7 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 		rows.push(el.Text({ children: 'Check projectId in constellation.json against the web app:' }), el.Link({ href: WEB_APP }));
 	}
 	if (view.detail !== undefined) rows.push(el.Text({ dimColor: true, wrap: 'truncate', children: view.detail }));
+	if (view.url !== undefined) rows.push(el.Link({ href: view.url, label: view.url }));
 	const dismiss = { key: 'onboarding-dismiss', label: 'Dismiss', onPress: view.dismiss };
 	const action =
 		view.state === 'not-set-up' || view.state === 'sign-in-again'
@@ -395,6 +603,9 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 			: view.state === 'not-indexed'
 				? { key: 'onboarding-index', label: 'Index this project', onPress: view.index }
 				: undefined;
+	if (action !== undefined && view.cliMissing === true) {
+		rows.push(el.Text({ children: `Install the Constellation CLI, then press ${action.label} again: ${INSTALL_COMMAND}` }), el.Link({ href: INSTALL_DOCS }));
+	}
 	rows.push(
 		action === undefined
 			? el.Box({ flexDirection: 'row', justifyContent: 'flex-end', children: [el.Button(dismiss)] })
@@ -413,6 +624,8 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 	state = undefined;
 	running = undefined;
 	buffer = '';
+	detail = undefined;
+	cliMissing = false;
 	logged = false;
 	repoRoot = undefined;
 
@@ -431,12 +644,17 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 		} catch {
 			tint = scheme(options.colors, undefined);
 		}
-		const detail = lastLine(buffer);
+		// While a run goes, its latest line; then the line it ended on.
+		const line = running === undefined ? detail : lastLine(buffer);
+		// Only complete lines: a URL still being written is not offered.
+		const url = running === 'auth' ? manualUrl(buffer.slice(0, buffer.lastIndexOf('\n') + 1)) : undefined;
 		return band($.ui.resolve(e), {
 			state: shown,
 			tint,
-			...(detail === undefined ? {} : { detail }),
+			...(line === undefined ? {} : { detail: line }),
 			...(running === undefined ? {} : { task: running }),
+			...(url === undefined ? {} : { url }),
+			...(cliMissing ? { cliMissing } : {}),
 			dismiss: async () => {
 				try {
 					await $.store.set(key, shown);
@@ -445,8 +663,8 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 				}
 				portsOf($).invalidate();
 			},
-			signIn: () => undefined,
-			index: () => undefined,
+			signIn: () => startSignIn(portsOf($)),
+			index: () => startIndex(portsOf($)),
 		});
 	});
 }
@@ -461,5 +679,7 @@ export function resetOnboarding(): void {
 	generation += 1;
 	state = undefined;
 	buffer = '';
+	detail = undefined;
+	cliMissing = false;
 	logged = false;
 }
