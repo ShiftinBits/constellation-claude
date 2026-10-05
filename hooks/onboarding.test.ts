@@ -1,4 +1,13 @@
-import type { McpToolResult, On, PluginOptions, ProcessRunInit, ProcessSpawnChunk, ProcessSpawnRequest, ProcessSpawnResult } from 'claude-code';
+import type {
+	McpToolResult,
+	On,
+	PluginOptions,
+	ProcessRunInit,
+	ProcessSpawnChunk,
+	ProcessSpawnRequest,
+	ProcessSpawnResult,
+	RenderSurface,
+} from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import {
 	KEY_PATTERN,
@@ -704,15 +713,20 @@ describe('the band above the prompt', () => {
 describe('the band as a loaded plugin', () => {
 	const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} };
 
-	/** Answers what the plugin reads beneath it: the git walk, surfaces, the theme, and code_intel by `answer.next`. */
-	function world(on: On) {
+	/**
+	 * Answers what the plugin reads beneath it: the git walk, `surfaces`, the
+	 * theme, a stored key the CLI never wrote, and code_intel by `answer.next`.
+	 * `signedIn: false` starts the session with no key set.
+	 */
+	function world(on: On, { surfaces = ['terminal'], signedIn = true }: { surfaces?: readonly RenderSurface[]; signedIn?: boolean } = {}) {
 		const answer = { next: failed('AUTH_ERROR') };
 		const logs: string[] = [];
 		const toasts: string[] = [];
-		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		mock.env(on, signedIn ? { CONSTELLATION_ACCESS_KEY: KEY } : {});
 		mock.store(on);
 		on('fs.exists', (_$, e) => ({ value: e.path === `${REPO}/.git` || e.path === '/work/other/.git' }));
-		on('session.surfaces', () => ({ value: ['terminal'] }));
+		on('process.run', () => ({ value: { exitCode: 0, stdout: '\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }));
+		on('session.surfaces', () => ({ value: surfaces }));
 		on('session.start', (_$, e) => ({ cwd: e.cwd }));
 		on('command.register', (_$, e) => ({ value: { command: e.name } }));
 		on('ui.log', (_$, e) => {
@@ -764,6 +778,48 @@ describe('the band as a loaded plugin', () => {
 		await other.unmount();
 
 		expect([...logs, ...toasts, drawn].some((line) => line.includes(KEY))).toBe(false);
+	});
+
+	for (const surfaces of [[], ['vscode']] as const) {
+		test(`on ${surfaces.join() || 'no surface'} the agent's code_intel errors log one line`, async ($, on) => {
+			const { answer, logs } = world(on, { surfaces });
+			await $.session.start({ cwd: REPO, surface: null, isInteractive: false });
+			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
+			answer.next = failed('PROJECT_NOT_INDEXED');
+			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
+			await settle();
+			expect(logs).toEqual(['>_CONSTELLATION:// sign-in failed: run constellation auth']);
+		});
+
+		test(`on ${surfaces.join() || 'no surface'} a session start with no key logs one line`, async ($, on) => {
+			const { logs } = world(on, { surfaces, signedIn: false });
+			await $.session.start({ cwd: REPO, surface: null, isInteractive: false });
+			await settle();
+			expect(logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
+		});
+	}
+
+	test("on the terminal the agent's code_intel errors draw the band and log nothing", async ($, on) => {
+		const { answer, logs } = world(on);
+		await $.session.start({ cwd: REPO, surface: 'terminal', isInteractive: true });
+		await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
+		answer.next = failed('PROJECT_NOT_INDEXED');
+		await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
+		await settle();
+		expect(logs).toEqual([]);
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
+		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
+		await ui.unmount();
+	});
+
+	test('on the terminal a session start with no key draws the band and logs nothing', async ($, on) => {
+		const { logs } = world(on, { signedIn: false });
+		await $.session.start({ cwd: REPO, surface: 'terminal', isInteractive: true });
+		await settle();
+		expect(logs).toEqual([]);
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
+		expect(await ui.find({ type: 'Text', text: "Constellation isn't signed in" })).toBeDefined();
+		await ui.unmount();
 	});
 });
 
