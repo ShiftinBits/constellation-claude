@@ -62,8 +62,7 @@ let sessionKey: string | undefined = KEY;
 
 /** The git commands the handlers ran, and the commit HEAD is at. */
 const gitRuns: string[][] = [];
-/** Whether `git status` reports changes, how many `$.config.list` reads were made, the surfaces the session has and what `$.ui.log` got. */
-let dirtyTree = false;
+/** How many `$.config.list` reads were made, the surfaces the session has and what `$.ui.log` got. */
 let configReads = 0;
 let surfaces: string[] = ['terminal'];
 const logLines: string[] = [];
@@ -91,7 +90,7 @@ const $ = {
 		run: async (argv: readonly string[]) => {
 			gitRuns.push([...argv]);
 			if (argv.includes('rev-parse')) return { exitCode: 0, stdout: `${HEAD}\nrefs/heads/main\n` };
-			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : argv.includes('status') && dirtyTree ? ' M a.ts\n' : '' };
+			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : '' };
 		},
 	},
 	fs: {
@@ -121,7 +120,6 @@ function load(options: PluginOptions) {
 	registerFreshness(capture as unknown as On, options);
 	invalidations = 0;
 	gitRuns.length = 0;
-	dirtyTree = false;
 	configReads = 0;
 	surfaces = ['terminal'];
 	logLines.length = 0;
@@ -424,10 +422,9 @@ describe('freshness band above the prompt', () => {
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 	};
 	/** Loads the module with the index behind HEAD by three commits. */
-	const behind = async (state: { dirty?: boolean; cannotDraw?: boolean } = {}) => {
+	const behind = async (state: { cannotDraw?: boolean } = {}) => {
 		const m = load({});
 		track(PROJECT);
-		dirtyTree = state.dirty === true;
 		if (state.cannotDraw === true) surfaces = [];
 		await m.program('main', 'return await api.ping()', staleAnswer());
 		await settle();
@@ -438,15 +435,12 @@ describe('freshness band above the prompt', () => {
 	const BENEATH = { type: 'Text', props: { children: 'beneath' } };
 
 	test('a fresh index returns what the lower mod returned and reads no store, clock or config', async () => {
-		for (const dirty of [false, true]) {
-			const m = load({});
-			track(PROJECT);
-			dirtyTree = dirty;
-			await m.program('main', 'return await api.ping()', staleAnswer(HEAD));
-			await settle();
-			expect(await m.draw(BENEATH)).toBe(BENEATH);
-			expect(configReads).toBe(0);
-		}
+		const m = load({});
+		track(PROJECT);
+		await m.program('main', 'return await api.ping()', staleAnswer(HEAD));
+		await settle();
+		expect(await m.draw(BENEATH)).toBe(BENEATH);
+		expect(configReads).toBe(0);
 	});
 
 	test('behind shows the state and index age above a lower mod element', async () => {
@@ -455,11 +449,6 @@ describe('freshness band above the prompt', () => {
 		expect(flat(tree)).toBe('✦ index 3 commits behind · indexed 2h ago beneath');
 		expect(Reflect.get(Reflect.get(tree, 'props'), 'flexDirection')).toBe('column');
 		expect(configReads).toBe(1);
-	});
-
-	test('a dirty tree adds the local changes suffix', async () => {
-		const m = await behind({ dirty: true });
-		expect(flat(await m.draw())).toContain(' + local changes');
 	});
 
 	test('draws the row alone when nothing draws beneath', async () => {

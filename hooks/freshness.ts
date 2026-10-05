@@ -14,13 +14,13 @@ export type Log = (text: string) => Promise<void> | void;
 type Index = { asOfCommit: string; lastIndexedAt?: string; branch?: string };
 
 /** What the working tree is at. `behind` is undefined when the count could not be taken. */
-type Local = { head: string; branch: string; behind: number | undefined; dirty: boolean };
+type Local = { head: string; branch: string; behind: number | undefined };
 
 /** What the indicator shows, or nothing when the graph matches the checkout. */
 export type FreshnessView =
-	| { kind: 'behind'; behind: number; dirty: boolean; lastIndexedAt?: string }
-	| { kind: 'mismatch'; asOfCommit: string; dirty: boolean; lastIndexedAt?: string }
-	| { kind: 'error'; failure: CodeIntelError; dirty: boolean; lastIndexedAt?: string };
+	| { kind: 'behind'; behind: number; lastIndexedAt?: string }
+	| { kind: 'mismatch'; asOfCommit: string; lastIndexedAt?: string }
+	| { kind: 'error'; failure: CodeIntelError; lastIndexedAt?: string };
 
 /** Error codes the onboarding band already shows, so the indicator stays quiet. */
 const ONBOARDING_CODES: ReadonlySet<string> = new Set(['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'NOT_CONFIGURED', 'MCP_UNAVAILABLE']);
@@ -65,7 +65,7 @@ function age(iso: string, now: number): string | undefined {
 /**
  * What to draw for the graph's commit against the checkout, or undefined for
  * nothing. A failure with no index is an error. A HEAD that starts with the
- * indexed commit (the envelope may carry a short id) is fresh even when dirty.
+ * indexed commit (the envelope may carry a short id) is fresh.
  * Otherwise HEAD is behind when the index commit has newer commits, and a
  * mismatch when it has none or the count is unknown.
  */
@@ -75,11 +75,11 @@ export function freshnessView(
 	error: CodeIntelError | undefined,
 ): FreshnessView | undefined {
 	if (known === undefined) {
-		return error === undefined ? undefined : { kind: 'error', failure: error, dirty: false };
+		return error === undefined ? undefined : { kind: 'error', failure: error };
 	}
 	if (checkout === undefined) return undefined;
 	if (checkout.head.startsWith(known.asOfCommit)) return undefined;
-	const shared = { dirty: checkout.dirty, ...(known.lastIndexedAt === undefined ? {} : { lastIndexedAt: known.lastIndexedAt }) };
+	const shared = known.lastIndexedAt === undefined ? {} : { lastIndexedAt: known.lastIndexedAt };
 	if (checkout.behind !== undefined && checkout.behind > 0) return { kind: 'behind', behind: checkout.behind, ...shared };
 	return { kind: 'mismatch', asOfCommit: known.asOfCommit, ...shared };
 }
@@ -98,12 +98,12 @@ export function freshnessText(view: FreshnessView, now: number): string {
 		return ['✦ ' + view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP);
 	}
 	const { head, since } = stateParts(view, now);
-	return `✦ ${[head, ...(since === undefined ? [] : [since])].join(SEP)}${view.dirty ? ' + local changes' : ''}`;
+	return `✦ ${[head, ...(since === undefined ? [] : [since])].join(SEP)}`;
 }
 
 /**
  * The indicator as one row: the mark and state words painted (gold for behind
- * and mismatch, red for an error), the index age and local changes dim. An
+ * and mismatch, red for an error), the index age dim. An
  * error's headline is primary text and its next step dim. `el` is the table
  * from `$.ui.resolve(e)`.
  */
@@ -122,7 +122,7 @@ export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Schem
 	const { head, since } = stateParts(view, now);
 	return el.Text({
 		wrap: 'truncate',
-		children: [painted(`✦ ${head}`), ...(since === undefined ? [] : [dim(`${SEP}${since}`)]), ...(view.dirty ? [dim(' + local changes')] : [])],
+		children: [painted(`✦ ${head}`), ...(since === undefined ? [] : [dim(`${SEP}${since}`)])],
 	});
 }
 
@@ -147,8 +147,7 @@ export async function compareLocal(run: Run, root: string, asOfCommit: string): 
 			const n = Number(counted.stdout.trim());
 			behind = counted.exitCode === 0 && /^\d+$/.test(counted.stdout.trim()) ? n : undefined;
 		}
-		const status = await git(['status', '--porcelain']);
-		return { head, branch, behind, dirty: status.exitCode === 0 && status.stdout.trim() !== '' };
+		return { head, branch, behind };
 	} catch {
 		return undefined;
 	}

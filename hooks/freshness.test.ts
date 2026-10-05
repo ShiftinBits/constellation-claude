@@ -13,12 +13,12 @@ type Answer = { exitCode: number; stdout: string } | Error;
 type Call = { argv: readonly string[]; init: { cwd?: string; env?: Record<string, string>; timeoutMs?: number } };
 
 /** A `run` that records argv and answers per git subcommand. */
-function fakeRun(answers: { head?: Answer; count?: Answer; status?: Answer }) {
+function fakeRun(answers: { head?: Answer; count?: Answer }) {
 	const calls: Call[] = [];
 	const run = async (argv: readonly string[], init: Call['init']) => {
 		calls.push({ argv, init });
 		const sub = argv[GIT.length];
-		const answer = (sub === 'rev-parse' ? answers.head : sub === 'rev-list' ? answers.count : answers.status) ?? { exitCode: 0, stdout: '' };
+		const answer = (sub === 'rev-parse' ? answers.head : sub === 'rev-list' ? answers.count : undefined) ?? { exitCode: 0, stdout: '' };
 		if (answer instanceof Error) throw answer;
 		return answer;
 	};
@@ -31,11 +31,11 @@ const fresh = () => registerFreshness((() => undefined) as unknown as On, option
 
 describe('freshnessView and freshnessText', () => {
 	const index = { asOfCommit: OLD, lastIndexedAt: TWO_HOURS_AGO };
-	const local = (over: Partial<{ head: string; behind: number | undefined; dirty: boolean }> = {}) => ({ head: COMMIT, branch: 'main', behind: 4, dirty: false, ...over });
+	const local = (over: Partial<{ head: string; behind: number | undefined }> = {}) => ({ head: COMMIT, branch: 'main', behind: 4, ...over });
 
-	test('draws nothing when HEAD is the indexed commit, clean or dirty', () => {
+	test('draws nothing when HEAD is the indexed commit', () => {
 		expect(freshnessView({ asOfCommit: COMMIT }, local({ behind: 0 }), undefined)).toBeUndefined();
-		expect(freshnessView({ asOfCommit: COMMIT.slice(0, 7) }, local({ behind: 0, dirty: true }), undefined)).toBeUndefined();
+		expect(freshnessView({ asOfCommit: COMMIT.slice(0, 7) }, local({ behind: 0 }), undefined)).toBeUndefined();
 	});
 
 	test('draws nothing without an index or a checkout', () => {
@@ -51,11 +51,6 @@ describe('freshnessView and freshnessText', () => {
 	test('uses the singular for one commit', () => {
 		const view = freshnessView(index, local({ behind: 1 }), undefined);
 		expect(view && freshnessText(view, NOW)).toBe('✦ index 1 commit behind · indexed 2h ago');
-	});
-
-	test('appends local changes when dirty', () => {
-		const view = freshnessView(index, local({ dirty: true }), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 4 commits behind · indexed 2h ago + local changes');
 	});
 
 	test('a zero or unknown count is a mismatch with the short commit', () => {
@@ -89,13 +84,12 @@ describe('freshnessView and freshnessText', () => {
 });
 
 describe('compareLocal', () => {
-	test('reads commit, branch, count and dirtiness with the guarded git', async () => {
-		const { run, calls } = fakeRun({ head: onBranch('feat/x'), count: { exitCode: 0, stdout: '4\n' }, status: { exitCode: 0, stdout: ' M a.ts\n' } });
-		expect(await compareLocal(run, ROOT, OLD)).toEqual({ head: COMMIT, branch: 'feat/x', behind: 4, dirty: true });
+	test('reads commit, branch and count with the guarded git, never the working tree', async () => {
+		const { run, calls } = fakeRun({ head: onBranch('feat/x'), count: { exitCode: 0, stdout: '4\n' } });
+		expect(await compareLocal(run, ROOT, OLD)).toEqual({ head: COMMIT, branch: 'feat/x', behind: 4 });
 		expect(calls.map((c) => c.argv.slice(GIT.length))).toEqual([
 			['rev-parse', 'HEAD', '--symbolic-full-name', 'HEAD'],
 			['rev-list', '--count', `${OLD}..HEAD`, '--'],
-			['status', '--porcelain'],
 		]);
 		for (const call of calls) {
 			expect(call.argv.slice(0, GIT.length)).toEqual([...GIT]);
@@ -113,7 +107,7 @@ describe('compareLocal', () => {
 
 	test('skips rev-list when HEAD is the indexed commit', async () => {
 		const { run, calls } = fakeRun({ head: onBranch('main') });
-		expect(await compareLocal(run, ROOT, COMMIT.slice(0, 7))).toMatchObject({ behind: 0, dirty: false });
+		expect(await compareLocal(run, ROOT, COMMIT.slice(0, 7))).toMatchObject({ behind: 0 });
 		expect(calls.some((c) => c.argv.includes('rev-list'))).toBe(false);
 	});
 
@@ -126,7 +120,7 @@ describe('compareLocal', () => {
 
 	test('fails open when rev-parse fails or any run rejects', async () => {
 		expect(await compareLocal(fakeRun({ head: { exitCode: 128, stdout: '' } }).run, ROOT, OLD)).toBeUndefined();
-		expect(await compareLocal(fakeRun({ head: onBranch('main'), status: new Error('timeout') }).run, ROOT, OLD)).toBeUndefined();
+		expect(await compareLocal(fakeRun({ head: onBranch('main'), count: new Error('timeout') }).run, ROOT, OLD)).toBeUndefined();
 	});
 });
 
@@ -292,21 +286,20 @@ describe('freshnessBand', () => {
 		return (Reflect.get(Reflect.get(row, 'props'), 'children') as { props: Record<string, unknown> }[]).map((c) => c.props);
 	};
 
-	test('paints the mark and state words and dims the age and local changes', () => {
-		const [head, since, dirty] = pieces('brand', { kind: 'behind', behind: 4, dirty: true, lastIndexedAt: TWO_HOURS_AGO });
+	test('paints the mark and state words and dims the age', () => {
+		const [head, since] = pieces('brand', { kind: 'behind', behind: 4, lastIndexedAt: TWO_HOURS_AGO });
 		expect(head).toMatchObject({ children: '✦ index 4 commits behind', color: expect.any(String) });
 		expect(since).toEqual({ dimColor: true, children: ' · indexed 2h ago' });
-		expect(dirty).toEqual({ dimColor: true, children: ' + local changes' });
 	});
 
 	test('a mismatch names the indexed commit', () => {
-		const [head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD, dirty: false });
+		const [head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD });
 		expect(head?.['children']).toBe('✦ index at fedcba9');
 	});
 
 	test('an error paints the code in another color, keeps the headline plain and dims the next step', () => {
-		const behind = pieces('brand', { kind: 'behind', behind: 1, dirty: false })[0];
-		const [code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] }, dirty: false });
+		const behind = pieces('brand', { kind: 'behind', behind: 1 })[0];
+		const [code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
 		expect(code?.['children']).toBe('✦ WEIRD');
 		expect(code?.['color']).not.toBe(behind?.['color']);
 		expect(headline).not.toHaveProperty('color');
@@ -315,7 +308,7 @@ describe('freshnessBand', () => {
 	});
 
 	test('the none scheme draws no color', () => {
-		const [head] = pieces('none', { kind: 'behind', behind: 2, dirty: false });
+		const [head] = pieces('none', { kind: 'behind', behind: 2 });
 		expect(head).not.toHaveProperty('color');
 	});
 });
