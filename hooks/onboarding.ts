@@ -380,17 +380,35 @@ export async function usesDefaultApi(root: string, read: (path: string) => Promi
 }
 
 /**
+ * Pings the project at `root`, unless its `constellation.json` names an API
+ * other than the default, which a repository chooses, so it is not pinged
+ * unasked. Undefined when skipped or when anything throws. Never rejects.
+ */
+export async function pingProject(root: string, ports: Pick<OnboardingPorts, 'read' | 'mcp'>): Promise<CodeIntelEnvelope | undefined> {
+	try {
+		if (!(await usesDefaultApi(root, ports.read))) return undefined;
+		return await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
+	} catch {
+		return undefined;
+	}
+}
+
+/**
  * After a stored key was set at session start, in the project at `root`: a
- * ping decides, unless the project's `constellation.json` names an API other
- * than the default, which a repository chooses, so it is not pinged unasked.
+ * ping (`pingProject`) decides, and `observe` sees its answer first.
  * `AUTH_ERROR` means the server started before the key was set, so the
  * plugins reload; `PROJECT_NOT_INDEXED` (also sent for an unregistered
  * project) puts up the index button. Never rejects.
  */
-export async function checkConnection(root: string, ports: OnboardingPorts): Promise<void> {
+export async function checkConnection(root: string, ports: OnboardingPorts, observe?: (envelope: CodeIntelEnvelope) => void): Promise<void> {
 	try {
-		if (!(await usesDefaultApi(root, ports.read))) return;
-		const envelope = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
+		const envelope = await pingProject(root, ports);
+		if (envelope === undefined) return;
+		try {
+			observe?.(envelope);
+		} catch {
+			// What observes the ping never changes what the ping decides.
+		}
 		const code = envelope.error?.code;
 		if (code === 'AUTH_ERROR') {
 			// No toast: nothing is known to work. The agent's next AUTH_ERROR says sign in again.

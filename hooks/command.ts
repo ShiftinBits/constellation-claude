@@ -1,5 +1,5 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { canDraw, codeIntel, isConfigured, isRecord, projectName } from './lib';
+import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
@@ -7,7 +7,8 @@ import type { Hit } from './explore';
 import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
-import { checkConnection, readStoredKeyAtStart, rememberRepo } from './onboarding';
+import { observeEnvelope, recheck, startTicks, track } from './freshness';
+import { checkConnection, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
@@ -571,13 +572,39 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			found = undefined;
 		}
 		const r = await next(e);
-		const root = found?.projectRoot;
-		if (typeof root === 'string') {
+		// The project to ping and watch: the stored key's, else the session's when its key is set.
+		let root: string | null = null;
+		try {
+			if (found !== undefined) root = found.projectRoot;
+			else if (isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) root = await projectRoot(e.cwd, ports.exists);
+		} catch {
+			root = null;
+		}
+		if (root !== null) {
+			const at = root;
+			const again = () => recheck(ports.run, ports.invalidate, ports.log);
+			track(at);
 			try {
-				// Never await code_intel in session.start: the ping runs on a timer.
-				$.clock.after(0, () => void checkConnection(root, ports));
+				// Never await code_intel in session.start: the ping runs on a timer. Only a stored key's ping acts on
+				// AUTH_ERROR and the index button; either answer tells the freshness indicator what is indexed.
+				$.clock.after(0, () => {
+					const observe = (envelope: CodeIntelEnvelope) => void observeEnvelope(envelope, at, ports.run, ports.invalidate, ports.log).catch(() => undefined);
+					const pinged =
+						found !== undefined
+							? checkConnection(at, ports, observe)
+							: pingProject(at, ports).then((envelope) => {
+									if (envelope !== undefined) observe(envelope);
+								});
+					void pinged.then(again).catch(() => undefined);
+				});
 			} catch {
-				// No timer: the agent's own calls still bring up the band.
+				// No timer: the agent's own calls still bring up the band and the indicator.
+			}
+			try {
+				// Every five minutes git alone compares the checkout again; code_intel is never called on the timer.
+				startTicks(() => $.clock.every(5 * 60_000, () => void again().catch(() => undefined)));
+			} catch {
+				// No timer: git commands the agent runs and code_intel answers still update the indicator.
 			}
 		}
 		try {

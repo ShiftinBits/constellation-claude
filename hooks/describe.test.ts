@@ -102,3 +102,79 @@ describe('tool description guidance', () => {
 		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
 	});
 });
+
+describe('the freshness indicator follows the working directory', () => {
+	const SERVER = 'plugin:constellation:constellation';
+	const INDEXED = 'fedcba9876543210fedcba9876543210fedcba98';
+
+	/** Two projects, /repo and /other, on the default API: records the pings and the git runs. */
+	function projects(on: On, signedIn = true) {
+		mock.env(on, signedIn ? { CONSTELLATION_ACCESS_KEY: KEY } : {});
+		const clock = mock.clock(on);
+		const pings: string[] = [];
+		const runs: string[] = [];
+		on('session.cwd', () => ({ value: '/repo' }));
+		on('session.surfaces', () => ({ value: ['terminal'] }));
+		on('fs.exists', (_, e) => ({ value: e.path === '/repo/constellation.json' || e.path === '/other/constellation.json' }));
+		on('fs.read', () => ({ value: JSON.stringify({ projectId: 'p' }) }));
+		on('mcp.connect', () => ({ value: { isConnected: true, server: SERVER } }));
+		on('mcp.call', (_, e) => {
+			pings.push(String(e.args?.['cwd']));
+			return { value: { content: [{ type: 'text', text: JSON.stringify({ success: true, result: {}, asOfCommit: INDEXED }) }], isError: false } };
+		});
+		on('process.run', (_, e) => {
+			runs.push(e.argv.join(' '));
+			const stdout = e.argv.includes('rev-parse') ? '0123456789abcdef0123456789abcdef01234567\nrefs/heads/main\n' : e.argv.includes('rev-list') ? '2\n' : '';
+			return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
+		});
+		on('classic.CwdChanged', () => ({}));
+		on('tool.describe', (_, e) => ({ description: e.description }));
+		on('ui.invalidate', () => ({ value: undefined }));
+		const revParses = () => runs.filter((r) => r.includes('rev-parse')).length;
+		return { clock, pings, revParses };
+	}
+
+	test('a move into a project pings it once and compares the checkout', async ($, on) => {
+		const { clock, pings, revParses } = projects(on);
+		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
+		await clock.settle();
+		expect(pings).toEqual(['/repo']);
+		expect(revParses() > 0).toBe(true);
+	});
+
+	test('a move within the project compares again, with the gate already open, and pings nothing', async ($, on) => {
+		const { clock, pings, revParses } = projects(on);
+		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
+		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
+		await clock.settle();
+		const before = revParses();
+		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/repo/lib' });
+		await clock.settle();
+		expect(pings).toEqual(['/repo']);
+		expect(revParses()).toBe(before + 1);
+	});
+
+	test('a move into another project pings that one', async ($, on) => {
+		const { clock, pings } = projects(on);
+		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
+		await $.classic.CwdChanged({ old_cwd: '/repo/app', new_cwd: '/other/src' });
+		await clock.settle();
+		expect(pings).toEqual(['/repo', '/other']);
+	});
+
+	test('without a key nothing is pinged or compared', async ($, on) => {
+		const { clock, pings, revParses } = projects(on, false);
+		await $.classic.CwdChanged({ old_cwd: '/tmp', new_cwd: '/repo/app' });
+		await clock.settle();
+		expect(pings).toEqual([]);
+		expect(revParses()).toBe(0);
+	});
+
+	test('outside a project nothing is pinged or compared', async ($, on) => {
+		const { clock, pings, revParses } = projects(on);
+		await $.classic.CwdChanged({ old_cwd: '/repo', new_cwd: '/elsewhere' });
+		await clock.settle();
+		expect(pings).toEqual([]);
+		expect(revParses()).toBe(0);
+	});
+});

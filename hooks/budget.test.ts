@@ -1,6 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerBudget } from './budget';
+import { freshnessLine, registerFreshness, track } from './freshness';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerOnboarding } from './onboarding';
@@ -54,6 +55,10 @@ let invalidations = 0;
 /** The session's access key as `$.env.get` answers it. */
 let sessionKey: string | undefined = KEY;
 
+/** The git commands the handlers ran, and the commit HEAD is at. */
+const gitRuns: string[][] = [];
+const HEAD = '0123456789abcdef0123456789abcdef01234567';
+
 const $ = {
 	env: { get: async () => sessionKey },
 	session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'] },
@@ -67,6 +72,13 @@ const $ = {
 	store: { get: async () => undefined },
 	config: { list: async () => [] },
 	clock: { now: async () => 0 },
+	process: {
+		run: async (argv: readonly string[]) => {
+			gitRuns.push([...argv]);
+			if (argv.includes('rev-parse')) return { exitCode: 0, stdout: `${HEAD}\nrefs/heads/main\n` };
+			return { exitCode: 0, stdout: argv.includes('rev-list') ? '3\n' : '' };
+		},
+	},
 	fs: {
 		exists: async (path: string) => {
 			existsCalls += 1;
@@ -91,7 +103,9 @@ function load(options: PluginOptions) {
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On, options);
+	registerFreshness(capture as unknown as On, options);
 	invalidations = 0;
+	gitRuns.length = 0;
 
 	/**
 	 * Raises `event` through the handlers that match it, in registration order;
@@ -344,6 +358,29 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
 		expect(invalidations).toBe(0);
 		expect(await m.band()).toBe('');
+	});
+
+	test("an agent's code_intel answer with a newer index commit updates the freshness indicator", async () => {
+		const m = load({});
+		track(PROJECT);
+		const old = 'fedcba9876543210fedcba9876543210fedcba98';
+		await m.program('main', 'return await api.ping()', { text: JSON.stringify({ success: true, result: {}, asOfCommit: old }) });
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
+		expect(freshnessLine(0)?.text).toBe('✦ index 3 commits behind');
+		expect(invalidations).toBe(1);
+	});
+
+	test("a plugin's own code_intel answer and a denied call leave the freshness indicator alone", async () => {
+		const m = load({});
+		track(PROJECT);
+		const text = JSON.stringify({ success: true, result: {}, asOfCommit: 'fedcba9876543210fedcba9876543210fedcba98' });
+		await m.program('main', 'return await api.ping()', { text }, { plugin: 'constellation', tier: 'user' });
+		await m.program('main', 'return await api.ping()', { deny: 'no', text });
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+		expect(gitRuns).toEqual([]);
+		expect(freshnessLine(0)).toBeUndefined();
+		expect(invalidations).toBe(0);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

@@ -1,5 +1,9 @@
 import type { EngineInterface, On } from 'claude-code';
-import { isConfigured, projectRoot } from './lib';
+import { freshnessLine, observeEnvelope, recheck, track } from './freshness';
+import type { Run } from './freshness';
+import { canDraw, isConfigured, projectRoot } from './lib';
+import type { McpPort } from './lib';
+import { pingProject } from './onboarding';
 
 /**
  * Appended to the description of every search tool the model sees. Constant, so
@@ -33,6 +37,31 @@ export function registerDescribe(on: On): void {
 
 	on('classic.CwdChanged', async ($, e, next) => {
 		const r = await next(e);
+		// The freshness indicator follows the project: a new one is pinged for what is indexed, the same one compared again.
+		try {
+			const root = isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')) ? await projectRoot(e.new_cwd, (p) => $.fs.exists(p)) : null;
+			if (root !== null) {
+				const run: Run = (argv, init) => $.process.run(argv, init);
+				const invalidate = () => $.ui.invalidate('ui.render');
+				const log = async (text: string) => {
+					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+				};
+				const showing = freshnessLine(Date.now()) !== undefined;
+				if (track(root)) {
+					// The last project's line goes.
+					if (showing) invalidate();
+					const mcp: McpPort = { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) };
+					void pingProject(root, { read: (p) => $.fs.read(p), mcp })
+						.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, invalidate, log)))
+						.then(() => recheck(run, invalidate, log))
+						.catch(() => undefined);
+				} else {
+					void recheck(run, invalidate, log).catch(() => undefined);
+				}
+			}
+		} catch {
+			// The indicator stays as it was; the gate below still runs.
+		}
 		if (lastGate !== false) return r;
 		if (await gateOpen($, e.new_cwd)) {
 			lastGate = true;

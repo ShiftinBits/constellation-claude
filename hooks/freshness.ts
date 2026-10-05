@@ -1,9 +1,12 @@
 import type { On, PluginOptions, ProcessRunInit, ProcessRunResult, Timer } from 'claude-code';
 import { explain } from './explain';
-import { type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, plural } from './lib';
+import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
 
 /** Runs a command, as `$.process.run`. */
 export type Run = (argv: readonly string[], init: ProcessRunInit) => Promise<Pick<ProcessRunResult, 'exitCode' | 'stdout'>>;
+
+/** Writes the line where nothing draws it. A promise it returns may reject; that is ignored. */
+export type Log = (text: string) => Promise<void> | void;
 
 /** What the graph was indexed at, from a code_intel envelope. */
 type Index = { asOfCommit: string; lastIndexedAt?: string; branch?: string };
@@ -24,6 +27,13 @@ const ONBOARDING_CODES: ReadonlySet<string> = new Set(['AUTH_ERROR', 'PROJECT_NO
 const COMMIT = /^[0-9a-f]{7,64}$/i;
 
 const SEP = ' · ';
+
+/**
+ * A git command that moves HEAD or changes the tree: `git`, then options such
+ * as `-C dir`, then the subcommand, with no `;`, `&`, `|` or line break
+ * between them, so `cd x && git commit` counts and `echo git; commit` does not.
+ */
+const GIT_MOVES = /\bgit\s[^;&|\n]*\b(?:commit|pull|checkout|merge|rebase)\b/;
 
 /**
  * Module state, cleared by `registerFreshness`. The index, the local checkout
@@ -118,18 +128,18 @@ function lineNow(): string | undefined {
 }
 
 /** Draws again and logs once when the line changed from `before`. */
-function changed(before: string | undefined, invalidate: () => void, log?: (text: string) => void): void {
+function changed(before: string | undefined, invalidate: () => void, log?: Log): void {
 	const after = lineNow();
 	if (after === before) return;
 	invalidate();
 	if (after !== undefined && log !== undefined && !logged) {
 		logged = true;
-		log(after);
+		void Promise.resolve(log(after)).catch(() => undefined);
 	}
 }
 
 /** Compares the checkout with the index, then draws again when the line changed from `before`. Never rejects. */
-async function compare(before: string | undefined, run: Run, invalidate: () => void, log?: (text: string) => void): Promise<void> {
+async function compare(before: string | undefined, run: Run, invalidate: () => void, log?: Log): Promise<void> {
 	if (root === undefined || index === undefined) return changed(before, invalidate, log);
 	const mine = ++seq;
 	const next = await compareLocal(run, root, index.asOfCommit);
@@ -146,7 +156,7 @@ async function compare(before: string | undefined, run: Run, invalidate: () => v
  * Compares the checkout with the index and draws again when the line changed.
  * A no-op without a tracked root and an index. Never rejects.
  */
-export function recheck(run: Run, invalidate: () => void, log?: (text: string) => void): Promise<void> {
+export function recheck(run: Run, invalidate: () => void, log?: Log): Promise<void> {
 	return compare(lineNow(), run, invalidate, log);
 }
 
@@ -161,7 +171,7 @@ export async function observeEnvelope(
 	at: string,
 	run: Run,
 	invalidate: () => void,
-	log?: (text: string) => void,
+	log?: Log,
 ): Promise<void> {
 	if (at !== root) return;
 	const before = lineNow();
@@ -205,8 +215,12 @@ export function freshnessColors(): unknown {
 	return colors;
 }
 
-/** Registers nothing itself: starts the indicator over and keeps the colors option. */
-export function registerFreshness(_on: On, options: PluginOptions): void {
+/**
+ * Starts the indicator over and keeps the colors option. A Bash call that ran
+ * a git commit, pull, checkout, merge or rebase compares the checkout again;
+ * the call's result goes back untouched and does not wait for git.
+ */
+export function registerFreshness(on: On, options: PluginOptions): void {
 	timer?.cancel();
 	timer = undefined;
 	index = undefined;
@@ -216,6 +230,25 @@ export function registerFreshness(_on: On, options: PluginOptions): void {
 	logged = false;
 	seq = 0;
 	colors = options.colors;
+
+	on('tool.call', { tool: /^Bash$/ }, async ($, e, next) => {
+		const r = await next(e);
+		if (r.deny !== undefined || r.isError === true) return r;
+		try {
+			if (!GIT_MOVES.test(stringArg(e, 'command') ?? '')) return r;
+			if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
+			void recheck(
+				(argv, init) => $.process.run(argv, init),
+				() => $.ui.invalidate('ui.render'),
+				async (text) => {
+					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+				},
+			).catch(() => undefined);
+		} catch {
+			// The indicator stays as it was.
+		}
+		return r;
+	});
 }
 
 /**

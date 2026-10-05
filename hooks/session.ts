@@ -1,6 +1,7 @@
 import type { On } from 'claude-code';
 import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
+import { resetFreshness } from './freshness';
 import { forgetAgentImpact, resetImpact } from './impact';
 import { isConfigured } from './lib';
 import { resetOnboarding } from './onboarding';
@@ -25,6 +26,7 @@ export function registerSession(on: On): void {
 		resetPrImpact();
 		resetToolRows();
 		resetOnboarding();
+		resetFreshness();
 		return next(e);
 	});
 

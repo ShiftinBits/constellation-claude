@@ -285,3 +285,87 @@ describe('startTicks', () => {
 		expect(cancelled).toEqual([1, 2]);
 	});
 });
+
+describe('resetFreshness', () => {
+	test('lets the line log again and keeps what is known', async () => {
+		fresh();
+		track(ROOT);
+		const lines: string[] = [];
+		await observeEnvelope({ success: true, asOfCommit: OLD }, ROOT, fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } }).run, () => undefined, (t) => void lines.push(t));
+		const before = freshnessLine(NOW)?.text;
+		resetFreshness();
+		expect(freshnessLine(NOW)?.text).toBe(before);
+		expect(before).toMatch(/behind/);
+		expect(track(ROOT)).toBe(false);
+	});
+});
+
+type BashAnswer = { deny?: string; isError?: boolean; text?: string };
+type BashHandler = ($: object, e: object, next: (e: object) => Promise<BashAnswer>) => Promise<BashAnswer>;
+
+/** The Bash handler `registerFreshness` registers, raised directly with a stand-in `$`. */
+function bashHook(key: string | undefined = 'ak:test-key') {
+	let handler: BashHandler | undefined;
+	let matcher: unknown;
+	registerFreshness(((event: string, ...rest: unknown[]) => {
+		if (event !== 'tool.call') return;
+		matcher = rest[0];
+		handler = rest[rest.length - 1] as BashHandler;
+	}) as unknown as On, options());
+	track(ROOT);
+	const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
+	let draws = 0;
+	const $ = {
+		env: { get: async () => key },
+		process: { run: git.run },
+		ui: { invalidate: () => void (draws += 1), log: () => undefined },
+		session: { surfaces: async () => ['terminal'] },
+	};
+	const bash = async (command: string, answer: BashAnswer = {}) => {
+		if (handler === undefined) throw new Error('no Bash hook');
+		const r = await handler($, { tool: 'Bash', tool_use_id: 'u', command }, async () => answer);
+		for (let i = 0; i < 50; i++) await Promise.resolve();
+		return r;
+	};
+	const revParses = () => git.calls.filter((c) => c.argv.includes('rev-parse')).length;
+	return { matcher, bash, git, revParses, draws: () => draws };
+}
+
+describe('the Bash git observer', () => {
+	test('matches only the Bash tool', () => {
+		expect(bashHook().matcher).toEqual({ tool: /^Bash$/ });
+	});
+
+	test('a git command that moves HEAD compares the checkout again', async () => {
+		for (const command of ['git pull', 'cd x && git -C . commit -m y', 'git checkout main', 'git merge topic', 'git rebase main']) {
+			const hook = bashHook();
+			await observeEnvelope({ success: true, asOfCommit: OLD }, ROOT, hook.git.run, () => undefined);
+			const before = hook.revParses();
+			await hook.bash(command);
+			expect(hook.revParses()).toBe(before + 1);
+		}
+	});
+
+	test('other commands, a denied or errored call, and an unset key compare nothing', async () => {
+		const cases: [string | undefined, string, BashAnswer][] = [
+			[undefined, 'ls', {}],
+			[undefined, 'echo git; commit', {}],
+			[undefined, 'git status', {}],
+			[undefined, 'git pull', { deny: 'no' }],
+			[undefined, 'git pull', { isError: true, text: 'fatal' }],
+			['sk:other', 'git pull', {}],
+		];
+		for (const [key, command, answer] of cases) {
+			const hook = bashHook(key);
+			await observeEnvelope({ success: true, asOfCommit: OLD }, ROOT, hook.git.run, () => undefined);
+			const before = hook.revParses();
+			await hook.bash(command, answer);
+			expect(hook.revParses()).toBe(before);
+		}
+	});
+
+	test('the result goes back unchanged', async () => {
+		const answer = { text: 'Already up to date.' };
+		expect(await bashHook().bash('git pull', answer)).toBe(answer);
+	});
+});
