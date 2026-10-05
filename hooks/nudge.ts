@@ -1,5 +1,5 @@
 import type { On } from 'claude-code';
-import { dayKey, noteSearch, persist } from './adoption';
+import { dayKey, noteSearch, persist, showsAdoption } from './adoption';
 import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
@@ -50,6 +50,7 @@ export function registerNudges(on: On): void {
 			} catch {
 				// The session count stands without the stored one; the search's answer goes back untouched.
 			}
+			if (showsAdoption()) $.ui.invalidate('ui.render');
 		}
 		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
 		if (!symbolLike || usedCodeIntelThisTurn(e) || !hasNudgeLeft(e)) return r;

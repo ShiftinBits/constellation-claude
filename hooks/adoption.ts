@@ -1,3 +1,4 @@
+import type { On, PluginOptions } from 'claude-code';
 import { isRecord, num } from './lib';
 
 /** How often code_intel was called, how long those calls took, and how many text searches ran beside them. */
@@ -30,6 +31,9 @@ const DATED_KEY = /^adoption:(\d{4}-\d{2}-\d{2}):/;
 /** How many days, today included, the stored counts are kept and summed. */
 const KEPT_DAYS = 30;
 
+/** The brand mark that leads the spinner's counts. */
+const MARK = '✦';
+
 function zero(): Counts {
 	return { codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 };
 }
@@ -44,6 +48,9 @@ function add(into: Counts, counts: Counts): void {
 
 /** This session's totals. Module state only: a reload of the hooks module starts them over. */
 let session = empty();
+
+/** Whether the spinner shows the session's counts: the `showAdoption` option, read when the hooks register. */
+let shown = false;
 
 /**
  * This session's stored entry per day key, as a promise so that calls arriving
@@ -88,6 +95,85 @@ export function total(buckets: Buckets): Counts {
 export function ratio(counts: Counts): number | undefined {
 	const lookups = counts.codeIntel + counts.symbol;
 	return lookups === 0 ? undefined : counts.codeIntel / lookups;
+}
+
+/**
+ * What the spinner adds before its own suffix: the session's code_intel calls
+ * and symbol-like text searches, main conversation and subagents together.
+ * Empty while both are 0.
+ */
+export function suffixText(): string {
+	const { codeIntel, symbol } = total(session);
+	return codeIntel === 0 && symbol === 0 ? '' : ` · ${MARK} ${codeIntel} code_intel / ${symbol} grep`;
+}
+
+/** True when the spinner shows the counts, so a new count asks for a redraw. */
+export function showsAdoption(): boolean {
+	return shown;
+}
+
+/** Thousands separators for a count, as `3,079`. */
+function grouped(n: number): string {
+	return n.toLocaleString('en-US');
+}
+
+function calls(n: number): string {
+	return `${grouped(n)} code_intel call${n === 1 ? '' : 's'}`;
+}
+
+function searches(n: number, what: string): string {
+	return `${grouped(n)} ${what} search${n === 1 ? '' : 'es'}`;
+}
+
+/** Milliseconds under a second, else seconds to one decimal, as `1.2 s`. */
+function duration(ms: number): string {
+	return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+}
+
+/** What the percentage in a row of figures is. */
+export const SHARE_LABEL = 'structural lookups';
+export const SHARE_NOTE = 'Structural lookups: code_intel calls out of code_intel calls plus symbol-like text searches. Literal searches are left out.';
+/** Said in place of the stored rows when the store cannot be read. */
+export const UNREAD_NOTE = 'The stored history could not be read.';
+
+/** One row's counts in words: the calls with their summed time, both kinds of search, and the ratio as a percentage. */
+export type Figures = { calls: string; symbol: string; literal: string; share: string };
+
+export function figures(counts: Counts): Figures {
+	const share = ratio(counts);
+	return {
+		calls: `${calls(counts.codeIntel)} (${duration(counts.codeIntelMs)})`,
+		symbol: searches(counts.symbol, 'symbol-like'),
+		literal: searches(counts.literal, 'literal'),
+		share: share === undefined ? 'n/a' : `${Math.round(share * 100)}%`,
+	};
+}
+
+/** One row of the Stats tab: its name, its counts and, for the session, the main and subagent split. */
+export type StatRow = { label: string; counts: Counts; split?: string };
+
+/** The session row, then today and the last 30 days when the stored counts were read. */
+export function statRows(buckets: Buckets, stored: Stats | undefined): StatRow[] {
+	const part = (name: string, counts: Counts) => `${name}: ${calls(counts.codeIntel)}, ${searches(counts.symbol, 'symbol-like')}`;
+	return [
+		{ label: 'This session', counts: total(buckets), split: `${part('main', buckets.main)} · ${part('subagents', buckets.subagents)}` },
+		...(stored === undefined
+			? []
+			: [
+					{ label: 'Today', counts: stored.today },
+					{ label: 'Last 30 days', counts: stored.last30 },
+				]),
+	];
+}
+
+/** The same rows as plain lines, for the command's text reply. */
+export function statsLines(buckets: Buckets, stored: Stats | undefined): string[] {
+	const lines = statRows(buckets, stored).map((row) => {
+		const f = figures(row.counts);
+		const split = row.split === undefined ? '' : ` (${row.split})`;
+		return `${row.label}: ${f.calls} · ${f.symbol} · ${f.literal} · ${f.share} ${SHARE_LABEL}${split}`;
+	});
+	return stored === undefined ? [...lines, UNREAD_NOTE] : lines;
 }
 
 /** `YYYY-MM-DD` for a local year, month (from 0) and day; a day outside the month rolls over. */
@@ -195,4 +281,21 @@ export function resetAdoption(): void {
 /** Drops the day entries held in memory, as a reload of the hooks module does; the next count reads the store again. */
 export function forgetDays(): void {
 	days.clear();
+}
+
+/**
+ * Starts the counts over for this load and, with `showAdoption` on, puts the
+ * session's counts on the spinner, before the engine's own suffix. Unset reads
+ * as off. Counting never depends on the option.
+ */
+export function registerAdoption(on: On, options: PluginOptions): void {
+	resetAdoption();
+	forgetDays();
+	shown = options.showAdoption === true;
+	if (!shown) return;
+
+	on('ui.render', { component: 'Spinner' }, async (_$, e, next) => {
+		const text = suffixText();
+		return text === '' ? next(e) : next({ ...e, props: { ...e.props, suffix: text + e.props.suffix } });
+	});
 }

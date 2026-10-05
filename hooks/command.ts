@@ -1,4 +1,6 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
+import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, statRows, statsLines } from './adoption';
+import type { Stats } from './adoption';
 import { canDraw, codeIntel, isConfigured, isRecord, projectName } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
@@ -22,8 +24,10 @@ export const COMMAND = 'constellation';
 /** The id of the pane the command opens; the `requestId` its tree is drawn under. */
 const PANE = 'constellation';
 
-const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore'] as const;
+const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore', 'stats'] as const;
 export type Tab = (typeof TABS)[number];
+/** A tab that shows a code_intel query's answer. Stats shows counts kept on this machine and never queries. */
+type QueryTab = Exclude<Tab, 'stats'>;
 type Direction = 'dependencies' | 'dependents';
 
 const TAB_LABEL: Readonly<Record<Tab, string>> = {
@@ -32,6 +36,7 @@ const TAB_LABEL: Readonly<Record<Tab, string>> = {
 	deps: 'Deps',
 	unused: 'Unused',
 	explore: 'Explore',
+	stats: 'Stats',
 };
 
 /** One line under the tab row saying what the tab shows. */
@@ -41,6 +46,7 @@ const TAB_HINT: Readonly<Record<Tab, string>> = {
 	deps: 'What a file imports, or what imports it.',
 	unused: 'Exports nothing imports. Verify each one before deleting it.',
 	explore: 'Search the graph and drill into a symbol without a Claude turn.',
+	stats: 'How often Claude called code_intel, beside its text searches. Counted on this machine only.',
 };
 
 /** The column a labeled row's value starts in. */
@@ -264,6 +270,9 @@ export function summarize(tab: Tab, envelope: CodeIntelEnvelope, options: Summar
 			return fromItems(unusedItems(result));
 		case 'explore':
 			return fromItems(exploreItems(result, options.query));
+		case 'stats':
+			// No query, so no envelope to read: the tab draws its counts itself.
+			return fromItems([]);
 	}
 }
 
@@ -314,7 +323,7 @@ function unusedFilter(): { filterByKind?: string[] } {
 	return unusedKind === undefined ? {} : { filterByKind: [unusedKind] };
 }
 
-function codeFor(tab: Tab, direction: Direction, path: string): string {
+function codeFor(tab: QueryTab, direction: Direction, path: string): string {
 	switch (tab) {
 		case 'status':
 			return 'return await api.ping()';
@@ -342,9 +351,9 @@ let launchCwd: string | undefined;
  * and used only while the session is still in `from`.
  */
 let chosen: { from: string; root: string } | undefined;
-const cache = new Map<Tab, CodeIntelEnvelope>();
-const pending = new Set<Tab>();
-const generations = new Map<Tab, number>();
+const cache = new Map<QueryTab, CodeIntelEnvelope>();
+const pending = new Set<QueryTab>();
+const generations = new Map<QueryTab, number>();
 /** The picker's per-project `getCapabilities` envelopes, by project root. */
 const details = new Map<string, CodeIntelEnvelope>();
 const detailsPending = new Set<string>();
@@ -365,6 +374,9 @@ let section: Section = 'details';
 const drill = new Map<string, CodeIntelEnvelope>();
 const drillPending = new Set<string>();
 let exploreNote: string | undefined;
+/** The Stats tab's stored counts: unset until the tab shows, then being read, read, or not readable. Cleared by `drop('stats')`. */
+let history: Stats | 'reading' | 'unreadable' | undefined;
+let historyRead = 0;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
 function pickKey(from: string): string {
@@ -372,6 +384,11 @@ function pickKey(from: string): string {
 }
 
 function drop(tab: Tab): void {
+	if (tab === 'stats') {
+		history = undefined;
+		historyRead += 1;
+		return;
+	}
 	cache.delete(tab);
 	pending.delete(tab);
 	generations.set(tab, (generations.get(tab) ?? 0) + 1);
@@ -414,7 +431,7 @@ function target(cwd: string): string {
  * tab was dropped (refresh, a new path, the pane closing) is discarded. The
  * redraw is asked for once the envelope is cached.
  */
-async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
+async function runQuery($: EngineInterface, tab: QueryTab): Promise<void> {
 	const generation = generations.get(tab) ?? 0;
 	pending.add(tab);
 	let envelope: CodeIntelEnvelope;
@@ -432,6 +449,25 @@ async function runQuery($: EngineInterface, tab: Tab): Promise<void> {
 	pending.delete(tab);
 	cache.set(tab, envelope);
 	if (tab === 'unused' && envelope.success) nextOffset = orphanPage(envelope.result).nextOffset;
+	$.ui.invalidate('ui.render');
+}
+
+/**
+ * Reads the stored counts for the Stats tab and deletes the entries past their
+ * 30 days; a read that lands after the tab was dropped is discarded. With no
+ * store the tab still draws the session's row.
+ */
+async function readHistory($: EngineInterface): Promise<void> {
+	const read = (historyRead += 1);
+	history = 'reading';
+	let stored: Stats | 'unreadable';
+	try {
+		stored = await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k));
+	} catch {
+		stored = 'unreadable';
+	}
+	if (historyRead !== read) return;
+	history = stored;
 	$.ui.invalidate('ui.render');
 }
 
@@ -583,8 +619,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		try {
 			await $.command.register({
 				name: COMMAND,
-				description: 'Constellation status, diagnose, deps, unused code and symbol explorer',
-				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]]',
+				description: 'Constellation status, diagnose, deps, unused code, symbol explorer and code_intel usage stats',
+				argumentHint: '[status|diagnose|deps <file>|unused [kind]|explore [query]|stats]',
 				immediate: true,
 			});
 		} catch {
@@ -610,6 +646,16 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		if (!canDraw(await $.session.surfaces())) {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
 			if (tab === 'explore' && query === undefined) return { text: 'Usage: /constellation explore <symbol>' };
+			if (tab === 'stats') {
+				let stored: Stats | undefined;
+				try {
+					stored = await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k));
+				} catch {
+					// No store: the session's counts still answer.
+					stored = undefined;
+				}
+				return { text: [`${PROMPT} ${tab}`, ...statsLines(sessionCounts(), stored).map((l) => `- ${l}`)].join('\n') };
+			}
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 				codeFor(tab, 'dependencies', path ?? ''),
@@ -641,11 +687,13 @@ export function registerCommand(on: On, options: PluginOptions): void {
 	on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
 		if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e);
 		const el = $.ui.resolve(e);
-		const envelope = cache.get(selected);
+		const envelope = selected === 'stats' ? undefined : cache.get(selected);
 		const needsPath = selected === 'deps' && depsPath === '';
 		const needsQuery = selected === 'explore' && exploreQuery === '';
-		if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
-		const isPending = pending.has(selected);
+		if (selected === 'stats') {
+			if (history === undefined) void readHistory($);
+		} else if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
+		const isPending = selected !== 'stats' && pending.has(selected);
 
 		const redraw = (): void => $.ui.invalidate('ui.render');
 		// In a row that may be wider than the pane, the name and kind keep their width and a long location
@@ -793,6 +841,45 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				}
 				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
 			}
+		} else if (selected === 'stats') {
+			const cosmic = paint(palette.cosmic, tint);
+			const solar = paint(palette.solar, tint);
+			for (const row of statRows(sessionCounts(), typeof history === 'object' ? history : undefined)) {
+				const f = figures(row.counts);
+				body.push(
+					el.Box({
+						key: `stats:${row.label}`,
+						flexDirection: 'row',
+						children: [
+							el.Text({ dimColor: true, children: row.label.padEnd(LABEL_WIDTH) }),
+							el.Box({
+								flexDirection: 'column',
+								children: [
+									el.Box({
+										flexDirection: 'row',
+										columnGap: 2,
+										flexWrap: 'wrap',
+										children: [
+											el.Text({ ...(cosmic === undefined ? {} : { color: cosmic }), children: f.calls }),
+											el.Text({ ...(solar === undefined ? {} : { color: solar }), children: f.symbol }),
+											el.Text({ dimColor: true, children: f.literal }),
+											el.Box({
+												flexDirection: 'row',
+												columnGap: 1,
+												children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
+											}),
+										],
+									}),
+									...(row.split === undefined ? [] : [el.Text({ dimColor: true, children: row.split })]),
+								],
+							}),
+						],
+					}),
+				);
+			}
+			if (history === 'unreadable') body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
+			else if (typeof history !== 'object') body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			body.push(el.Text({ dimColor: true, children: SHARE_NOTE }));
 		} else if (selected === 'explore' && summary !== undefined && summary.explanation === undefined) {
 			const labeled = (label: string, value: string): RenderElement =>
 				el.Box({ flexDirection: 'row', children: [el.Text({ dimColor: true, children: label.padEnd(LABEL_WIDTH) }), el.Text({ children: value })] });
@@ -1033,8 +1120,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
 			: selected === 'explore'
-					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
-					: `1-5 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
+					? `${hit === undefined ? 'esc leaves the search field' : 'b back'} · 1-6 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`
+					: `1-6 switch tabs · r refresh${canSwitch ? ' · p switch project' : ''} · esc close`;
 
 		return el.Box({
 			flexDirection: 'column',

@@ -1,5 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
+import { registerAdoption, sessionCounts, total } from './adoption';
 import { registerBudget } from './budget';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
@@ -87,6 +88,7 @@ function load(options: PluginOptions) {
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
+	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
@@ -344,6 +346,22 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
 		expect(invalidations).toBe(0);
 		expect(await m.band()).toBe('');
+	});
+
+	test('a SessionStart clear starts the adoption session counts over', async () => {
+		const m = load({});
+		await m.search();
+		await m.search('agent-1');
+		expect(total(sessionCounts()).symbol).toBe(2);
+		await m.sessionStart('clear');
+		expect(total(sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
+	});
+
+	test('a subagent run ending keeps its adoption counts', async () => {
+		const m = load({});
+		await m.search('agent-1');
+		await m.runEnds('agent-1');
+		expect(sessionCounts().subagents.symbol).toBe(1);
 	});
 
 	test('a SessionStart reset clears subagent budgets too', async () => {

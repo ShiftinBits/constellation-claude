@@ -1,6 +1,8 @@
-import type { McpToolResult, On, PaneOpenArgs, RenderSurface } from 'claude-code';
+import type { McpToolResult, On, PaneOpenArgs, RenderSurface, ToolCallArgs } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
+import { dayKey } from './adoption';
+import type { Buckets } from './adoption';
 import { COMMAND, parseArgs, summarize } from './command';
 import type { Tab } from './command';
 import { searchCode } from './explore';
@@ -70,6 +72,24 @@ const UNUSED_MORE = {
 };
 
 /** A code_intel response whose envelope carries `result` and the graph's as-of metadata. */
+/** Local noon, so the local date is the same in every time zone. */
+const NOON = new Date(2026, 9, 5, 12).getTime();
+/** Local noon `days` days before `NOON`. */
+const daysBack = (days: number) => new Date(2026, 9, 5 - days, 12).getTime();
+
+/** A stored day entry of `codeIntel` calls taking `codeIntelMs` in all, and `symbol` and `literal` searches, all by the main conversation. */
+function entry(codeIntel: number, codeIntelMs: number, symbol: number, literal: number): Buckets {
+	return { main: { codeIntel, codeIntelMs, symbol, literal }, subagents: { codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 } };
+}
+
+/** Two other sessions' counts for today, one from 29 days ago and one from 31 days ago, past the 30 kept. */
+const HISTORY: [string, unknown][] = [
+	[dayKey(NOON, 'session-a'), entry(3, 1200, 0, 1)],
+	[dayKey(NOON, 'session-b'), entry(1, 300, 1, 0)],
+	[dayKey(daysBack(29), 'session-a'), entry(4, 2500, 4, 2)],
+	[dayKey(daysBack(31), 'session-a'), entry(100, 100, 100, 100)],
+];
+
 function success(result: unknown): McpToolResult {
 	const body = { success: true, result, asOfCommit: COMMIT, lastIndexedAt: INDEXED_AT };
 	return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
@@ -96,7 +116,7 @@ type World = {
 	theme?: string;
 	answer?: (code: string, cwd: string) => McpToolResult | Promise<McpToolResult>;
 	/** Makes the hook that answers this event throw. */
-	throws?: 'session.cwd' | 'config.list';
+	throws?: 'session.cwd' | 'config.list' | 'store.keys';
 	/** What `$.store` already holds, as from an earlier session. */
 	saved?: [string, unknown][];
 };
@@ -149,6 +169,12 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 		store.delete(e.key);
 		return { value: undefined };
 	});
+	on('store.keys', () => {
+		if (throws === 'store.keys') throw new Error('no store');
+		return { value: [...store.keys()] };
+	});
+	on('clock.now', () => ({ value: NOON }));
+	on('session.id', () => ({ value: 'session-1' }));
 	return { codes, cwds, events, opens, store, turns: () => turns, armed };
 }
 
@@ -210,6 +236,11 @@ describe('parseArgs', () => {
 	test('explore takes the rest as the query', () => {
 		expect(parseArgs('explore')).toEqual({ tab: 'explore' });
 		expect(parseArgs('explore Graph Service')).toEqual({ tab: 'explore', query: 'Graph Service' });
+	});
+
+	test('stats selects the stats tab and takes nothing more', () => {
+		expect(parseArgs('stats')).toEqual({ tab: 'stats' });
+		expect(parseArgs('Stats last week')).toEqual({ tab: 'stats' });
 	});
 
 	test('deps takes an optional file path', () => {
@@ -396,7 +427,7 @@ describe('the pane', () => {
 			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
 			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
-			expect(await ui.find({ type: 'Text', text: /1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /✓ ok/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
@@ -470,7 +501,7 @@ describe('the pane', () => {
 				world(on, { surfaces: [surface] });
 				const ui = await openUnused($, surface);
 				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle$/ })).toBeDefined();
-				expect(await ui.find({ type: 'Text', text: /^1-5 switch tabs · r refresh · esc close$/ })).toBeDefined();
+				expect(await ui.find({ type: 'Text', text: /^1-6 switch tabs · r refresh · esc close$/ })).toBeDefined();
 				await ui.press({ key: 'orphan:a' });
 				await settle();
 				expect(await ui.find({ type: 'Text', text: /^tab\/shift\+tab move · enter toggle · h hand off$/ })).toBeDefined();
@@ -825,7 +856,7 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		const hotkeys = Object.fromEntries((await ui.findAll({ type: 'Button' })).map((b) => [b.key, b.props['hotkey']]));
-		expect(hotkeys).toMatchObject({ 'tab-status': '1', 'tab-diagnose': '2', 'tab-deps': '3', 'tab-unused': '4', refresh: 'r' });
+		expect(hotkeys).toMatchObject({ 'tab-status': '1', 'tab-diagnose': '2', 'tab-deps': '3', 'tab-unused': '4', 'tab-explore': '5', 'tab-stats': '6', refresh: 'r' });
 		expect(hotkeys['close']).toBeUndefined();
 	});
 
@@ -1131,7 +1162,7 @@ describe('the symbol explorer', () => {
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toMatchObject({ props: { value: 'Graph' } });
 			const keys = (await ui.findAll({ type: 'Button' })).map((b) => b.key).filter((k) => k?.startsWith('hit:'));
 			expect(keys).toEqual(['hit:s2', 'hit:s1', 'hit:s3', 'hit:s4']);
-			expect(await ui.find({ type: 'Text', text: /esc leaves the search field · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /esc leaves the search field · 1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456/ })).toBeDefined();
 		});
 
@@ -1146,7 +1177,7 @@ describe('the symbol explorer', () => {
 			expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
 			expect(await reads(ui, /^Exported: yes$/)).toBe(true);
 			expect(await reads(ui, /results for Graph/)).toBe(true);
-			expect(await ui.find({ type: 'Text', text: /b back · 1-5 switch tabs · r refresh · esc close/ })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: /b back · 1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
 		});
 
 		test(`a long location shortens in the middle instead of wrapping the name and kind on ${surface}`, async ($, on) => {
@@ -1287,6 +1318,138 @@ describe('the symbol explorer', () => {
 		await focus(ui);
 		expect(await ui.find({ type: 'Text', text: /\bAPI_UNREACHABLE\b/ })).toBeDefined();
 		expect(await ui.find({ key: 'section-details' })).toBeDefined();
+	});
+});
+
+describe('the stats tab', () => {
+	/** A symbol search and a literal one by the main conversation and a symbol search by a subagent, counted by the loaded plugin. */
+	async function searchThrice($: Engine, on: On): Promise<void> {
+		mock.env(on, {});
+		on('tool.call', () => ({ result: '' }));
+		for (const [pattern, agentId] of [['AuthService'], ['connection refused'], ['UserService', 'agent-1']] as const) {
+			await $.tool.call({ tool: 'Grep', pattern, tool_use_id: `u-${pattern}`, agentId } as unknown as ToolCallArgs);
+		}
+	}
+
+	const SESSION_ROW =
+		'0 code_intel calls (0 ms) · 2 symbol-like searches · 1 literal search · 0% structural lookups (main: 0 code_intel calls, 1 symbol-like search · subagents: 0 code_intel calls, 1 symbol-like search)';
+
+	for (const surface of SURFACES) {
+		test(`draws the session, today and the last 30 days from the store, and sends no query, on ${surface}`, async ($, on) => {
+			const { codes, store } = world(on, { saved: HISTORY });
+			await searchThrice($, on);
+			await run($, 'stats');
+			const ui = await mountPane($, surface);
+			await settle();
+
+			expect((await ui.findAll({ type: 'Button' })).map((b) => String(b.props['label']))).toContain('▸ Stats');
+			const row = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
+			expect(await row('This session')).toContain('0 code_intel calls (0 ms)');
+			expect(await row('This session')).toContain('2 symbol-like searches');
+			expect(await row('This session')).toContain('main: 0 code_intel calls, 1 symbol-like search · subagents: 0 code_intel calls, 1 symbol-like search');
+			// Today: the two other sessions' entries and this session's own three searches.
+			expect(await row('Today')).toContain('4 code_intel calls (1.5 s)');
+			expect(await row('Today')).toContain('3 symbol-like searches');
+			expect(await row('Today')).toContain('2 literal searches');
+			expect(await row('Today')).toContain('57%');
+			expect(await row('Last 30 days')).toContain('8 code_intel calls (4.0 s)');
+			expect(await row('Last 30 days')).toContain('7 symbol-like searches');
+			expect(await row('Last 30 days')).toContain('4 literal searches');
+			expect(await row('Last 30 days')).toContain('53%');
+			expect(await reads(ui, /^Structural lookups: code_intel calls out of/)).toBe(true);
+			expect(await reads(ui, /^1-6 switch tabs · r refresh · esc close$/)).toBe(true);
+			expect(store.has(dayKey(daysBack(31), 'session-a'))).toBe(false);
+			expect(store.has(dayKey(daysBack(29), 'session-a'))).toBe(true);
+			expect(codes).toEqual([]);
+		});
+	}
+
+	test('each figure carries its word, and color only under a color scheme', async ($, on) => {
+		world(on, { saved: HISTORY });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect((await exact(ui, '4 code_intel calls (1.5 s)'))?.props['color']).toBe(palette.cosmic);
+		expect((await exact(ui, '1 symbol-like search'))?.props['color']).toBe(palette.solar);
+		expect((await exact(ui, '1 literal search'))?.props['dimColor']).toBe(true);
+		expect((await exact(ui, '80%'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'n/a'))?.props['bold']).toBe(true);
+	});
+
+	test('the colors option set to none keeps the words and draws no color', { options: { colors: 'none' } }, async ($, on) => {
+		world(on, { saved: HISTORY });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
+		expect((await ui.findAll({ type: 'Text' })).filter((t) => t.props['color'] !== undefined)).toEqual([]);
+	});
+
+	test('refresh reads the store again and still sends no query', async ($, on) => {
+		const { codes, store } = world(on, { saved: HISTORY });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
+		store.set(dayKey(NOON, 'session-c'), entry(6, 500, 0, 0));
+		await ui.press({ key: 'refresh' });
+		await settle();
+		expect(await exact(ui, '10 code_intel calls (2.0 s)')).toBeDefined();
+		expect(codes).toEqual([]);
+	});
+
+	test('switching to the tab from another reads the store then, with the digit 6', async ($, on) => {
+		const { codes } = world(on, { saved: HISTORY });
+		await run($);
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect((await ui.find({ type: 'Button', key: 'tab-stats' }))?.props['hotkey']).toBe('6');
+		await ui.press({ key: 'tab-stats' });
+		await settle();
+		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
+		expect(codes).toHaveLength(1);
+	});
+
+	test('a store that cannot be read still draws the session row and says so', async ($, on) => {
+		const { codes } = world(on, { saved: HISTORY, throws: 'store.keys' });
+		await searchThrice($, on);
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await exact(ui, '2 symbol-like searches')).toBeDefined();
+		expect(await exact(ui, 'The stored history could not be read.')).toBeDefined();
+		expect(await ui.find({ key: 'stats:Today' })).toBeUndefined();
+		expect(codes).toEqual([]);
+	});
+
+	test('draws in a folder that is not a project, where every other tab asks for one', async ($, on) => {
+		const { codes } = world(on, { saved: HISTORY, answer: () => failure('CWD_NOT_INDEXED', 'Not a project') });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
+		expect(codes).toEqual([]);
+	});
+
+	test('without a pane it answers with the same figures as text and sends no query', async ($, on) => {
+		const { codes, events, store } = world(on, { surfaces: ['vscode'], saved: HISTORY });
+		await searchThrice($, on);
+		const r = await run($, 'stats');
+		expect(r.text?.split('\n')).toEqual([
+			'>_CONSTELLATION:// stats',
+			`- This session: ${SESSION_ROW}`,
+			'- Today: 4 code_intel calls (1.5 s) · 3 symbol-like searches · 2 literal searches · 57% structural lookups',
+			'- Last 30 days: 8 code_intel calls (4.0 s) · 7 symbol-like searches · 4 literal searches · 53% structural lookups',
+		]);
+		expect(store.has(dayKey(daysBack(31), 'session-a'))).toBe(false);
+		expect(codes).toEqual([]);
+		expect(events).toEqual([]);
+	});
+
+	test('without a pane or a store it answers with the session row and says the history could not be read', async ($, on) => {
+		world(on, { surfaces: ['vscode'], throws: 'store.keys' });
+		const r = await run($, 'stats');
+		expect(r.text?.split('\n').slice(2)).toEqual(['- The stored history could not be read.']);
 	});
 });
 

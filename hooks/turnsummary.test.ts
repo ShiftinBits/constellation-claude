@@ -1,5 +1,6 @@
 import type { McpToolResult, On, PluginOptions, ToolCallArgs } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
+import { registerAdoption } from './adoption';
 import { probe } from './blast';
 import { registerBudget, usedCodeIntelThisTurn } from './budget';
 import { collectEvidence, hasEvidence } from './risk';
@@ -80,6 +81,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
+	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 	registerTurnSummary(capture as unknown as On, options);

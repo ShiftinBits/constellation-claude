@@ -1,17 +1,22 @@
-import type { On } from 'claude-code';
+import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
 import {
 	type Buckets,
 	type Counts,
 	dayKey,
+	figures,
 	forgetDays,
 	loadStats,
 	noteCodeIntelCall,
 	noteSearch,
 	persist,
 	ratio,
+	registerAdoption,
 	resetAdoption,
 	sessionCounts,
+	statRows,
+	statsLines,
+	suffixText,
 	total,
 } from './adoption';
 import { registerBudget } from './budget';
@@ -26,7 +31,7 @@ const NOON = new Date(2026, 9, 5, 12).getTime();
 /** Local noon `days` days before `NOON`. */
 const daysBack = (days: number) => new Date(2026, 9, 5 - days, 12).getTime();
 
-type Answer = { context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true };
+type Answer = { context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true; props?: unknown };
 type Bottom = (e: object) => Promise<Answer>;
 /** Who raised the dispatch, as `next.origin` holds it. */
 type Origin = { plugin: string; tier: string };
@@ -75,27 +80,35 @@ const took = (time: number): Answer => ({ text: JSON.stringify({ success: true, 
 const AUTH_ERROR_TEXT = `Error: ${JSON.stringify({ success: false, error: { code: 'AUTH_ERROR', message: 'Invalid access key' } })}`;
 const AUTH_ERROR_CALL: Answer = { isError: true, result: AUTH_ERROR_TEXT, text: AUTH_ERROR_TEXT };
 
+/** The spinner's props as the engine draws them. */
+const SPINNER = { word: 'Sauteing', message: null, suffix: '…', mode: 'thinking' };
+
 /**
- * The budget and nudge handlers as one hooks module registers them, raised
- * directly over `store`, with the session totals and the day entries in memory
- * started over.
+ * The adoption, budget and nudge handlers as one hooks module registers them,
+ * raised directly over `store`, with the session totals and the day entries in
+ * memory started over.
  */
-function load(store: Store = fakeStore()) {
-	resetAdoption();
-	forgetDays();
+function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
-	registerBudget(capture as unknown as On, {});
+	registerAdoption(capture as unknown as On, options);
+	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 
+	let invalidations = 0;
 	const $ = {
 		env: { get: async () => KEY },
 		session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'], id: async () => 'session-1' },
-		ui: { invalidate: () => undefined, log: () => undefined },
+		ui: {
+			invalidate: () => {
+				invalidations += 1;
+			},
+			log: () => undefined,
+		},
 		store,
 		clock: { now: async () => NOON },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
@@ -116,9 +129,19 @@ function load(store: Store = fakeStore()) {
 		return step(0)(e);
 	};
 
+	const spinner = registered.find((r) => r.event === 'ui.render' && r.matcher.component === 'Spinner');
+
 	return {
 		store,
 		key: dayKey(NOON, 'session-1'),
+		invalidations: () => invalidations,
+		hasSpinnerHook: spinner !== undefined,
+		/** The spinner's props after the hook, over a bottom that answers with the props it was given. */
+		spinner: async () => {
+			const e = { component: 'Spinner', surface: 'terminal', props: SPINNER };
+			const bottom = Object.assign(async (input: object) => ({ props: Reflect.get(input, 'props') }), { origin: ENGINE });
+			return (await spinner?.handler($, e, bottom))?.props;
+		},
 		/** A code_intel call by `agentId` (the main conversation when absent), raised by `origin`, that answers `answer`. */
 		codeIntel: (answer: Answer, agentId?: string, origin = ENGINE) =>
 			raise({ tool: CODE_INTEL, tool_use_id: 'u', agentId }, answer, origin),
@@ -173,6 +196,116 @@ describe('adoption counting through the hooks', () => {
 		expect(await m.codeIntel(took(5))).toEqual(took(5));
 		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
 		expect(sessionCounts().main).toEqual(counts(1, 5, 0, 1));
+	});
+});
+
+describe('the spinner suffix', () => {
+	for (const options of [{}, { showAdoption: false }, { showAdoption: 'true' }] as PluginOptions[]) {
+		test(`showAdoption ${JSON.stringify(options.showAdoption)} registers no spinner hook and asks for no redraw`, async () => {
+			const m = load(fakeStore(), options);
+			await m.grep('AuthService');
+			await m.codeIntel(took(5));
+			expect(m.hasSpinnerHook).toBe(false);
+			expect(m.invalidations()).toBe(0);
+			expect(sessionCounts().main).toEqual(counts(1, 5, 1, 0));
+		});
+	}
+
+	test('with the option on, the counts go before the engine suffix and the other props stay', async () => {
+		const m = load(fakeStore(), { showAdoption: true });
+		await m.codeIntel(took(5));
+		await m.codeIntel(took(5), 'agent-1');
+		await m.grep('AuthService');
+		await m.grep('connection refused');
+		expect(await m.spinner()).toEqual({ ...SPINNER, suffix: ' · ✦ 2 code_intel / 1 grep…' });
+	});
+
+	test('with the option on and nothing counted, the props pass through untouched', async () => {
+		const m = load(fakeStore(), { showAdoption: true });
+		expect(m.hasSpinnerHook).toBe(true);
+		expect(await m.spinner()).toBe(SPINNER);
+	});
+
+	test('only literal searches leave the spinner as it was', async () => {
+		const m = load(fakeStore(), { showAdoption: true });
+		await m.grep('connection refused');
+		expect(suffixText()).toBe('');
+		expect(await m.spinner()).toBe(SPINNER);
+	});
+
+	test('with the option on, each count asks for a redraw and an uncounted call asks for none', async () => {
+		const m = load(fakeStore(), { showAdoption: true });
+		await m.grep('AuthService');
+		expect(m.invalidations()).toBe(1);
+		await m.codeIntel(took(5));
+		expect(m.invalidations()).toBe(2);
+		await m.bash('ls -la');
+		await m.grep('UserService', undefined, { deny: 'no' });
+		await m.codeIntel({ deny: 'no' });
+		await m.codeIntel(took(5), undefined, PLUGIN);
+		expect(m.invalidations()).toBe(2);
+	});
+
+	test('a store that fails still asks for the redraw', async () => {
+		const store = fakeStore();
+		store.set = async () => {
+			throw new Error('store full');
+		};
+		const m = load(store, { showAdoption: true });
+		await m.grep('AuthService');
+		expect(m.invalidations()).toBe(1);
+	});
+});
+
+describe('figures', () => {
+	test('words the calls with their time, both kinds of search and the percentage', () => {
+		expect(figures(counts(3, 1240, 1, 2))).toEqual({
+			calls: '3 code_intel calls (1.2 s)',
+			symbol: '1 symbol-like search',
+			literal: '2 literal searches',
+			share: '75%',
+		});
+		expect(figures(counts(1, 340, 0, 1))).toEqual({
+			calls: '1 code_intel call (340 ms)',
+			symbol: '0 symbol-like searches',
+			literal: '1 literal search',
+			share: '100%',
+		});
+	});
+
+	test('the percentage is n/a with no code_intel call and no symbol-like search', () => {
+		expect(figures(counts(0, 0, 0, 1204)).share).toBe('n/a');
+		expect(figures(counts(0, 0, 0, 1204)).literal).toBe('1,204 literal searches');
+	});
+});
+
+describe('statRows and statsLines', () => {
+	const session: Buckets = { main: counts(2, 30, 1, 0), subagents: counts(1, 10, 0, 4) };
+	const stored = { today: counts(5, 100, 5, 0), last30: counts(9, 2000, 1, 3) };
+
+	test('the session row sums main and subagents and names the split', () => {
+		expect(statRows(session, stored)).toEqual([
+			{
+				label: 'This session',
+				counts: counts(3, 40, 1, 4),
+				split: 'main: 2 code_intel calls, 1 symbol-like search · subagents: 1 code_intel call, 0 symbol-like searches',
+			},
+			{ label: 'Today', counts: stored.today },
+			{ label: 'Last 30 days', counts: stored.last30 },
+		]);
+	});
+
+	test('the lines carry the same figures in words', () => {
+		expect(statsLines(session, stored)).toEqual([
+			'This session: 3 code_intel calls (40 ms) · 1 symbol-like search · 4 literal searches · 75% structural lookups (main: 2 code_intel calls, 1 symbol-like search · subagents: 1 code_intel call, 0 symbol-like searches)',
+			'Today: 5 code_intel calls (100 ms) · 5 symbol-like searches · 0 literal searches · 50% structural lookups',
+			'Last 30 days: 9 code_intel calls (2.0 s) · 1 symbol-like search · 3 literal searches · 90% structural lookups',
+		]);
+	});
+
+	test('without the stored counts only the session row shows, and the lines say so', () => {
+		expect(statRows(session, undefined)).toHaveLength(1);
+		expect(statsLines(session, undefined)[1]).toBe('The stored history could not be read.');
 	});
 });
 

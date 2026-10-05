@@ -1,5 +1,5 @@
 import type { On, PluginOptions } from 'claude-code';
-import { dayKey, noteCodeIntelCall, persist } from './adoption';
+import { dayKey, noteCodeIntelCall, persist, showsAdoption } from './adoption';
 import { canDraw, isConfigured, parseToolText, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
@@ -115,6 +115,7 @@ export function registerBudget(on: On, options: PluginOptions): void {
 				} catch {
 					// The session count stands without the stored one; the agent's answer goes back untouched.
 				}
+				if (showsAdoption()) $.ui.invalidate('ui.render');
 			}
 		}
 		return r;

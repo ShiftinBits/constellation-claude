@@ -1,5 +1,6 @@
 import type { On } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
+import { registerAdoption } from './adoption';
 import { registerBudget } from './budget';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 
@@ -31,6 +32,7 @@ function searchCall(): Handler {
 	const capture = (pattern: string, ...rest: unknown[]) => {
 		if (pattern === 'tool.call') handler = rest[rest.length - 1] as Handler;
 	};
+	registerAdoption((() => {}) as unknown as On, {});
 	registerBudget((() => {}) as unknown as On, {});
 	registerNudges(capture as unknown as On);
 	if (!handler) throw new Error('no tool.call handler registered');
