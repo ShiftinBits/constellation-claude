@@ -57,7 +57,7 @@ hooks/                       In-process hooks module (no settings hooks, no node
 ├── toolrows.test.ts         Tests for toolrows.ts (claude plugin test)
 ├── explain.ts               Error layout for people: explain (headline, detail, notes, steps, docs, code), explainLines
 ├── explain.test.ts          Tests for explain.ts, from constellation-mcp's own error guidance
-├── onboarding.ts            Onboarding band: registerOnboarding, resetOnboarding, observeCodeIntel, onboardingState, band, readStoredKeyAtStart, checkConnection, usesDefaultApi, storedKey, cliPath, startSignIn, startIndex; ui.render on AbovePrompt, Button onPress handlers; imports only lib.ts and theme.ts
+├── onboarding.ts            Onboarding band: registerOnboarding, resetOnboarding, observeCodeIntel, onboardingState, band, readStoredKeyAtStart, pingProject, checkConnection, usesDefaultApi, storedKey, cliPath, startSignIn, startIndex; ui.render on AbovePrompt, Button onPress handlers; imports only lib.ts, theme.ts and freshness.ts
 ├── onboarding.test.ts       Tests for onboarding.ts (claude plugin test)
 ├── freshness.ts             Index freshness leaf module: freshnessView, freshnessText, freshnessBand, compareLocal, observeEnvelope, recheck, track, startTicks, registerFreshness, resetFreshness; tool.call on Bash; imports only lib.ts, theme.ts and explain.ts
 ├── freshness.test.ts        Tests for freshness.ts (claude plugin test)
