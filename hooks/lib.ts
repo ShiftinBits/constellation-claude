@@ -25,6 +25,8 @@ export type CodeIntelEnvelope = {
 	asOfCommit?: string;
 	lastIndexedAt?: string;
 	time?: number;
+	/** Why a result came back empty (`resultContext.reason`), such as `branch_not_indexed`. */
+	reason?: string;
 };
 
 const SERVER_KEY = 'constellation';
@@ -111,8 +113,18 @@ function failure(code: string, message: string): CodeIntelEnvelope {
 	return { success: false, error: { code, message } };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** `value` when it is a finite number, else undefined. */
+export function num(value: unknown): number | undefined {
+	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** The last segment of a string path, split on either slash, as a project's name. */
+export function projectName(path: unknown): string | undefined {
+	return typeof path === 'string' ? path.split(/[\\/]/).filter(Boolean).pop() : undefined;
 }
 
 function parseError(value: unknown): CodeIntelError | undefined {
@@ -149,6 +161,8 @@ export function parseEnvelope(text: string | undefined): CodeIntelEnvelope {
 	if (typeof body.asOfCommit === 'string') envelope.asOfCommit = body.asOfCommit;
 	if (typeof body.lastIndexedAt === 'string') envelope.lastIndexedAt = body.lastIndexedAt;
 	if (typeof body.time === 'number') envelope.time = body.time;
+	const reason = isRecord(body.resultContext) ? body.resultContext.reason : undefined;
+	if (typeof reason === 'string' && reason !== '') envelope.reason = reason;
 	return envelope;
 }
 

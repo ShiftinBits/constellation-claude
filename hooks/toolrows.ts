@@ -1,7 +1,7 @@
 import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 'claude-code';
 import { isTestFile } from './blast';
 import { explain } from './explain';
-import { type CodeIntelEnvelope, parseEnvelope, plural } from './lib';
+import { type CodeIntelEnvelope, isRecord, num, parseEnvelope, plural, projectName } from './lib';
 import { badge, forTheme, kind, palette, risk, type Scheme, scheme, status, type Tone } from './theme';
 
 /** The mark that opens a code_intel call row. */
@@ -16,42 +16,32 @@ const MAX_ROWS = 200;
 const MAX_NAMES = 3;
 
 /**
- * What a call row learned for its result row, by requestId (the tool_use_id):
- * the project from the call's `cwd` (a result row has no input) and the parsed
- * envelope, so a redraw does not parse it again. Plain data only.
+ * The project each call row named, by requestId (the tool_use_id), for its
+ * result row: a result row has no input to read the `cwd` from.
  */
-const rows = new Map<string, { project?: string; envelope?: CodeIntelEnvelope }>();
+const projects = new Map<string, string>();
 
-/** Forgets every row, for a new conversation. */
+/** Claude Code's theme and verbose settings, read once and again after either changes. */
+let settings: { theme: unknown; verbose: boolean } | undefined;
+
+/** Forgets every row and the settings read, for a new conversation. */
 export function resetToolRows(): void {
-	rows.clear();
+	projects.clear();
+	settings = undefined;
 }
 
-function remember(id: string, entry: { project?: string; envelope?: CodeIntelEnvelope }): void {
-	rows.set(id, { ...rows.get(id), ...entry });
-	if (rows.size > MAX_ROWS) {
-		const oldest = rows.keys().next().value;
-		if (oldest !== undefined) rows.delete(oldest);
+function remember(id: string, project: string): void {
+	projects.set(id, project);
+	if (projects.size > MAX_ROWS) {
+		const oldest = projects.keys().next().value;
+		if (oldest !== undefined) projects.delete(oldest);
 	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function num(value: unknown): number | undefined {
-	return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 /** The `api.*` methods `code` calls, each once, in order of first appearance. */
 export function methodsOf(code: string): string[] {
-	const names = [...code.matchAll(/api\.(\w+)\(/g)].map((m) => m[1]).filter((n): n is string => n !== undefined);
+	const names = [...code.matchAll(/\bapi\s*\??\.\s*(\w+)\s*\(/g)].map((m) => m[1]).filter((n): n is string => n !== undefined);
 	return [...new Set(names)];
-}
-
-/** The last segment of a string `cwd`, split on either slash, as a project's name. */
-export function projectName(cwd: unknown): string | undefined {
-	return typeof cwd === 'string' ? cwd.split(/[\\/]/).filter(Boolean).pop() : undefined;
 }
 
 function firstText(blocks: unknown[]): string | undefined {
@@ -98,11 +88,12 @@ function joined(parts: RenderNode[]): RenderNode[] {
 	return parts.flatMap((part, i) => (i === 0 ? [part] : [SEP, part]));
 }
 
-/** The children of a call row: the mark, the methods called and the project. */
-function callRow(el: ElementTable, methods: string[], project: string | undefined, to: Scheme): RenderNode[] {
+/** The children of a call row: the mark, the methods called, the project, and `running` until it ends. */
+function callRow(el: ElementTable, methods: string[], project: string | undefined, running: boolean, to: Scheme): RenderNode[] {
 	const parts: RenderNode[] = [badge(el, '', forTheme(mark, to))];
 	if (methods.length > 0) parts.push(methods.join(', '));
 	if (project) parts.push(dim(el, project));
+	if (running) parts.push(dim(el, 'running'));
 	return joined(parts);
 }
 
@@ -120,18 +111,28 @@ function shape(el: ElementTable, result: unknown, to: Scheme, project: string | 
 			if (typeof level === 'string') parts.push(badge(el, '', forTheme(risk(level), to)));
 			const direct = num(summary?.directDependentCount);
 			if (direct !== undefined) parts.push(counted(el, direct + (num(summary?.transitiveDependentCount) ?? 0), 'dependent'));
+			// ponytail: a zero test count is left out, since Core's impact analysis reports 0 even when tests depend on the symbol.
 			const tests = num(summary?.testFileCount);
-			if (tests !== undefined) parts.push(counted(el, tests, 'test file'));
+			if (tests !== undefined && tests > 0) parts.push(counted(el, tests, 'test file'));
 			return parts;
 		}
 		if (Array.isArray(result.directDependents) && typeof result.file === 'string') {
+			// The result is one page; the total is the server's. Test files are counted only when the page holds them all.
 			const dependents = result.directDependents;
+			const total = (isRecord(result.pagination) ? num(result.pagination.total) : undefined) ?? dependents.length;
+			const parts: RenderNode[] = [counted(el, total, 'dependent file')];
 			const tests = dependents.filter((d) => isRecord(d) && typeof d.filePath === 'string' && isTestFile(d.filePath)).length;
-			const parts: RenderNode[] = [counted(el, dependents.length, 'dependent file')];
-			if (tests > 0) parts.push(counted(el, tests, 'test file'));
+			if (tests > 0 && total === dependents.length) parts.push(counted(el, tests, 'test file'));
 			return parts;
 		}
-		if (Array.isArray(result.directDependencies)) return [counted(el, result.directDependencies.length, 'dependency file')];
+		if (Array.isArray(result.directDependencies)) {
+			const dependencies = result.directDependencies;
+			const files = dependencies.filter((d) => isRecord(d) && d.type === 'file').length;
+			const packages = dependencies.filter((d) => isRecord(d) && d.type === 'module').length;
+			const parts: RenderNode[] = [counted(el, files, 'dependency file')];
+			if (packages > 0) parts.push(counted(el, packages, 'package'));
+			return parts;
+		}
 		if (Array.isArray(result.symbols)) {
 			const symbols = result.symbols;
 			const total = (isRecord(result.pagination) ? num(result.pagination.total) : undefined) ?? symbols.length;
@@ -164,18 +165,20 @@ function shape(el: ElementTable, result: unknown, to: Scheme, project: string | 
 }
 
 /**
- * The children of a result row for `envelope`: an error's code as a badge and
- * the line for a person, or what the result holds; then how long the call took
- * and the commit the graph was indexed at.
+ * The children of a result row for `envelope`: an error's code as a badge, its
+ * headline and the first step to take, or what the result holds and why it is
+ * empty; then how long the call took and the commit the graph was indexed at.
  */
 export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Scheme, project?: string): RenderNode[] {
 	const { error } = envelope;
 	const parts: RenderNode[] = [];
 	if (!envelope.success && error !== undefined) {
 		const ex = explain(error);
-		parts.push(badge(el, '', forTheme({ ...status('error'), word: error.code }, to)), ex.steps[0] ?? ex.notes[0] ?? ex.title);
+		parts.push(badge(el, '', forTheme({ ...status('error'), word: error.code }, to)), ex.title);
+		if (ex.steps[0] !== undefined) parts.push(ex.steps[0]);
 	} else {
 		parts.push(...shape(el, envelope.result, to, project));
+		if (envelope.reason !== undefined) parts.push(dim(el, envelope.reason.replace(/_/g, ' ')));
 	}
 	const meta: string[] = [];
 	if (envelope.time !== undefined) meta.push(`${envelope.time} ms`);
@@ -188,47 +191,52 @@ export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Sch
  * The code_intel call and result rows in the transcript: the call row reads
  * `✦ code_intel · <methods> · <project>` and the result row one line about what
  * came back. With the `verbose` setting on, Claude Code's own row follows
- * under it. Every other tool, surface and unreadable error keeps its own row.
+ * under it. Every other tool and surface, an interrupted call, and a result
+ * with no envelope to read (one over the MCP output limit, say) or a failure
+ * without an error code keeps Claude Code's own row.
  */
 export function registerToolRows(on: On, options: PluginOptions): void {
+	on('config.set', { key: ['theme', 'verbose'] }, async ($, e, next) => {
+		const set = await next(e);
+		settings = undefined;
+		$.ui.invalidate('ui.render');
+		return set;
+	});
+
 	on('ui.render', { component: ['ToolUse', 'ToolResult'] }, async ($, e, next) => {
-		if (!/code_intel$/.test(e.props.tool)) return next(e);
+		if (!/__code_intel$/.test(e.props.tool)) return next(e);
 		if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e);
+		if (e.component === 'ToolUse' && e.props.isInterrupted) return next(e);
 		const el = $.ui.resolve(e);
 		let row: RenderElement | undefined;
 		let verbose = false;
 		try {
-			let theme: unknown;
-			try {
-				const config = await $.config.list();
-				theme = config.find((r) => r.key === 'theme')?.value;
-				verbose = config.find((r) => r.key === 'verbose')?.value === true;
-			} catch {
-				// The default colors and Claude Code's row hidden.
+			if (settings === undefined) {
+				try {
+					const config = await $.config.list();
+					settings = {
+						theme: config.find((r) => r.key === 'theme')?.value,
+						verbose: config.find((r) => r.key === 'verbose')?.value === true,
+					};
+				} catch {
+					// The default colors and Claude Code's row hidden, until a read succeeds.
+				}
 			}
-			const to = scheme(options.colors, theme);
+			verbose = settings?.verbose ?? false;
+			const to = scheme(options.colors, settings?.theme);
 			if (e.component === 'ToolUse') {
 				const input = e.props.input;
 				if (isRecord(input) && typeof input.code === 'string') {
 					const project = projectName(input.cwd);
-					remember(e.requestId, project === undefined ? {} : { project });
-					row = el.Text({ children: callRow(el, methodsOf(input.code), project, to) });
+					if (project !== undefined) remember(e.requestId, project);
+					row = el.Text({ children: callRow(el, methodsOf(input.code), project, e.props.isRunning, to) });
 				}
 			} else {
-				const known = rows.get(e.requestId);
-				let envelope = known?.envelope;
-				if (envelope === undefined) {
-					const text = outputText(e.props.output);
-					// An errored call's output is the text the model read: `Error: ` and then the envelope.
-					envelope = parseEnvelope(e.props.isErrored ? text?.replace(/^Error:\s*/, '') : text);
-					remember(e.requestId, { envelope });
-				}
-				const readable = envelope.error?.code !== 'INVALID_RESPONSE';
-				if (e.props.isErrored) {
-					if (readable && envelope.error !== undefined) row = el.Text({ children: summarize(el, envelope, to, known?.project) });
-				} else {
-					row = el.Text({ children: readable ? summarize(el, envelope, to, known?.project) : ['result: unreadable'] });
-				}
+				const text = outputText(e.props.output);
+				// An errored call's output is the text the model read: `Error: ` and then the envelope.
+				const envelope = parseEnvelope(e.props.isErrored ? text?.replace(/^Error:\s*/, '') : text);
+				const drawable = envelope.error === undefined ? envelope.success && !e.props.isErrored : envelope.error.code !== 'INVALID_RESPONSE';
+				if (drawable) row = el.Text({ children: summarize(el, envelope, to, projects.get(e.requestId)) });
 			}
 		} catch {
 			row = undefined;

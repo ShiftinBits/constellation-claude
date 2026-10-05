@@ -1,4 +1,4 @@
-import type { CodeIntelError } from './lib';
+import { type CodeIntelError, projectName } from './lib';
 
 /**
  * A code_intel error laid out for a person: a plain headline, one line of
@@ -103,11 +103,6 @@ export function explain(error: CodeIntelError): Explanation {
 	return { title, ...(detail === undefined ? {} : { detail }), notes, steps, ...(docs === undefined ? {} : { docs }), code: error.code, projects: [...(error.candidates ?? [])] };
 }
 
-/** The last segment of a path, as a project's name. */
-function base(path: string): string {
-	return path.replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? path;
-}
-
 /**
  * The explanation as plain text lines: the headline with the error glyph, the
  * detail and notes indented under it, then the steps (or, above several
@@ -118,9 +113,9 @@ export function explainLines(ex: Explanation): string[] {
 	if (ex.detail !== undefined) lines.push(`  ${ex.detail}`);
 	for (const n of ex.notes) lines.push(`  ${n}`);
 	if (ex.projects.length > 0) {
-		const width = Math.max(...ex.projects.map((p) => base(p).length));
+		const width = Math.max(...ex.projects.map((p) => (projectName(p) ?? p).length));
 		lines.push('', '  Run /constellation from one of these projects:');
-		for (const p of ex.projects) lines.push(`  ${base(p).padEnd(width)}  ${p}`);
+		for (const p of ex.projects) lines.push(`  ${(projectName(p) ?? p).padEnd(width)}  ${p}`);
 	} else if (ex.steps.length > 0) {
 		lines.push('', '  Next steps');
 		ex.steps.forEach((s, i) => lines.push(`  ${i + 1}. ${s}`));
