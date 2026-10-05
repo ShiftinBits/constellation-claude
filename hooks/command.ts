@@ -1,7 +1,7 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, statRows, statsLines } from './adoption';
-import type { Stats } from './adoption';
-import { canDraw, codeIntel, isConfigured, isRecord, projectName } from './lib';
+import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsLines } from './adoption';
+import type { Buckets, Stats } from './adoption';
+import { canDraw, codeIntel, isConfigured, isRecord, projectName, withinDeadline } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
@@ -256,7 +256,7 @@ function exploreItems(result: unknown, query: string | undefined): Item[] {
  * each field is narrowed against the executor schemas before it is read; on
  * error the code, message and guidance are returned.
  */
-export function summarize(tab: Tab, envelope: CodeIntelEnvelope, options: SummaryOptions = {}): Summary {
+export function summarize(tab: QueryTab, envelope: CodeIntelEnvelope, options: SummaryOptions = {}): Summary {
 	if (!envelope.success) return failure(envelope.error ?? { code: 'UNKNOWN', message: 'The request failed' });
 	const { result } = envelope;
 	switch (tab) {
@@ -270,9 +270,6 @@ export function summarize(tab: Tab, envelope: CodeIntelEnvelope, options: Summar
 			return fromItems(unusedItems(result));
 		case 'explore':
 			return fromItems(exploreItems(result, options.query));
-		case 'stats':
-			// No query, so no envelope to read: the tab draws its counts itself.
-			return fromItems([]);
 	}
 }
 
@@ -374,8 +371,12 @@ let section: Section = 'details';
 const drill = new Map<string, CodeIntelEnvelope>();
 const drillPending = new Set<string>();
 let exploreNote: string | undefined;
-/** The Stats tab's stored counts: unset until the tab shows, then being read, read, or not readable. Cleared by `drop('stats')`. */
-let history: Stats | 'reading' | 'unreadable' | undefined;
+/** How long a read of the stored counts waits for counts still being saved. */
+const SETTLE_MS = 1000;
+/** The session's counts and the stored ones, read together so the rows agree; `stored` is unset when the store cannot be read. */
+type Snapshot = { session: Buckets; stored: Stats | undefined };
+/** The Stats tab's counts: unset until the tab shows, then being read, then read. Cleared by `drop('stats')`. */
+let history: Snapshot | 'reading' | undefined;
 let historyRead = 0;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
@@ -453,21 +454,32 @@ async function runQuery($: EngineInterface, tab: QueryTab): Promise<void> {
 }
 
 /**
- * Reads the stored counts for the Stats tab and deletes the entries past their
- * 30 days; a read that lands after the tab was dropped is discarded. With no
- * store the tab still draws the session's row.
+ * The session's counts with the stored ones, deleting the entries past their 30
+ * days. Counts are saved in the background, so it first waits, for at most
+ * `SETTLE_MS`, for the saves still running: today's row is then never behind
+ * the session's. With no store only the session's counts come back.
  */
+async function readStats($: EngineInterface): Promise<Snapshot> {
+	try {
+		await withinDeadline((ms, o) => $.clock.sleep(ms, o), settled(), SETTLE_MS, new AbortController().signal);
+	} catch {
+		// No timer: the stored counts are read as they are.
+	}
+	const session = sessionCounts();
+	try {
+		return { session, stored: await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k)) };
+	} catch {
+		return { session, stored: undefined };
+	}
+}
+
+/** Reads the Stats tab's counts; a read that lands after the tab was dropped is discarded. */
 async function readHistory($: EngineInterface): Promise<void> {
 	const read = (historyRead += 1);
 	history = 'reading';
-	let stored: Stats | 'unreadable';
-	try {
-		stored = await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k));
-	} catch {
-		stored = 'unreadable';
-	}
+	const snapshot = await readStats($);
 	if (historyRead !== read) return;
-	history = stored;
+	history = snapshot;
 	$.ui.invalidate('ui.render');
 }
 
@@ -631,6 +643,11 @@ export function registerCommand(on: On, options: PluginOptions): void {
 
 	on('command.run', { command: COMMAND }, async ($, e) => {
 		const { tab, path, kind, query } = parseArgs(e.args);
+		const draws = canDraw(await $.session.surfaces());
+		if (tab === 'stats' && !draws) {
+			const { session, stored } = await readStats($);
+			return { text: [`${PROMPT} ${tab}`, ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
+		}
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
 			try {
@@ -643,19 +660,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const dir = target(cwd);
 		unusedKind = kind;
 		exploreQuery = query ?? '';
-		if (!canDraw(await $.session.surfaces())) {
+		if (!draws && tab !== 'stats') {
 			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
 			if (tab === 'explore' && query === undefined) return { text: 'Usage: /constellation explore <symbol>' };
-			if (tab === 'stats') {
-				let stored: Stats | undefined;
-				try {
-					stored = await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k));
-				} catch {
-					// No store: the session's counts still answer.
-					stored = undefined;
-				}
-				return { text: [`${PROMPT} ${tab}`, ...statsLines(sessionCounts(), stored).map((l) => `- ${l}`)].join('\n') };
-			}
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 				codeFor(tab, 'dependencies', path ?? ''),
@@ -730,7 +737,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				// A pick left in the store is offered again and can be switched again.
 			}
 		};
-		const summary = envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
+		const summary = selected === 'stats' || envelope === undefined ? undefined : summarize(selected, envelope, { direction: depsDirection, path: depsPath, project: projectName(sessionCwd), query: exploreQuery });
 
 		const body: RenderElement[] = [];
 		if (selected === 'deps') {
@@ -844,7 +851,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		} else if (selected === 'stats') {
 			const cosmic = paint(palette.cosmic, tint);
 			const solar = paint(palette.solar, tint);
-			for (const row of statRows(sessionCounts(), typeof history === 'object' ? history : undefined)) {
+			// Every row from one snapshot; while it is being read, the session's counts as they stand.
+			const snapshot = typeof history === 'object' ? history : undefined;
+			for (const row of statRows(snapshot?.session ?? sessionCounts(), snapshot?.stored)) {
 				const f = figures(row.counts);
 				body.push(
 					el.Box({
@@ -877,8 +886,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					}),
 				);
 			}
-			if (history === 'unreadable') body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
-			else if (typeof history !== 'object') body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			if (snapshot === undefined) body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			else if (snapshot.stored === undefined) body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
 			body.push(el.Text({ dimColor: true, children: SHARE_NOTE }));
 		} else if (selected === 'explore' && summary !== undefined && summary.explanation === undefined) {
 			const labeled = (label: string, value: string): RenderElement =>

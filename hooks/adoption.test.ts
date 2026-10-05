@@ -1,5 +1,6 @@
-import type { On, PluginOptions } from 'claude-code';
-import { describe, expect, test } from 'claude-code/testing';
+import type { On, PluginOptions, ToolCallArgs } from 'claude-code';
+import { describe, expect, mock, test } from 'claude-code/testing';
+import type { Engine } from 'claude-code/testing';
 import {
 	type Buckets,
 	type Counts,
@@ -14,6 +15,7 @@ import {
 	registerAdoption,
 	resetAdoption,
 	sessionCounts,
+	settled,
 	statRows,
 	statsLines,
 	suffixText,
@@ -27,9 +29,9 @@ const PROJECT = '/work/app';
 const CODE_INTEL = 'mcp__plugin_constellation_constellation__code_intel';
 
 /** Local noon, so the local date is the same in every time zone. */
-const NOON = new Date(2026, 9, 5, 12).getTime();
+const NOON = new Date(2025, 2, 14, 12).getTime();
 /** Local noon `days` days before `NOON`. */
-const daysBack = (days: number) => new Date(2026, 9, 5 - days, 12).getTime();
+const daysBack = (days: number) => new Date(2025, 2, 14 - days, 12).getTime();
 
 type Answer = { context?: string[]; deny?: string; result?: unknown; text?: string; isError?: true; props?: unknown };
 type Bottom = (e: object) => Promise<Answer>;
@@ -73,6 +75,11 @@ async function stored(store: Store, key: string): Promise<Buckets> {
 	return (await store.get(key)) as Buckets;
 }
 
+/** Lets what was started without being awaited run as far as it can. */
+async function ticks(): Promise<void> {
+	for (let i = 0; i < 50; i++) await Promise.resolve();
+}
+
 /** The answer of a code_intel call that took `time` milliseconds. */
 const took = (time: number): Answer => ({ text: JSON.stringify({ success: true, result: {}, time }) });
 
@@ -81,7 +88,7 @@ const AUTH_ERROR_TEXT = `Error: ${JSON.stringify({ success: false, error: { code
 const AUTH_ERROR_CALL: Answer = { isError: true, result: AUTH_ERROR_TEXT, text: AUTH_ERROR_TEXT };
 
 /** The spinner's props as the engine draws them. */
-const SPINNER = { word: 'Sauteing', message: null, suffix: '…', mode: 'thinking' };
+const SPINNER = { word: 'Sauteing', message: null, suffix: '…', mode: 'thinking' as const };
 
 /**
  * The adoption, budget and nudge handlers as one hooks module registers them,
@@ -100,9 +107,11 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 	registerNudges(capture as unknown as On);
 
 	let invalidations = 0;
+	/** What the session answers with; a test changes it between calls. */
+	const session: { key: string | undefined; cwd: string; now: number } = { key: KEY, cwd: PROJECT, now: NOON };
 	const $ = {
-		env: { get: async () => KEY },
-		session: { cwd: async () => PROJECT, surfaces: async () => ['terminal'], id: async () => 'session-1' },
+		env: { get: async () => session.key },
+		session: { cwd: async () => session.cwd, surfaces: async () => ['terminal'], id: async () => 'session-1' },
 		ui: {
 			invalidate: () => {
 				invalidations += 1;
@@ -110,7 +119,7 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 			log: () => undefined,
 		},
 		store,
-		clock: { now: async () => NOON },
+		clock: { now: async () => session.now },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
 	};
 
@@ -133,6 +142,7 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 
 	return {
 		store,
+		session,
 		key: dayKey(NOON, 'session-1'),
 		invalidations: () => invalidations,
 		hasSpinnerHook: spinner !== undefined,
@@ -145,8 +155,8 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 		/** A code_intel call by `agentId` (the main conversation when absent), raised by `origin`, that answers `answer`. */
 		codeIntel: (answer: Answer, agentId?: string, origin = ENGINE) =>
 			raise({ tool: CODE_INTEL, tool_use_id: 'u', agentId }, answer, origin),
-		grep: (pattern: string, agentId?: string, answer: Answer = {}) =>
-			raise({ tool: 'Grep', pattern, tool_use_id: 'u', agentId }, answer, ENGINE),
+		grep: (pattern: string, agentId?: string, answer: Answer = {}, origin = ENGINE) =>
+			raise({ tool: 'Grep', pattern, tool_use_id: 'u', agentId }, answer, origin),
 		bash: (command: string, agentId?: string) => raise({ tool: 'Bash', command, tool_use_id: 'u', agentId }, {}, ENGINE),
 	};
 }
@@ -164,6 +174,7 @@ describe('adoption counting through the hooks', () => {
 		await m.codeIntel(took(8), 'agent-1');
 		await m.grep('AuthService', 'agent-1');
 		await m.grep('TODO', 'agent-2');
+		await settled();
 
 		const session = sessionCounts();
 		expect(session).toEqual({ main: counts(1, 42, 2, 1), subagents: counts(1, 8, 1, 1) });
@@ -183,6 +194,7 @@ describe('adoption counting through the hooks', () => {
 	test('a refused code_intel call is not counted', async () => {
 		const m = load();
 		await m.codeIntel({ deny: 'no' });
+		await settled();
 		expect(sessionCounts().main).toEqual(NONE);
 		expect(m.store.data.size).toBe(0);
 	});
@@ -195,7 +207,96 @@ describe('adoption counting through the hooks', () => {
 		const m = load(store);
 		expect(await m.codeIntel(took(5))).toEqual(took(5));
 		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
+		await settled();
 		expect(sessionCounts().main).toEqual(counts(1, 5, 0, 1));
+	});
+
+	test('the answers come back without waiting for a store write that never settles', async () => {
+		const store = fakeStore();
+		store.set = () => new Promise<void>(() => {});
+		const m = load(store);
+		expect(await m.codeIntel(took(5))).toEqual(took(5));
+		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
+		expect(sessionCounts().main.codeIntel).toBe(1);
+		expect(store.data.size).toBe(0);
+	});
+
+	test('a search with no key is not counted', async () => {
+		const m = load();
+		m.session.key = undefined;
+		await m.grep('AuthService');
+		await m.grep('connection refused');
+		await m.bash('rg AuthService');
+		await settled();
+		expect(sessionCounts().main).toEqual(NONE);
+		expect(m.store.data.size).toBe(0);
+	});
+
+	test('a search outside an indexed project is not counted', async () => {
+		const m = load();
+		m.session.cwd = '/elsewhere';
+		await m.grep('AuthService');
+		await m.grep('connection refused');
+		await settled();
+		expect(sessionCounts().main).toEqual(NONE);
+		expect(m.store.data.size).toBe(0);
+	});
+
+	test('a search raised by a plugin is not counted', async () => {
+		const m = load();
+		await m.grep('AuthService', undefined, {}, PLUGIN);
+		await m.grep('connection refused', undefined, {}, PLUGIN);
+		await settled();
+		expect(sessionCounts().main).toEqual(NONE);
+		expect(m.store.data.size).toBe(0);
+	});
+
+	test('counts on either side of midnight are stored under two days', async () => {
+		const m = load();
+		await m.codeIntel(took(5));
+		await settled();
+		m.session.now = daysBack(-1);
+		await m.codeIntel(took(7));
+		await settled();
+		expect(await m.store.keys()).toEqual([dayKey(NOON, 'session-1'), dayKey(daysBack(-1), 'session-1')]);
+		expect((await stored(m.store, dayKey(daysBack(-1), 'session-1'))).main).toEqual(counts(1, 7, 0, 0));
+	});
+
+	test('the first count after a load deletes the entries past their 30 days, and later counts leave the store alone', async () => {
+		const store = fakeStore();
+		const [kept, expired, later] = [dayKey(daysBack(29), 'old'), dayKey(daysBack(30), 'old'), dayKey(daysBack(40), 'old')];
+		await store.set(kept, { main: NONE, subagents: NONE });
+		await store.set(expired, { main: NONE, subagents: NONE });
+		let listings = 0;
+		const keys = store.keys;
+		store.keys = async () => {
+			listings += 1;
+			return keys();
+		};
+		const m = load(store);
+		await m.codeIntel(took(5));
+		await settled();
+		expect(store.data.has(expired)).toBe(false);
+		expect(store.data.has(kept)).toBe(true);
+
+		await store.set(later, { main: NONE, subagents: NONE });
+		await m.grep('AuthService');
+		await m.codeIntel(took(5));
+		await settled();
+		expect(store.data.has(later)).toBe(true);
+		expect(listings).toBe(1);
+	});
+
+	test('a store that cannot delete its expired entries still saves the count', async () => {
+		const store = fakeStore();
+		await store.set(dayKey(daysBack(30), 'old'), { main: NONE, subagents: NONE });
+		store.delete = async () => {
+			throw new Error('read-only');
+		};
+		const m = load(store);
+		await m.codeIntel(took(5));
+		await settled();
+		expect((await stored(store, m.key)).main).toEqual(counts(1, 5, 0, 0));
 	});
 });
 
@@ -205,6 +306,7 @@ describe('the spinner suffix', () => {
 			const m = load(fakeStore(), options);
 			await m.grep('AuthService');
 			await m.codeIntel(took(5));
+			await settled();
 			expect(m.hasSpinnerHook).toBe(false);
 			expect(m.invalidations()).toBe(0);
 			expect(sessionCounts().main).toEqual(counts(1, 5, 1, 0));
@@ -217,6 +319,7 @@ describe('the spinner suffix', () => {
 		await m.codeIntel(took(5), 'agent-1');
 		await m.grep('AuthService');
 		await m.grep('connection refused');
+		await settled();
 		expect(await m.spinner()).toEqual({ ...SPINNER, suffix: ' · ✦ 2 code_intel / 1 grep…' });
 	});
 
@@ -229,20 +332,27 @@ describe('the spinner suffix', () => {
 	test('only literal searches leave the spinner as it was', async () => {
 		const m = load(fakeStore(), { showAdoption: true });
 		await m.grep('connection refused');
+		await settled();
+		expect(sessionCounts().main.literal).toBe(1);
 		expect(suffixText()).toBe('');
 		expect(await m.spinner()).toBe(SPINNER);
 	});
 
-	test('with the option on, each count asks for a redraw and an uncounted call asks for none', async () => {
+	test('with the option on, each count the spinner shows asks for a redraw, and a literal search or an uncounted call asks for none', async () => {
 		const m = load(fakeStore(), { showAdoption: true });
 		await m.grep('AuthService');
+		await settled();
 		expect(m.invalidations()).toBe(1);
 		await m.codeIntel(took(5));
+		await settled();
 		expect(m.invalidations()).toBe(2);
+		await m.grep('connection refused');
 		await m.bash('ls -la');
 		await m.grep('UserService', undefined, { deny: 'no' });
 		await m.codeIntel({ deny: 'no' });
 		await m.codeIntel(took(5), undefined, PLUGIN);
+		await settled();
+		expect(sessionCounts().main).toEqual(counts(1, 5, 1, 1));
 		expect(m.invalidations()).toBe(2);
 	});
 
@@ -253,7 +363,37 @@ describe('the spinner suffix', () => {
 		};
 		const m = load(store, { showAdoption: true });
 		await m.grep('AuthService');
+		await settled();
 		expect(m.invalidations()).toBe(1);
+	});
+});
+
+describe('the spinner suffix as a loaded plugin', () => {
+	/**
+	 * A Grep of a symbol by the agent, with a key, in a project: one counted
+	 * search. Then the suffix the spinner is drawn with, beneath the plugin.
+	 */
+	async function suffixAfterSearch($: Engine, on: On): Promise<string | undefined> {
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		mock.store(on);
+		mock.clock(on, { now: NOON });
+		on('session.cwd', () => ({ value: PROJECT }));
+		on('session.id', () => ({ value: 'session-1' }));
+		on('fs.exists', (_, e) => ({ value: e.path === `${PROJECT}/constellation.json` }));
+		on('tool.call', () => ({ result: '' }));
+		on('ui.render', { component: 'Spinner' }, ($, e) => $.ui.resolve(e).Text({ children: e.props.suffix }));
+		await $.tool.call({ tool: 'Grep', pattern: 'AuthService', tool_use_id: 'u1' } as unknown as ToolCallArgs);
+		await ticks();
+		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'Spinner', props: SPINNER });
+		return (await ui.find({ type: 'Text' }))?.text;
+	}
+
+	test('with showAdoption on, a counted search reaches the suffix', { options: { showAdoption: true, augmentGrep: false } }, async ($, on) => {
+		expect(await suffixAfterSearch($, on)).toBe(' · ✦ 0 code_intel / 1 grep…');
+	});
+
+	test('without the option the suffix stays as the engine drew it', { options: { augmentGrep: false } }, async ($, on) => {
+		expect(await suffixAfterSearch($, on)).toBe('…');
 	});
 });
 
@@ -320,8 +460,13 @@ describe('ratio', () => {
 });
 
 describe('dayKey', () => {
+	test('half past midnight and half past eleven at night are the same local day', () => {
+		expect(dayKey(new Date(2025, 2, 14, 0, 30).getTime(), 'abc')).toBe(dayKey(NOON, 'abc'));
+		expect(dayKey(new Date(2025, 2, 14, 23, 30).getTime(), 'abc')).toBe(dayKey(NOON, 'abc'));
+	});
+
 	test('names the local date and the session', () => {
-		expect(dayKey(NOON, 'abc')).toBe('adoption:2026-10-05:abc');
+		expect(dayKey(NOON, 'abc')).toBe('adoption:2025-03-14:abc');
 		expect(dayKey(new Date(2026, 0, 9, 12).getTime(), 'abc')).toBe('adoption:2026-01-09:abc');
 	});
 });
@@ -403,6 +548,54 @@ describe('stored day totals', () => {
 		expect((await stored(store, key)).main).toEqual(counts(3, 0, 0, 0));
 	});
 
+	test('a save waits for the one before it, so the last to land carries every count', async () => {
+		resetAdoption();
+		forgetDays();
+		const key = dayKey(NOON, 'session-a');
+		const landed: unknown[] = [];
+		let releaseFirst: () => void = () => {};
+		let saves = 0;
+		const set = (_key: string, entry: Buckets): Promise<void> => {
+			const copy: unknown = JSON.parse(JSON.stringify(entry));
+			if (saves++ > 0) {
+				landed.push(copy);
+				return Promise.resolve();
+			}
+			return new Promise<void>((resolve) => {
+				releaseFirst = () => {
+					landed.push(copy);
+					resolve();
+				};
+			});
+		};
+		const first = persist(noteCodeIntelCall(true, 10), key, async () => undefined, set);
+		await ticks();
+		const second = persist(noteSearch(true, true), key, async () => undefined, set);
+		await ticks();
+		expect(saves).toBe(1);
+		expect(landed).toEqual([]);
+
+		releaseFirst();
+		await Promise.all([first, second]);
+		expect(landed).toEqual([
+			{ main: counts(1, 10, 0, 0), subagents: NONE },
+			{ main: counts(1, 10, 1, 0), subagents: NONE },
+		]);
+	});
+
+	test('a save that fails does not hold back the next one', async () => {
+		resetAdoption();
+		forgetDays();
+		const store = fakeStore();
+		const key = dayKey(NOON, 'session-a');
+		const failing = async () => {
+			throw new Error('store full');
+		};
+		await expect(persist(noteCodeIntelCall(true, 10), key, store.get, failing)).rejects.toThrow('store full');
+		await persist(noteSearch(true, true), key, store.get, store.set);
+		expect(await stored(store, key)).toEqual({ main: counts(1, 10, 1, 0), subagents: NONE });
+	});
+
 	test('resetAdoption zeroes the session totals and leaves the stored day totals', async () => {
 		resetAdoption();
 		forgetDays();
@@ -430,6 +623,7 @@ describe('loadStats', () => {
 		await store.set(dayKey(NOON, 'b'), entry(2));
 		await store.set(dayKey(daysBack(1), 'a'), entry(4));
 		await store.set(dayKey(daysBack(29), 'a'), entry(8));
+		await store.set(dayKey(daysBack(30), 'a'), entry(32));
 		await store.set(dayKey(daysBack(31), 'a'), entry(16));
 
 		const stats = await loadStats(NOON, await store.keys(), store.get, store.delete);
@@ -449,5 +643,38 @@ describe('loadStats', () => {
 
 		expect(stats).toEqual({ today: counts(2, 0, 1, 0), last30: counts(2, 0, 1, 0) });
 		expect(store.data.size).toBe(4);
+	});
+
+	test('an entry whose read fails is left out and the rest is summed', async () => {
+		const store = fakeStore();
+		await store.set(dayKey(NOON, 'a'), entry(1));
+		await store.set(dayKey(NOON, 'b'), entry(2));
+		await store.set(dayKey(daysBack(3), 'a'), entry(4));
+		const get = async (key: string) => {
+			if (key === dayKey(NOON, 'b')) throw new Error('unreadable entry');
+			return store.get(key);
+		};
+
+		const stats = await loadStats(NOON, await store.keys(), get, store.delete);
+
+		expect(stats).toEqual({ today: counts(1, 0, 1, 0), last30: counts(5, 0, 2, 0) });
+	});
+
+	test('a delete that fails is ignored and tried again by the next read', async () => {
+		const store = fakeStore();
+		await store.set(dayKey(NOON, 'a'), entry(1));
+		await store.set(dayKey(daysBack(30), 'a'), entry(2));
+		await store.set(dayKey(daysBack(45), 'a'), entry(4));
+		const failing = async (key: string) => {
+			if (key === dayKey(daysBack(30), 'a')) throw new Error('undeletable entry');
+			return store.delete(key);
+		};
+
+		const stats = await loadStats(NOON, await store.keys(), store.get, failing);
+
+		expect(stats).toEqual({ today: counts(1, 0, 1, 0), last30: counts(1, 0, 1, 0) });
+		expect(await store.keys()).toEqual([dayKey(NOON, 'a'), dayKey(daysBack(30), 'a')]);
+		await loadStats(NOON, await store.keys(), store.get, store.delete);
+		expect(await store.keys()).toEqual([dayKey(NOON, 'a')]);
 	});
 });

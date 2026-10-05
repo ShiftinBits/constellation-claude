@@ -1,5 +1,5 @@
 import type { On, PluginOptions } from 'claude-code';
-import { dayKey, noteCodeIntelCall, persist, showsAdoption } from './adoption';
+import { background, noteCodeIntelCall, save, showsAdoption } from './adoption';
 import { canDraw, isConfigured, parseToolText, stringArg } from './lib';
 import { observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
@@ -105,17 +105,19 @@ export function registerBudget(on: On, options: PluginOptions): void {
 			}
 			// A refused call never ran; an errored one is still the agent reaching for code_intel.
 			if (r.deny === undefined) {
-				try {
-					await persist(
-						noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time),
-						dayKey(await $.clock.now(), await $.session.id()),
-						(k) => $.store.get(k),
-						(k, entry) => $.store.set(k, entry),
-					);
-				} catch {
-					// The session count stands without the stored one; the agent's answer goes back untouched.
-				}
+				const counted = noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time);
 				if (showsAdoption()) $.ui.invalidate('ui.render');
+				// Saved in the background: the agent's answer never waits on the store.
+				background(() =>
+					save(counted, {
+						now: () => $.clock.now(),
+						sessionId: () => $.session.id(),
+						get: (k) => $.store.get(k),
+						set: (k, entry) => $.store.set(k, entry),
+						keys: () => $.store.keys(),
+						del: (k) => $.store.delete(k),
+					}),
+				);
 			}
 		}
 		return r;

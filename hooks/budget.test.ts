@@ -1,6 +1,6 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { registerAdoption, sessionCounts, total } from './adoption';
+import { registerAdoption, sessionCounts, settled, total } from './adoption';
 import { registerBudget } from './budget';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
@@ -65,7 +65,7 @@ const $ = {
 		resolve: () => EL,
 		log: () => undefined,
 	},
-	store: { get: async () => undefined, set: async () => undefined },
+	store: { get: async () => undefined, set: async () => undefined, keys: async () => [], delete: async () => undefined },
 	config: { list: async () => [] },
 	clock: { now: async () => 0 },
 	fs: {
@@ -252,13 +252,24 @@ describe('nudge budget', () => {
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 
-	test('a used-up budget skips the walk for constellation.json', async () => {
+	test('a used-up budget adds no walk for constellation.json to the one that decides the count', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		expect(await m.search()).toEqual(REMINDER);
+		await settled();
 		existsCalls = 0;
 		expect(await m.search()).toBeUndefined();
-		expect(existsCalls).toBe(0);
+		await settled();
+		expect(existsCalls).toBe(1);
+	});
+
+	test('a search that draws a reminder walks for constellation.json once, for the count and the reminder together', async () => {
+		const m = load({ nudgeLimit: 1 });
+		await m.turn('t1');
+		existsCalls = 0;
+		expect(await m.search()).toEqual(REMINDER);
+		await settled();
+		expect(existsCalls).toBe(1);
 	});
 
 	test('a SessionStart clear empties the risk cache', async () => {
@@ -352,6 +363,7 @@ describe('nudge budget', () => {
 		const m = load({});
 		await m.search();
 		await m.search('agent-1');
+		await settled();
 		expect(total(sessionCounts()).symbol).toBe(2);
 		await m.sessionStart('clear');
 		expect(total(sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
@@ -361,6 +373,7 @@ describe('nudge budget', () => {
 		const m = load({});
 		await m.search('agent-1');
 		await m.runEnds('agent-1');
+		await settled();
 		expect(sessionCounts().subagents.symbol).toBe(1);
 	});
 

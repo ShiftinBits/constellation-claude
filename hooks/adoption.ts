@@ -59,6 +59,19 @@ let shown = false;
  */
 const days = new Map<string, Promise<Buckets>>();
 
+/**
+ * The last save queued per day key. Each save waits for the one before it, so
+ * two saves of one entry never land out of order and the last one carries
+ * every count.
+ */
+const writes = new Map<string, Promise<void>>();
+
+/** The background work still running: what `settled()` waits for. */
+const running = new Set<Promise<void>>();
+
+/** Whether this load already deleted the entries past their kept days. */
+let pruned = false;
+
 function note(isMain: boolean, counts: Counts): Note {
 	add(isMain ? session.main : session.subagents, counts);
 	return { isMain, counts };
@@ -218,11 +231,29 @@ function bucketsOf(value: unknown): Buckets | undefined {
 	return main === undefined || subagents === undefined ? undefined : { main, subagents };
 }
 
+/** The local date in a stored key, or undefined when the key is not this module's. */
+function dateOf(key: string): string | undefined {
+	return DATED_KEY.exec(key)?.[1];
+}
+
+/** Deletes the entries dated before `oldest`. A delete that fails is left for the next time. */
+async function prune(oldest: string, keys: readonly string[], del: (key: string) => Promise<void>): Promise<void> {
+	await Promise.allSettled(
+		keys
+			.filter((key) => {
+				const date = dateOf(key);
+				return date !== undefined && date < oldest;
+			})
+			.map(async (key) => del(key)),
+	);
+}
+
 /**
  * Adds `counted` to this session's entry under `key` and saves it. The first
  * call for a key reads what the store already holds (`(k) => $.store.get(k)`),
  * so a reloaded module or a resumed session adds to its earlier counts; a read
  * that fails is tried again by the next call. `save` is `(k, v) => $.store.set(k, v)`.
+ * Saves of one key run one after another, in the order the counts arrived.
  */
 export async function persist(
 	counted: Note,
@@ -240,14 +271,67 @@ export async function persist(
 	}
 	const entry = await seeded;
 	add(counted.isMain ? entry.main : entry.subagents, counted.counts);
-	await save(key, entry);
+	const write = (writes.get(key) ?? Promise.resolve()).catch(() => undefined).then(() => save(key, entry));
+	writes.set(key, write);
+	await write;
+}
+
+/** The store as the counting hooks hand it over: each member a closure that spells its own `$` call. */
+export type StorePort = {
+	/** `() => $.clock.now()` */
+	now: () => Promise<number>;
+	/** `() => $.session.id()` */
+	sessionId: () => Promise<string>;
+	/** `(k) => $.store.get(k)` */
+	get: (key: string) => Promise<unknown>;
+	/** `(k, entry) => $.store.set(k, entry)` */
+	set: (key: string, entry: Buckets) => Promise<void>;
+	/** `() => $.store.keys()` */
+	keys: () => Promise<readonly string[]>;
+	/** `(k) => $.store.delete(k)` */
+	del: (key: string) => Promise<void>;
+};
+
+/**
+ * Saves `counted` under this session's key for the local day and, on the first
+ * call of a load, deletes the entries past their kept days. Never rejects: a
+ * store that fails leaves the session totals as they were.
+ */
+export async function save(counted: Note, store: StorePort): Promise<void> {
+	const isFirst = !pruned;
+	pruned = true;
+	try {
+		const now = await store.now();
+		await Promise.allSettled([
+			(async () => persist(counted, dayKey(now, await store.sessionId()), store.get, store.set))(),
+			isFirst ? (async () => prune(keptDates(now).oldest, await store.keys(), store.del))() : undefined,
+		]);
+	} catch {
+		// No clock: nothing is stored for this count.
+	}
+}
+
+/**
+ * Starts `work` and returns at once, so a tool's answer never waits on the
+ * store. A failure is dropped. `settled()` waits for it.
+ */
+export function background(work: () => Promise<void>): void {
+	const task = (async () => work())().catch(() => undefined);
+	running.add(task);
+	void task.finally(() => running.delete(task));
+}
+
+/** Resolves once no background work is running, including work started while it waited. */
+export async function settled(): Promise<void> {
+	while (running.size > 0) await Promise.all(running);
 }
 
 /**
  * Sums every session's stored counts for today and for the last 30 days, today
  * included, and deletes the entries older than that. `keys`, `get` and `del`
  * are `await $.store.keys()`, `(k) => $.store.get(k)` and `(k) => $.store.delete(k)`.
- * A key or value that is not this module's is left alone and not counted.
+ * A key or value that is not this module's is left alone and not counted, and
+ * so is an entry whose read fails.
  */
 export async function loadStats(
 	nowMs: number,
@@ -257,19 +341,17 @@ export async function loadStats(
 ): Promise<Stats> {
 	const { oldest, today } = keptDates(nowMs);
 	const stats: Stats = { today: zero(), last30: zero() };
-	for (const key of keys) {
-		const date = DATED_KEY.exec(key)?.[1];
-		if (date === undefined) continue;
-		if (date < oldest) {
-			await del(key);
-			continue;
-		}
-		const entry = bucketsOf(await get(key));
-		if (entry === undefined) continue;
-		const counts = total(entry);
+	const kept = keys.flatMap((key) => {
+		const date = dateOf(key);
+		return date === undefined || date < oldest ? [] : [{ key, date }];
+	});
+	const [entries] = await Promise.all([Promise.allSettled(kept.map(async ({ key }) => bucketsOf(await get(key)))), prune(oldest, keys, del)]);
+	entries.forEach((read, i) => {
+		if (read.status !== 'fulfilled' || read.value === undefined) return;
+		const counts = total(read.value);
 		add(stats.last30, counts);
-		if (date === today) add(stats.today, counts);
-	}
+		if (kept[i]?.date === today) add(stats.today, counts);
+	});
 	return stats;
 }
 
@@ -278,9 +360,15 @@ export function resetAdoption(): void {
 	session = empty();
 }
 
-/** Drops the day entries held in memory, as a reload of the hooks module does; the next count reads the store again. */
+/**
+ * Drops the day entries held in memory and the saves still queued, as a reload
+ * of the hooks module does; the next count reads the store again and prunes it.
+ */
 export function forgetDays(): void {
 	days.clear();
+	writes.clear();
+	running.clear();
+	pruned = false;
 }
 
 /**

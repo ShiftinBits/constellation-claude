@@ -71,25 +71,26 @@ const UNUSED_MORE = {
 	pagination: { total: 3, hasMore: false },
 };
 
-/** A code_intel response whose envelope carries `result` and the graph's as-of metadata. */
 /** Local noon, so the local date is the same in every time zone. */
-const NOON = new Date(2026, 9, 5, 12).getTime();
+const NOON = new Date(2025, 2, 14, 12).getTime();
 /** Local noon `days` days before `NOON`. */
-const daysBack = (days: number) => new Date(2026, 9, 5 - days, 12).getTime();
+const daysBack = (days: number) => new Date(2025, 2, 14 - days, 12).getTime();
 
 /** A stored day entry of `codeIntel` calls taking `codeIntelMs` in all, and `symbol` and `literal` searches, all by the main conversation. */
 function entry(codeIntel: number, codeIntelMs: number, symbol: number, literal: number): Buckets {
 	return { main: { codeIntel, codeIntelMs, symbol, literal }, subagents: { codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 } };
 }
 
-/** Two other sessions' counts for today, one from 29 days ago and one from 31 days ago, past the 30 kept. */
+/** Two other sessions' counts for today, one from 29 days ago, and one each from 30 and 31 days ago, past the 30 kept. */
 const HISTORY: [string, unknown][] = [
 	[dayKey(NOON, 'session-a'), entry(3, 1200, 0, 1)],
 	[dayKey(NOON, 'session-b'), entry(1, 300, 1, 0)],
 	[dayKey(daysBack(29), 'session-a'), entry(4, 2500, 4, 2)],
+	[dayKey(daysBack(30), 'session-a'), entry(100, 100, 100, 100)],
 	[dayKey(daysBack(31), 'session-a'), entry(100, 100, 100, 100)],
 ];
 
+/** A code_intel response whose envelope carries `result` and the graph's as-of metadata. */
 function success(result: unknown): McpToolResult {
 	const body = { success: true, result, asOfCommit: COMMIT, lastIndexedAt: INDEXED_AT };
 	return { content: [{ type: 'text', text: JSON.stringify(body) }], isError: false };
@@ -119,10 +120,16 @@ type World = {
 	throws?: 'session.cwd' | 'config.list' | 'store.keys';
 	/** What `$.store` already holds, as from an earlier session. */
 	saved?: [string, unknown][];
+	/** Keys `$.store.get` and `$.store.delete` throw for. */
+	broken?: string[];
+	/** Holds the first `$.store.keys` answer, the keys as they were when asked, until `releaseKeys()`. */
+	holdKeys?: boolean;
+	/** Holds every `$.store.set` until `releaseSets()`. */
+	holdSets?: boolean;
 };
 
 /** Answers everything beneath the plugin and returns the queries sent and the pane events seen. */
-function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws, saved = [] }: World = {}) {
+function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respond = answer, throws, saved = [], broken = [], holdKeys = false, holdSets = false }: World = {}) {
 	const codes: string[] = [];
 	const cwds: string[] = [];
 	const events: string[] = [];
@@ -130,6 +137,15 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 	let turns = 0;
 	const armed = { cwd: false };
 	const store = new Map<string, unknown>(saved);
+	let keyReads = 0;
+	let releaseKeys: () => void = () => {};
+	const keysGate = new Promise<void>((resolve) => {
+		releaseKeys = resolve;
+	});
+	let releaseSets: () => void = () => {};
+	const setsGate = new Promise<void>((resolve) => {
+		releaseSets = resolve;
+	});
 	on('session.cwd', () => {
 		if (throws === 'session.cwd' && armed.cwd) throw new Error('no cwd');
 		return { value: '/work/app' };
@@ -160,22 +176,43 @@ function world(on: On, { surfaces = ['terminal'], theme = 'dark', answer: respon
 		turns += 1;
 		return { turnId: e.turnId };
 	});
-	on('store.get', (_, e) => ({ value: store.get(e.key) }));
-	on('store.set', (_, e) => {
+	on('store.get', (_, e) => {
+		if (broken.includes(e.key)) throw new Error('unreadable entry');
+		return { value: store.get(e.key) };
+	});
+	on('store.set', async (_, e) => {
+		if (holdSets) await setsGate;
 		store.set(e.key, e.value);
 		return { value: undefined };
 	});
 	on('store.delete', (_, e) => {
+		if (broken.includes(e.key)) throw new Error('undeletable entry');
 		store.delete(e.key);
 		return { value: undefined };
 	});
-	on('store.keys', () => {
+	on('store.keys', async () => {
 		if (throws === 'store.keys') throw new Error('no store');
-		return { value: [...store.keys()] };
+		const read = (keyReads += 1);
+		const value = [...store.keys()];
+		if (holdKeys && read === 1) await keysGate;
+		return { value };
 	});
-	on('clock.now', () => ({ value: NOON }));
+	// The clock stands at NOON and holds every wait, so a read of the stored counts never gives up on a save.
+	const clock = mock.clock(on, { now: NOON });
 	on('session.id', () => ({ value: 'session-1' }));
-	return { codes, cwds, events, opens, store, turns: () => turns, armed };
+	return {
+		codes,
+		cwds,
+		events,
+		opens,
+		store,
+		clock,
+		turns: () => turns,
+		armed,
+		keyReads: () => keyReads,
+		releaseKeys: () => releaseKeys(),
+		releaseSets: () => releaseSets(),
+	};
 }
 
 async function run($: Engine, args = '') {
@@ -1322,9 +1359,16 @@ describe('the symbol explorer', () => {
 });
 
 describe('the stats tab', () => {
-	/** A symbol search and a literal one by the main conversation and a symbol search by a subagent, counted by the loaded plugin. */
+	/** The search result hint is off where the plugin counts searches, so they send no query of their own. */
+	const COUNTING = { options: { augmentGrep: false } };
+
+	/**
+	 * A symbol search and a literal one by the main conversation and a symbol search by a subagent, counted by the
+	 * loaded plugin: with a key, in /work/app, which holds a constellation.json.
+	 */
 	async function searchThrice($: Engine, on: On): Promise<void> {
-		mock.env(on, {});
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: STORED_KEY });
+		on('fs.exists', (_, e) => ({ value: e.path === '/work/app/constellation.json' }));
 		on('tool.call', () => ({ result: '' }));
 		for (const [pattern, agentId] of [['AuthService'], ['connection refused'], ['UserService', 'agent-1']] as const) {
 			await $.tool.call({ tool: 'Grep', pattern, tool_use_id: `u-${pattern}`, agentId } as unknown as ToolCallArgs);
@@ -1335,7 +1379,7 @@ describe('the stats tab', () => {
 		'0 code_intel calls (0 ms) · 2 symbol-like searches · 1 literal search · 0% structural lookups (main: 0 code_intel calls, 1 symbol-like search · subagents: 0 code_intel calls, 1 symbol-like search)';
 
 	for (const surface of SURFACES) {
-		test(`draws the session, today and the last 30 days from the store, and sends no query, on ${surface}`, async ($, on) => {
+		test(`draws the session, today and the last 30 days from the store, and sends no query, on ${surface}`, COUNTING, async ($, on) => {
 			const { codes, store } = world(on, { saved: HISTORY });
 			await searchThrice($, on);
 			await run($, 'stats');
@@ -1359,6 +1403,7 @@ describe('the stats tab', () => {
 			expect(await reads(ui, /^Structural lookups: code_intel calls out of/)).toBe(true);
 			expect(await reads(ui, /^1-6 switch tabs · r refresh · esc close$/)).toBe(true);
 			expect(store.has(dayKey(daysBack(31), 'session-a'))).toBe(false);
+			expect(store.has(dayKey(daysBack(30), 'session-a'))).toBe(false);
 			expect(store.has(dayKey(daysBack(29), 'session-a'))).toBe(true);
 			expect(codes).toEqual([]);
 		});
@@ -1410,7 +1455,7 @@ describe('the stats tab', () => {
 		expect(codes).toHaveLength(1);
 	});
 
-	test('a store that cannot be read still draws the session row and says so', async ($, on) => {
+	test('a store that cannot be read still draws the session row and says so', COUNTING, async ($, on) => {
 		const { codes } = world(on, { saved: HISTORY, throws: 'store.keys' });
 		await searchThrice($, on);
 		await run($, 'stats');
@@ -1431,7 +1476,7 @@ describe('the stats tab', () => {
 		expect(codes).toEqual([]);
 	});
 
-	test('without a pane it answers with the same figures as text and sends no query', async ($, on) => {
+	test('without a pane it answers with the same figures as text and sends no query', COUNTING, async ($, on) => {
 		const { codes, events, store } = world(on, { surfaces: ['vscode'], saved: HISTORY });
 		await searchThrice($, on);
 		const r = await run($, 'stats');
@@ -1449,7 +1494,113 @@ describe('the stats tab', () => {
 	test('without a pane or a store it answers with the session row and says the history could not be read', async ($, on) => {
 		world(on, { surfaces: ['vscode'], throws: 'store.keys' });
 		const r = await run($, 'stats');
-		expect(r.text?.split('\n').slice(2)).toEqual(['- The stored history could not be read.']);
+		expect(r.text?.split('\n')).toEqual([
+			'>_CONSTELLATION:// stats',
+			'- This session: 0 code_intel calls (0 ms) · 0 symbol-like searches · 0 literal searches · n/a structural lookups (main: 0 code_intel calls, 0 symbol-like searches · subagents: 0 code_intel calls, 0 symbol-like searches)',
+			'- The stored history could not be read.',
+		]);
+	});
+
+	const TODAY_WITH_SESSION = '- Today: 0 code_intel calls (0 ms) · 2 symbol-like searches · 1 literal search · 0% structural lookups';
+	const TODAY_WITHOUT = '- Today: 0 code_intel calls (0 ms) · 0 symbol-like searches · 0 literal searches · n/a structural lookups';
+
+	test('the read waits for counts still being saved, so today is never behind the session', COUNTING, async ($, on) => {
+		const { releaseSets } = world(on, { surfaces: ['vscode'], holdSets: true });
+		await searchThrice($, on);
+		let lines: string[] | undefined;
+		const reply = run($, 'stats').then((r) => {
+			lines = r.text?.split('\n');
+		});
+		await settle();
+		expect(lines).toBeUndefined();
+		releaseSets();
+		await reply;
+		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITH_SESSION, TODAY_WITH_SESSION.replace('Today', 'Last 30 days')]);
+	});
+
+	test('a save that never lands holds the read for a second and no longer', COUNTING, async ($, on) => {
+		const { clock } = world(on, { surfaces: ['vscode'], holdSets: true });
+		await searchThrice($, on);
+		let lines: string[] | undefined;
+		const reply = run($, 'stats').then((r) => {
+			lines = r.text?.split('\n');
+		});
+		await clock.advance(999);
+		await settle();
+		expect(lines).toBeUndefined();
+		await clock.advance(1);
+		await reply;
+		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITHOUT, TODAY_WITHOUT.replace('Today', 'Last 30 days')]);
+	});
+
+	test('a readable store with nothing in it draws today and the last 30 days as zeros', async ($, on) => {
+		world(on);
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		for (const label of ['Today', 'Last 30 days']) {
+			const row = (await ui.find({ key: `stats:${label}` }))?.text;
+			expect(row).toContain('0 code_intel calls (0 ms)');
+			expect(row).toContain('0 symbol-like searches');
+			expect(row).toContain('0 literal searches');
+			expect(row).toContain('n/a');
+		}
+		expect(await exact(ui, 'The stored history could not be read.')).toBeUndefined();
+	});
+
+	test('an entry that cannot be read or deleted is left out, and the rest is still summed', async ($, on) => {
+		const unreadable = dayKey(NOON, 'session-b');
+		const undeletable = dayKey(daysBack(31), 'session-a');
+		const { store } = world(on, { saved: HISTORY, broken: [unreadable, undeletable] });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		const row = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
+		expect(await row('Today')).toContain('3 code_intel calls (1.2 s)');
+		expect(await row('Last 30 days')).toContain('7 code_intel calls (3.7 s)');
+		expect(await exact(ui, 'The stored history could not be read.')).toBeUndefined();
+		expect(store.has(undeletable)).toBe(true);
+		expect(store.has(dayKey(daysBack(30), 'session-a'))).toBe(false);
+	});
+
+	test('a read still held when the pane closes is dropped, and opening the tab again reads the store afresh', async ($, on) => {
+		const { store, keyReads, releaseKeys } = world(on, { saved: HISTORY, holdKeys: true });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await reads(ui, /reading the stored counts/)).toBe(true);
+		expect(await ui.find({ key: 'stats:Today' })).toBeUndefined();
+		await ui.press({ key: 'close' });
+		store.set(dayKey(NOON, 'session-c'), entry(6, 500, 0, 0));
+		releaseKeys();
+		await settle();
+		await ui.unmount();
+
+		await run($, 'stats');
+		const again = await mountPane($, 'terminal');
+		await settle();
+		expect(keyReads()).toBe(2);
+		expect(await reads(again, /reading the stored counts/)).toBe(false);
+		expect((await again.find({ key: 'stats:Today' }))?.text).toContain('10 code_intel calls (2.0 s)');
+		expect((await again.find({ key: 'stats:Last 30 days' }))?.text).toContain('14 code_intel calls (4.5 s)');
+	});
+
+	test('a read that lands after a refresh is discarded and the fresh figures stay', async ($, on) => {
+		const { store, keyReads, releaseKeys } = world(on, { saved: HISTORY, holdKeys: true });
+		await run($, 'stats');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await reads(ui, /reading the stored counts/)).toBe(true);
+		store.set(dayKey(NOON, 'session-c'), entry(6, 500, 0, 0));
+		await ui.press({ key: 'refresh' });
+		await settle();
+		expect(keyReads()).toBe(2);
+		expect(await exact(ui, '10 code_intel calls (2.0 s)')).toBeDefined();
+		releaseKeys();
+		await settle();
+		expect(await exact(ui, '10 code_intel calls (2.0 s)')).toBeDefined();
+		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeUndefined();
+		expect(await reads(ui, /reading the stored counts/)).toBe(false);
 	});
 });
 

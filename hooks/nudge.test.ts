@@ -13,11 +13,16 @@ type Handler = (
 		env: { get: (name: string) => Promise<string | undefined> };
 		session: { cwd: () => Promise<string>; id: () => Promise<string> };
 		fs: { exists: (path: string) => Promise<boolean> };
-		store: { get: (key: string) => Promise<unknown>; set: (key: string, value: unknown) => Promise<void> };
+		store: {
+			get: (key: string) => Promise<unknown>;
+			set: (key: string, value: unknown) => Promise<void>;
+			keys: () => Promise<string[]>;
+			delete: (key: string) => Promise<void>;
+		};
 		clock: { now: () => Promise<number> };
 	},
 	e: object,
-	next: (e: object) => Promise<Answer>,
+	next: ((e: object) => Promise<Answer>) & { origin: { plugin: string; tier: string } },
 ) => Promise<Answer>;
 
 const PROJECT = '/work/app';
@@ -54,10 +59,11 @@ async function nudgesFor(
 		env: { get: async () => key },
 		session: { cwd: async () => cwd, id: async () => 'session-1' },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
-		store: { get: async () => undefined, set: async () => undefined },
+		store: { get: async () => undefined, set: async () => undefined, keys: async () => [], delete: async () => undefined },
 		clock: { now: async () => 0 },
 	};
-	return searchCall()($, e, async () => beneath);
+	// The model's own call: the engine raises it.
+	return searchCall()($, e, Object.assign(async () => beneath, { origin: { plugin: 'engine', tier: 'core' } }));
 }
 
 const CASES: ReadonlyArray<readonly [string, object]> = [
