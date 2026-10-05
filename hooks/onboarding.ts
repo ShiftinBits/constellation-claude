@@ -10,7 +10,7 @@ import type {
 	RenderElement,
 } from 'claude-code';
 import { canDraw, codeIntel, gitRoot, parseToolText, projectRoot } from './lib';
-import type { McpPort } from './lib';
+import type { CodeIntelEnvelope, McpPort } from './lib';
 import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
 
@@ -395,16 +395,17 @@ type Claim = { gen: number; cli: string; shell: boolean };
 
 /**
  * Claims the band for `task` before anything is awaited, so a second press
- * is refused at once, then finds the CLI. Undefined when a run is live, or
- * when no CLI is found: the band then goes back to what it showed and says
- * how to install it, and nothing is spawned.
+ * is refused at once, then finds the CLI. Undefined when a run is live, when
+ * a reset came during the lookup (the claim is released), or when no CLI is
+ * found: the band then goes back to what it showed and says how to install
+ * it, and nothing is spawned.
  */
 async function claim(task: Task, ports: ButtonPorts): Promise<Claim | undefined> {
 	const prior = state;
 	const gen = startTask(task, ports);
 	if (gen === undefined) return undefined;
 	const { path, shell } = await cliPath(ports.run);
-	if (path !== undefined) {
+	if (path !== undefined && generation === gen) {
 		cliMissing = false;
 		return { gen, cli: path, shell };
 	}
@@ -448,6 +449,10 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 	if (claimed === undefined) return;
 	const { gen, cli, shell } = claimed;
 	const before = await storedKey(ports.run);
+	if (generation !== gen) {
+		endTask();
+		return;
+	}
 	void (async () => {
 		let after: string | undefined;
 		let root: string | null | undefined;
@@ -484,10 +489,11 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 
 /**
  * The Index button: runs `constellation index --wait` in the project root,
- * then a ping decides (the exit code is not read). Indexed takes the band
- * down; still not indexed stays, or says not registered when the CLI said
- * so. The run holds the band until the ping answers. A run that outlives a
- * reset acts on nothing.
+ * then a ping decides (the exit code is not read). Only a successful ping
+ * takes the band down. An error with a state of its own puts it up (a
+ * rejected key says sign in again; not registered when the CLI said so);
+ * anything else stays not indexed. The run holds the band until the ping
+ * answers. A run that outlives a reset acts on nothing.
  */
 export async function startIndex(ports: ButtonPorts): Promise<void> {
 	const prior = state;
@@ -498,27 +504,28 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 		.cwd()
 		.then((cwd) => projectRoot(cwd, ports.exists))
 		.catch(() => null);
-	if (root === null) {
+	if (root === null || generation !== gen) {
 		endTask();
 		if (generation === gen) apply(prior, ports, INDEX_IN_PROJECT);
 		return;
 	}
 	void (async () => {
-		let code: string | undefined;
+		let ping: CodeIntelEnvelope | undefined;
 		try {
 			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { NO_COLOR: '1' } }), gen, ports);
-			if (generation === gen) code = (await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root })).error?.code;
+			if (generation === gen) ping = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		} finally {
 			endTask();
 		}
 		if (generation !== gen) return;
-		if (code !== 'PROJECT_NOT_INDEXED') {
+		if (ping?.success === true) {
 			buffer = '';
 			apply(undefined, ports);
 			ports.toast('✦ Constellation indexed this project');
 			return;
 		}
-		apply(NOT_REGISTERED_OUTPUT.test(buffer) ? 'not-registered' : 'not-indexed', ports, lastLine(buffer));
+		const code = ping?.error?.code;
+		apply(onboardingState({ configured: true, code, notRegistered: NOT_REGISTERED_OUTPUT.test(buffer) }) ?? 'not-indexed', ports, lastLine(buffer));
 	})();
 }
 
@@ -585,7 +592,8 @@ export type BandView = {
 /**
  * The band for a state: a badge and headline, the steps for states a button
  * cannot fix (a command to run in a terminal and a link), the CLI's latest
- * line, then the buttons, Dismiss left and the fix rightmost.
+ * line, then the buttons, Dismiss left and the fix rightmost. A running CLI
+ * gets no buttons.
  */
 export function band(el: ElementTable, view: BandView): RenderElement {
 	const tone = forTheme(TONE[view.state], view.tint);
@@ -602,6 +610,8 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 	}
 	if (view.detail !== undefined) rows.push(el.Text({ dimColor: true, wrap: 'truncate', children: view.detail }));
 	if (view.url !== undefined) rows.push(el.Link({ href: view.url, label: view.url }));
+	// A run passes on its own, so it is never dismissed: a dismissal would hide every later run.
+	if (view.state === 'working') return el.Box({ flexDirection: 'column', children: rows });
 	const dismiss = { key: 'onboarding-dismiss', label: 'Dismiss', onPress: view.dismiss };
 	const action =
 		view.state === 'not-set-up' || view.state === 'sign-in-again'

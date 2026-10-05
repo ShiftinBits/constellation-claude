@@ -636,13 +636,13 @@ describe('band', () => {
 		expect(buttons(tree).map((b) => b.props['label'])).toEqual(['Dismiss', 'Index this project']);
 	});
 
-	test('working: the pending badge and the latest output line, Dismiss alone', () => {
+	test('working: the pending badge and the latest output line, and no button, so a run is never dismissed', () => {
 		const tree = draw('working', { task: 'index', detail: 'Uploading 55%' });
 		const text = shown(tree);
 		expect(text).toContain(`${onboarding.pending.glyph} ${onboarding.pending.word}`);
 		expect(text).toContain('Indexing this project');
 		expect(text).toContain('Uploading 55%');
-		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+		expect(keys(tree)).toEqual([]);
 	});
 
 	test('the none scheme drops every color and keeps the words', () => {
@@ -693,7 +693,7 @@ describe('the band above the prompt', () => {
 					startTask('auth', { invalidate: () => undefined });
 				},
 				'Signing in to Constellation',
-				['onboarding-dismiss'],
+				[],
 			],
 		];
 		for (const [put, message, actions] of cases) {
@@ -1050,7 +1050,7 @@ describe('the Sign in button', () => {
 		await settle();
 		const tree = await band.draw();
 		expect(shown(tree)).toContain('Signing in to Constellation');
-		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+		expect(keys(tree)).toEqual([]);
 		const link = nodes(tree).find((n) => n.type === 'Link');
 		expect(link?.props).toEqual({ href: MANUAL, label: MANUAL });
 		held.open();
@@ -1109,6 +1109,30 @@ describe('the Sign in button', () => {
 		await settle();
 		expect(spawns).toHaveLength(2);
 	});
+
+	for (const step of ['command -v constellation', 'printenv CONSTELLATION_ACCESS_KEY']) {
+		test(`a reset while ${step.split(' ')[0]} runs spawns nothing and frees the claim`, async () => {
+			const band = loadBand();
+			observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+			const held = gate();
+			const base = host();
+			const run: Run = async (argv, init) => {
+				if (argv[2] === step) await held.promise;
+				return base.run(argv, init);
+			};
+			const { ports, spawns } = buttonPorts({ run });
+			const pressed = startSignIn(ports);
+			await settle();
+			resetOnboarding();
+			held.open();
+			await pressed;
+			await settle();
+			expect(spawns).toEqual([]);
+			expect(await band.draw()).toBe(FALLTHROUGH);
+			expect(startTask('auth', ports)).toBeDefined();
+			endTask();
+		});
+	}
 
 	test('a missing CLI shows the install hint and spawns nothing, and a press after installing runs', async () => {
 		const band = loadBand();
@@ -1184,6 +1208,50 @@ describe('the Index button', () => {
 		const tree = await band.draw();
 		expect(shown(tree)).toContain("This project isn't registered with Constellation");
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
+	});
+
+	test('an AUTH_ERROR ping after the run says sign in again, with the last line', async () => {
+		const band = loadBand();
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		const { ports, seen } = buttonPorts({ run: host().run, answer: mcpText(failed('AUTH_ERROR')), child: { chunks: [err('Unauthorized\n')], code: 1 } });
+		await startIndex(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Unauthorized');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
+		expect(seen.toasts).toEqual([]);
+	});
+
+	test('an API_UNREACHABLE ping after the run stays not indexed, with the last line, and says nothing was indexed', async () => {
+		const band = loadBand();
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		const { ports, seen } = buttonPorts({ run: host().run, answer: mcpText(failed('API_UNREACHABLE')), child: { chunks: [out('Indexing...\n')], code: 0 } });
+		await startIndex(ports);
+		await settle();
+		const tree = await band.draw();
+		expect(shown(tree)).toContain("This project isn't indexed yet");
+		expect(shown(tree)).toContain('Indexing...');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-index']);
+		expect(seen.toasts).toEqual([]);
+	});
+
+	test('a reset while the project root is looked up spawns nothing and frees the claim', async () => {
+		const band = loadBand();
+		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		const held = gate();
+		const built = buttonPorts({ run: host().run });
+		const ports: ButtonPorts = { ...built.ports, cwd: () => held.promise.then(() => REPO) };
+		const pressed = startIndex(ports);
+		await settle();
+		resetOnboarding();
+		held.open();
+		await pressed;
+		await settle();
+		expect(built.spawns).toEqual([]);
+		expect(await band.draw()).toBe(FALLTHROUGH);
+		expect(startTask('index', ports)).toBeDefined();
+		endTask();
 	});
 
 	test('a loop that ends after a reset neither pings nor writes the band', async () => {
