@@ -152,13 +152,17 @@ export const UNREAD_NOTE = 'The stored history could not be read.';
 /** One row's counts in words: the calls with their summed time, both kinds of search, and the ratio as a percentage. */
 export type Figures = { calls: string; symbol: string; literal: string; share: string };
 
-export function figures(counts: Counts): Figures {
+function percent(counts: Counts): string {
 	const share = ratio(counts);
+	return share === undefined ? 'n/a' : `${Math.round(share * 100)}%`;
+}
+
+export function figures(counts: Counts): Figures {
 	return {
 		calls: `${calls(counts.codeIntel)} (${duration(counts.codeIntelMs)})`,
 		symbol: searches(counts.symbol, 'symbol-like'),
 		literal: searches(counts.literal, 'literal'),
-		share: share === undefined ? 'n/a' : `${Math.round(share * 100)}%`,
+		share: percent(counts),
 	};
 }
 
@@ -177,6 +181,21 @@ export function statRows(buckets: Buckets, stored: Stats | undefined): StatRow[]
 					{ label: 'Last 30 days', counts: stored.last30 },
 				]),
 	];
+}
+
+/**
+ * The same rows as bare figures, the words left to a table's head, for a
+ * surface without a monospace grid (the Desktop app). The session's main and
+ * subagent split are rows of their own under it.
+ */
+export function statsCells(buckets: Buckets, stored: Stats | undefined): { label: string; figures: Figures }[] {
+	const row = (label: string, c: Counts) => ({
+		label,
+		figures: { calls: `${grouped(c.codeIntel)} (${duration(c.codeIntelMs)})`, symbol: grouped(c.symbol), literal: grouped(c.literal), share: percent(c) },
+	});
+	return statRows(buckets, stored).flatMap((r) =>
+		r.split === undefined ? [row(r.label, r.counts)] : [row(r.label, r.counts), row('↳ main', buckets.main), row('↳ subagents', buckets.subagents)],
+	);
 }
 
 /** The same rows as plain lines, for the command's text reply. */

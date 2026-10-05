@@ -81,6 +81,16 @@ export function strings(value: unknown): string[] | undefined {
 	return Array.isArray(value) && value.every((v) => typeof v === 'string') ? (value as string[]) : undefined;
 }
 
+/**
+ * A markdown table, for a surface without a monospace grid (the Desktop app),
+ * where padded columns do not line up. A `|` in a cell is escaped and a line
+ * break becomes a space, so data from the graph cannot break the table.
+ */
+export function markdownTable(head: readonly string[], rows: readonly (readonly string[])[]): string {
+	const line = (cells: readonly string[]) => `| ${cells.map((c) => c.replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ')).join(' | ')} |`;
+	return [line(head), line(head.map(() => ':-')), ...rows.map(line)].join('\n');
+}
+
 /** `count` and `word`, with an `s` unless the count is one. */
 export function plural(count: number, word: string): string {
 	return `${count} ${word}${count === 1 ? '' : 's'}`;

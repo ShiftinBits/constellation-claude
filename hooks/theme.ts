@@ -351,7 +351,48 @@ export function boxBanner(el: ElementTable, to: Scheme): RenderElement {
 export function header(el: ElementTable, columns: number, grid: boolean, to: Scheme): RenderElement {
 	if (grid && columns >= BANNER_WIDTH) return banner(el, to);
 	if (grid && columns >= BOX_WIDTH) return boxBanner(el, to);
+	// Without a grid the banner is drawn as an SVG, which needs real colors for its gradient.
+	if (!grid && 'Svg' in el && columns >= BANNER_WIDTH && (to === 'brand' || to === 'brand-light')) {
+		return el.Svg({ source: svgBanner(to), alt: `${PROMPT} constellationdev.io` });
+	}
 	return compactBanner(el, to);
+}
+
+/** Pixels per banner cell in the SVG: a half block is then square, as in a terminal cell. */
+const CELL_W = 8;
+const CELL_H = 16;
+
+/**
+ * `BANNER_ART` as an SVG document for a surface without a monospace grid (the
+ * Desktop app): block glyphs become rectangles, the frame a rounded outline and
+ * the URL text, all filled along the gradient. It scales down to a narrower slot.
+ */
+function svgBanner(to: Scheme): string {
+	const w = BANNER_WIDTH * CELL_W;
+	const h = BANNER_ART.length * CELL_H;
+	const half = CELL_H / 2;
+	const shapes: string[] = [];
+	BANNER_ART.forEach((line, row) => {
+		[...line].forEach((ch, col) => {
+			const x = col * CELL_W;
+			const y = row * CELL_H;
+			if (ch === '█') shapes.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${CELL_H}"/>`);
+			else if (ch === '▀') shapes.push(`<rect x="${x}" y="${y}" width="${CELL_W}" height="${half}"/>`);
+			else if (ch === '▄') shapes.push(`<rect x="${x}" y="${y + half}" width="${CELL_W}" height="${half}"/>`);
+		});
+	});
+	const url = 'CONSTELLATIONDEV.IO';
+	const urlRow = BANNER_ART.findIndex((line) => line.includes(url));
+	const urlCol = [...(BANNER_ART[urlRow] ?? '').slice(0, (BANNER_ART[urlRow] ?? '').indexOf(url))].length;
+	const stops = Array.from({ length: 11 }, (_, i) => `<stop offset="${i / 10}" stop-color="${gradientAt(i / 10, to) ?? palette.galactic}"/>`);
+	return [
+		`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`,
+		`<defs><linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="${w}" y2="0">${stops.join('')}</linearGradient></defs>`,
+		`<rect x="${CELL_W / 2}" y="${half}" width="${w - CELL_W}" height="${h - CELL_H}" rx="${half}" fill="none" stroke="url(#g)" stroke-width="1.5"/>`,
+		`<g fill="url(#g)" shape-rendering="crispEdges">${shapes.join('')}`,
+		`<text x="${urlCol * CELL_W}" y="${urlRow * CELL_H + 12}" font-family="ui-monospace, Menlo, monospace" font-size="13" textLength="${url.length * CELL_W}" lengthAdjust="spacingAndGlyphs">${url}</text></g>`,
+		'</svg>',
+	].join('');
 }
 
 /** The header for a narrow site or the Desktop app: `>_CONSTELLATION://` in bold along the gradient. */

@@ -105,41 +105,56 @@ export function drillCode(id: string, kind: string): string {
 	return `const symbolId = ${symbolId}; const [details, usages, impact, calls] = await Promise.all([api.getSymbolDetails({ symbolId }), api.traceSymbolUsage({ symbolId, limit: 20 }), api.impactAnalysis({ symbolId }), ${calls}]); return { details, usages, impact, calls }`;
 }
 
-/** The signature, kind, whether it is exported and its complexity, from a `getSymbolDetails` result. */
-export function detailLines(details: unknown): string[] {
+/** The signature, kind, whether it is exported and its complexity, from a `getSymbolDetails` result, as label and value. */
+export function detailRows(details: unknown): [string, string][] {
 	const symbol = isRecord(details) && isRecord(details['symbol']) ? details['symbol'] : undefined;
 	if (symbol === undefined) return [];
-	const lines: string[] = [];
+	const rows: [string, string][] = [];
 	const signature = str(symbol['signature']);
-	if (signature !== undefined) lines.push(`Signature: ${signature}`);
+	if (signature !== undefined) rows.push(['Signature', signature]);
 	const kind = str(symbol['kind']);
-	if (kind !== undefined) lines.push(`Kind: ${kind}`);
-	if (typeof symbol['isExported'] === 'boolean') lines.push(`Exported: ${symbol['isExported'] ? 'yes' : 'no'}`);
+	if (kind !== undefined) rows.push(['Kind', kind]);
+	if (typeof symbol['isExported'] === 'boolean') rows.push(['Exported', symbol['isExported'] ? 'yes' : 'no']);
 	const complexity = isRecord(symbol['complexity']) ? symbol['complexity'] : undefined;
 	const cyclomatic = complexity === undefined ? undefined : num(complexity['cyclomaticComplexity']);
 	if (cyclomatic !== undefined) {
 		const level = complexity === undefined ? undefined : str(complexity['complexityRisk']);
-		lines.push(`Complexity: ${cyclomatic}${level === undefined ? '' : ` (${level})`}`);
+		rows.push(['Complexity', `${cyclomatic}${level === undefined ? '' : ` (${level})`}`]);
 	}
-	return lines;
+	return rows;
 }
 
-/** The totals, then up to 15 `file:line usageType` rows, from a `traceSymbolUsage` result. */
-export function usageLines(usages: unknown): string[] {
-	if (!isRecord(usages)) return [];
-	const lines: string[] = [];
+/** The same facts as `Label: value` lines. */
+export function detailLines(details: unknown): string[] {
+	return detailRows(details).map(([label, value]) => `${label}: ${value}`);
+}
+
+/** The totals line of a `traceSymbolUsage` result, as `12 usages in 4 files`. */
+export function usageTotal(usages: unknown): string | undefined {
+	if (!isRecord(usages)) return undefined;
 	const summary = isRecord(usages['summary']) ? usages['summary'] : {};
 	const total = num(summary['totalUsages']);
 	const files = num(summary['filesAffected']);
-	if (total !== undefined) lines.push(`${total} usage${total === 1 ? '' : 's'}${files === undefined ? '' : ` in ${files} file${files === 1 ? '' : 's'}`}`);
+	return total === undefined ? undefined : `${total} usage${total === 1 ? '' : 's'}${files === undefined ? '' : ` in ${files} file${files === 1 ? '' : 's'}`}`;
+}
+
+/** Up to 15 usages of a `traceSymbolUsage` result as `file:line` and the usage type (empty when it has none). */
+export function usageRows(usages: unknown): [string, string][] {
+	if (!isRecord(usages)) return [];
+	const rows: [string, string][] = [];
 	for (const usage of entries(usages['directUsages']).slice(0, USAGE_ROWS)) {
 		const file = str(usage['filePath']);
 		if (file === undefined) continue;
 		const line = num(usage['line']);
-		const type = str(usage['usageType']);
-		lines.push(`${line === undefined ? file : `${file}:${line}`}${type === undefined ? '' : ` ${type}`}`);
+		rows.push([line === undefined ? file : `${file}:${line}`, str(usage['usageType']) ?? '']);
 	}
-	return lines;
+	return rows;
+}
+
+/** The totals, then up to 15 `file:line usageType` rows, from a `traceSymbolUsage` result. */
+export function usageLines(usages: unknown): string[] {
+	const total = usageTotal(usages);
+	return [...(total === undefined ? [] : [total]), ...usageRows(usages).map(([where, type]) => (type === '' ? where : `${where} ${type}`))];
 }
 
 /** The risk, the counts and the top dependents of an `impactAnalysis` result. */

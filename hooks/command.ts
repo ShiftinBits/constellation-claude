@@ -1,10 +1,10 @@
 import type { ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
-import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsLines } from './adoption';
+import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
 import type { Buckets, Stats } from './adoption';
-import { canDraw, codeIntel, isConfigured, isRecord, projectName, withinDeadline } from './lib';
+import { canDraw, codeIntel, isConfigured, isRecord, markdownTable, projectName, withinDeadline } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
-import { askText, callTree, detailLines, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, where } from './explore';
+import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
 import type { Hit } from './explore';
 import { byFile, location, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
@@ -12,7 +12,7 @@ import type { Explanation } from './explain';
 import { checkConnection, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
-import type { Scheme } from './theme';
+import type { Scheme, Tone } from './theme';
 
 /**
  * The command's name. Mod commands allow letters, digits, `_` and `-`, so the
@@ -707,6 +707,20 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		// shortens in the middle, instead of every item shrinking and wrapping onto a second line.
 		const fixed = (children: RenderElement[]): RenderElement => el.Box({ flexDirection: 'row', columnGap: 1, flexShrink: 0, children });
 		const place = (text: string): RenderElement => el.Box({ flexShrink: 1, children: [el.Text({ dimColor: true, wrap: 'truncate-middle', children: text })] });
+		// Desktop has no monospace grid, so rows padded into columns do not line up there: it gets markdown tables.
+		const grid = e.surface !== 'desktop';
+		const table = (head: readonly string[], rows: readonly (readonly string[])[]): RenderElement => el.Markdown({ text: markdownTable(head, rows) });
+		const badgeText = (tone: Tone, text: string): string => `${tone.glyph} ${tone.word}${text === '' ? '' : ` ${text}`}`;
+		// Where a cell's color carries meaning, a table of Boxes instead: each column a share of the width, so cells
+		// keep their colors and still line up without a monospace grid.
+		const boxTable = (widths: readonly string[], rows: readonly { key?: string; cells: readonly RenderElement[] }[], head?: readonly string[]): RenderElement => {
+			const line = (cells: readonly RenderElement[], key?: string): RenderElement =>
+				el.Box({ ...(key === undefined ? {} : { key }), flexDirection: 'row', children: cells.map((cell, i) => el.Box({ width: widths[i] ?? 'auto', children: [cell] })) });
+			return el.Box({
+				flexDirection: 'column',
+				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ bold: true, children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
+			});
+		};
 		const showDeps = (path: string): void => {
 			depsPath = path;
 			drop('deps');
@@ -853,38 +867,58 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			const solar = paint(palette.solar, tint);
 			// Every row from one snapshot; while it is being read, the session's counts as they stand.
 			const snapshot = typeof history === 'object' ? history : undefined;
-			for (const row of statRows(snapshot?.session ?? sessionCounts(), snapshot?.stored)) {
-				const f = figures(row.counts);
+			if (!grid) {
+				const colored = (color: string | undefined, text: string): RenderElement => el.Text({ ...(color === undefined ? {} : { color }), children: text });
 				body.push(
-					el.Box({
-						key: `stats:${row.label}`,
-						flexDirection: 'row',
-						children: [
-							el.Text({ dimColor: true, children: row.label.padEnd(LABEL_WIDTH) }),
-							el.Box({
-								flexDirection: 'column',
-								children: [
-									el.Box({
-										flexDirection: 'row',
-										columnGap: 2,
-										flexWrap: 'wrap',
-										children: [
-											el.Text({ ...(cosmic === undefined ? {} : { color: cosmic }), children: f.calls }),
-											el.Text({ ...(solar === undefined ? {} : { color: solar }), children: f.symbol }),
-											el.Text({ dimColor: true, children: f.literal }),
-											el.Box({
-												flexDirection: 'row',
-												columnGap: 1,
-												children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
-											}),
-										],
-									}),
-									...(row.split === undefined ? [] : [el.Text({ dimColor: true, children: row.split })]),
-								],
-							}),
-						],
-					}),
+					boxTable(
+						['24%', '19%', '19%', '19%', '19%'],
+						statsCells(snapshot?.session ?? sessionCounts(), snapshot?.stored).map(({ label, figures: f }) => ({
+							key: `stats:${label}`,
+							cells: [
+								el.Text({ dimColor: true, children: label }),
+								colored(cosmic, f.calls),
+								colored(solar, f.symbol),
+								el.Text({ dimColor: true, children: f.literal }),
+								el.Text({ bold: true, children: f.share }),
+							],
+						})),
+						['', 'code_intel calls', 'symbol-like', 'literal', SHARE_LABEL],
+					),
 				);
+			} else {
+				for (const row of statRows(snapshot?.session ?? sessionCounts(), snapshot?.stored)) {
+					const f = figures(row.counts);
+					body.push(
+						el.Box({
+							key: `stats:${row.label}`,
+							flexDirection: 'row',
+							children: [
+								el.Text({ dimColor: true, children: row.label.padEnd(LABEL_WIDTH) }),
+								el.Box({
+									flexDirection: 'column',
+									children: [
+										el.Box({
+											flexDirection: 'row',
+											columnGap: 2,
+											flexWrap: 'wrap',
+											children: [
+												el.Text({ ...(cosmic === undefined ? {} : { color: cosmic }), children: f.calls }),
+												el.Text({ ...(solar === undefined ? {} : { color: solar }), children: f.symbol }),
+												el.Text({ dimColor: true, children: f.literal }),
+												el.Box({
+													flexDirection: 'row',
+													columnGap: 1,
+													children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
+												}),
+											],
+										}),
+										...(row.split === undefined ? [] : [el.Text({ dimColor: true, children: row.split })]),
+									],
+								}),
+							],
+						}),
+					);
+				}
 			}
 			if (snapshot === undefined) body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
 			else if (snapshot.stored === undefined) body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
@@ -996,26 +1030,39 @@ export function registerCommand(on: On, options: PluginOptions): void {
 											children: (() => {
 												if (section === 'details') {
 													const lines = detailLines(result['details']);
-													return lines.length === 0 ? [el.Text({ dimColor: true, children: 'No details returned' })] : lines.map((l) => el.Text({ children: l }));
+													if (lines.length === 0) return [el.Text({ dimColor: true, children: 'No details returned' })];
+													return grid ? lines.map((l) => el.Text({ children: l })) : [table(['Field', 'Value'], detailRows(result['details']))];
 												}
 												if (section === 'usages') {
 													const lines = usageLines(result['usages']);
+													if (lines.length === 0) return [el.Text({ dimColor: true, children: 'No usages found' }), aliasNote];
+													if (grid) return [...lines.map((l) => el.Text({ children: l })), aliasNote];
+													const total = usageTotal(result['usages']);
+													const rows = usageRows(result['usages']);
 													return [
-														...(lines.length === 0 ? [el.Text({ dimColor: true, children: 'No usages found' })] : lines.map((l) => el.Text({ children: l }))),
+														...(total === undefined ? [] : [el.Text({ children: total })]),
+														...(rows.length === 0 ? [] : [table(['Location', 'Usage'], rows)]),
 														aliasNote,
 													];
 												}
 												if (section === 'impact') {
 													const view = impactView(result['impact']);
-													return [
-														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
-														...(view.files === undefined ? [] : [labeled('Files', String(view.files))]),
-														...(view.direct === undefined ? [] : [labeled('Direct', String(view.direct))]),
-														...(view.transitive === undefined ? [] : [labeled('Transitive', String(view.transitive))]),
+													const facts: [string, string][] = [
+														...(view.files === undefined ? [] : [['Files', String(view.files)] as [string, string]]),
+														...(view.direct === undefined ? [] : [['Direct', String(view.direct)] as [string, string]]),
+														...(view.transitive === undefined ? [] : [['Transitive', String(view.transitive)] as [string, string]]),
 														...(view.tests === undefined && view.production === undefined
 															? []
-															: [labeled('Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`)]),
-														...view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint))),
+															: [['Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`] as [string, string]]),
+													];
+													return [
+														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
+														...(grid ? facts.map(([label, value]) => labeled(label, value)) : facts.length === 0 ? [] : [table(['Field', 'Value'], facts)]),
+														...(grid
+															? view.top.map((d) => badge(el, d.name, forTheme(kind(d.kind), tint)))
+															: view.top.length === 0
+																? []
+																: [table(['Dependent', 'Kind'], view.top.map((d) => [d.name, badgeText(kind(d.kind), '')]))]),
 														aliasNote,
 													];
 												}
@@ -1034,9 +1081,21 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			body.push(errorView(el, summary.explanation, tint));
 		} else if (summary !== undefined) {
 			let row = 0;
+			// On Desktop, each run of labeled facts is one table.
+			const facts: RenderElement[][] = [];
+			const flush = (): void => {
+				if (facts.length > 0) body.push(boxTable(['25%', '75%'], facts.splice(0).map((cells) => ({ cells }))));
+			};
 			for (const item of summary.items) {
 				const path = item.path;
 				const project = item.project;
+				if (!grid && item.label !== undefined && project === undefined && path === undefined) {
+					const tone =
+						item.badge === undefined ? undefined : forTheme(item.badge.kind === 'status' ? status(item.badge.value) : kind(item.badge.value), tint);
+					facts.push([el.Text({ dimColor: true, children: item.label }), tone === undefined ? el.Text({ children: item.text }) : badge(el, item.text, tone)]);
+					continue;
+				}
+				flush();
 				if (project !== undefined) {
 					// The tabs are hidden while picking, so the digits are free for the rows.
 					const n = row++;
@@ -1084,6 +1143,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 					body.push(el.Text(item.dim ? { dimColor: true, children: item.text } : { children: item.text }));
 				}
 			}
+			flush();
 		} else if (isPending) {
 			body.push(badge(el, 'querying Constellation', forTheme(status('pending'), tint)));
 		} else if (needsPath) {
@@ -1125,7 +1185,11 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		// The pane's width less its padding; Claude Code redraws when it changes.
 		const columns = typeof e.props.bodyColumns === 'number' ? e.props.bodyColumns - 2 : 0;
 		const head = header(el, columns, e.surface === 'terminal', tint);
-		const rule = el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
+		// Desktop draws text in a proportional font, where a row of `─` overruns the pane and wraps.
+		const rule =
+			e.surface === 'desktop'
+				? el.Markdown({ text: '---' })
+				: el.Text({ dimColor: true, children: '─'.repeat(Math.max(10, Math.min(BANNER_WIDTH, columns))) });
 		const keys = picking
 			? '1-9 open a project · enter opens the selected one · esc close'
 			: selected === 'explore'

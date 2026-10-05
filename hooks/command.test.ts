@@ -245,6 +245,11 @@ async function reads(ui: Awaited<ReturnType<typeof mountPane>>, pattern: RegExp)
 	return (await ui.find({ type: 'Text', text: pattern })) !== undefined;
 }
 
+/** The text of every markdown table the pane drew, one table per line block: what Desktop draws for rows of facts. */
+async function tableText(ui: Awaited<ReturnType<typeof mountPane>>): Promise<string> {
+	return (await ui.findAll({ type: 'Markdown' })).map((m) => String(m.props['text'])).join('\n');
+}
+
 /** Lets the query a drawing started settle and the redraw it asked for run. */
 async function settle(): Promise<void> {
 	for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -459,15 +464,19 @@ describe('the pane', () => {
 			await run($);
 			const ui = await mountPane($, surface);
 			await settle();
-			// The terminal draws the CLI banner, starting in galactic; Desktop the compact one.
-			const first = surface === 'terminal' ? '╭──' : '>';
-			expect((await exact(ui, first))?.props['color']).toBe(palette.galactic);
+			// The terminal draws the CLI banner, starting in galactic; Desktop the same banner as an SVG.
+			if (surface === 'terminal') expect((await exact(ui, '╭──'))?.props['color']).toBe(palette.galactic);
+			else expect(String((await ui.find({ type: 'Svg' }))?.props['source'])).toContain(palette.galactic);
 			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /✓ ok/ })).toBeDefined();
 			expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
+			// No monospace grid on Desktop: the labels sit in a column a share of the width wide, not padded with spaces.
+			const columns = (await ui.findAll({ type: 'Box' })).filter((b) => b.props['width'] === '25%');
+			if (surface === 'desktop') expect(columns.map((b) => b.text)).toContain('Connection');
+			else expect(columns).toEqual([]);
 		});
 
 		test(`the diagnose tab draws the capabilities on ${surface}`, async ($, on) => {
@@ -1211,8 +1220,13 @@ describe('the symbol explorer', () => {
 			expect(drill).toContain('"s2"');
 			expect(drill).not.toContain('getCallGraph');
 			expect(await ui.find({ type: 'Input', key: 'explore-query' })).toBeUndefined();
-			expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
-			expect(await reads(ui, /^Exported: yes$/)).toBe(true);
+			if (surface === 'desktop') {
+				expect(await tableText(ui)).toContain('| Signature | class Graph |');
+				expect(await tableText(ui)).toContain('| Exported | yes |');
+			} else {
+				expect(await reads(ui, /^Signature: class Graph$/)).toBe(true);
+				expect(await reads(ui, /^Exported: yes$/)).toBe(true);
+			}
 			expect(await reads(ui, /results for Graph/)).toBe(true);
 			expect(await ui.find({ type: 'Text', text: /b back · 1-6 switch tabs · r refresh · esc close/ })).toBeDefined();
 		});
@@ -1246,7 +1260,8 @@ describe('the symbol explorer', () => {
 			await ui.press({ key: 'section-usages' });
 			await settle();
 			expect(await reads(ui, /^2 usages in 1 file$/)).toBe(true);
-			expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
+			if (surface === 'desktop') expect(await tableText(ui)).toContain('| src/use.ts:4 | call |');
+			else expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
 			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: { label: '▸ Usages' } });
 
@@ -1254,8 +1269,13 @@ describe('the symbol explorer', () => {
 			await settle();
 			const risk = (await ui.findAll({ type: 'Text' })).find((t) => t.children.includes('✗ HIGH'));
 			expect(risk?.props['color']).toBe(palette.stellar);
-			expect(await reads(ui, /Renderer/)).toBe(true);
-			expect(await reads(ui, /1 test · 3 production/)).toBe(true);
+			if (surface === 'desktop') {
+				expect(await tableText(ui)).toMatch(/\| Renderer \| \S+ \w+ \|/);
+				expect(await tableText(ui)).toContain('| Tests | 1 test · 3 production |');
+			} else {
+				expect(await reads(ui, /Renderer/)).toBe(true);
+				expect(await reads(ui, /1 test · 3 production/)).toBe(true);
+			}
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
 
 			// A class has no call graph: core refuses getCallGraph for it, so it is neither asked for nor offered.
@@ -1263,7 +1283,8 @@ describe('the symbol explorer', () => {
 
 			await ui.press({ key: 'section-details' });
 			await settle();
-			expect(await reads(ui, /^Kind: class$/)).toBe(true);
+			if (surface === 'desktop') expect(await tableText(ui)).toContain('| Kind | class |');
+			else expect(await reads(ui, /^Kind: class$/)).toBe(true);
 		});
 
 		test(`back restores the results and the search field without a new search on ${surface}`, async ($, on) => {
@@ -1387,19 +1408,33 @@ describe('the stats tab', () => {
 			await settle();
 
 			expect((await ui.findAll({ type: 'Button' })).map((b) => String(b.props['label']))).toContain('▸ Stats');
-			const row = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
-			expect(await row('This session')).toContain('0 code_intel calls (0 ms)');
-			expect(await row('This session')).toContain('2 symbol-like searches');
-			expect(await row('This session')).toContain('main: 0 code_intel calls, 1 symbol-like search · subagents: 0 code_intel calls, 1 symbol-like search');
-			// Today: the two other sessions' entries and this session's own three searches.
-			expect(await row('Today')).toContain('4 code_intel calls (1.5 s)');
-			expect(await row('Today')).toContain('3 symbol-like searches');
-			expect(await row('Today')).toContain('2 literal searches');
-			expect(await row('Today')).toContain('57%');
-			expect(await row('Last 30 days')).toContain('8 code_intel calls (4.0 s)');
-			expect(await row('Last 30 days')).toContain('7 symbol-like searches');
-			expect(await row('Last 30 days')).toContain('4 literal searches');
-			expect(await row('Last 30 days')).toContain('53%');
+			if (surface === 'desktop') {
+				// No monospace grid on Desktop: a table under a head of words, the session's split as rows of its own.
+				// A row's text is its cells run together, in column order.
+				const cells = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
+				expect(await ui.find({ type: 'Text', text: 'code_intel calls' })).toBeDefined();
+				expect(await cells('This session')).toBe(['This session', '0 (0 ms)', '2', '1', '0%'].join(''));
+				expect(await cells('↳ main')).toBe(['↳ main', '0 (0 ms)', '1', '1', '0%'].join(''));
+				expect(await cells('↳ subagents')).toBe(['↳ subagents', '0 (0 ms)', '1', '0', '0%'].join(''));
+				expect(await cells('Today')).toBe(['Today', '4 (1.5 s)', '3', '2', '57%'].join(''));
+				expect(await cells('Last 30 days')).toBe(['Last 30 days', '8 (4.0 s)', '7', '4', '53%'].join(''));
+				expect((await exact(ui, '4 (1.5 s)'))?.props['color']).toBe(palette.cosmic);
+				expect((await exact(ui, '3'))?.props['color']).toBe(palette.solar);
+			} else {
+				const row = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
+				expect(await row('This session')).toContain('0 code_intel calls (0 ms)');
+				expect(await row('This session')).toContain('2 symbol-like searches');
+				expect(await row('This session')).toContain('main: 0 code_intel calls, 1 symbol-like search · subagents: 0 code_intel calls, 1 symbol-like search');
+				// Today: the two other sessions' entries and this session's own three searches.
+				expect(await row('Today')).toContain('4 code_intel calls (1.5 s)');
+				expect(await row('Today')).toContain('3 symbol-like searches');
+				expect(await row('Today')).toContain('2 literal searches');
+				expect(await row('Today')).toContain('57%');
+				expect(await row('Last 30 days')).toContain('8 code_intel calls (4.0 s)');
+				expect(await row('Last 30 days')).toContain('7 symbol-like searches');
+				expect(await row('Last 30 days')).toContain('4 literal searches');
+				expect(await row('Last 30 days')).toContain('53%');
+			}
 			expect(await reads(ui, /^Structural lookups: code_intel calls out of/)).toBe(true);
 			expect(await reads(ui, /^1-6 switch tabs · r refresh · esc close$/)).toBe(true);
 			expect(store.has(dayKey(daysBack(31), 'session-a'))).toBe(false);

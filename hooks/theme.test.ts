@@ -257,7 +257,7 @@ describe('banner', () => {
 		['the boxed header one column short of the banner', BANNER_WIDTH - 1, true, BOX],
 		['the boxed header at its width', BOX_WIDTH, true, BOX],
 		['one line one column short of the box', BOX_WIDTH - 1, true, 0],
-		['one line without a grid, however wide', 200, false, 0],
+		['one line without a grid, one column short of the banner', BANNER_WIDTH - 1, false, 0],
 	];
 	for (const [name, columns, grid, expected] of cases) {
 		test(`the header draws ${name}`, async ($, on) => {
@@ -265,6 +265,25 @@ describe('banner', () => {
 			const lines = (await ui.findAll({ type: 'Text' })).filter((t) => t.props['wrap'] === 'truncate').map((t) => t.text);
 			if (typeof expected === 'number') expect(lines).toHaveLength(expected);
 			else expect(lines).toEqual(expected);
+		});
+	}
+
+	test('without a grid the header draws the banner as an SVG from its width, filled along the gradient', async ($, on) => {
+		const ui = await draw($, on, 'desktop', (el) => header(el, BANNER_WIDTH, false, 'brand'));
+		const svg = await ui.find({ type: 'Svg' });
+		const source = String(svg?.props['source']);
+		expect(svg?.props['alt']).toBe('>_CONSTELLATION:// constellationdev.io');
+		expect(source.startsWith('<svg')).toBe(true);
+		expect(source).toContain('CONSTELLATIONDEV.IO');
+		expect(source).toContain(`stop-color="${palette.galactic}"`);
+		expect(source.length).toBeLessThanOrEqual(131072);
+	});
+
+	for (const to of ['theme', 'none'] as const) {
+		test(`without a grid the header stays one line under the ${to} scheme, which has no colors for an SVG`, async ($, on) => {
+			const ui = await draw($, on, 'desktop', (el) => header(el, 200, false, to));
+			expect(await ui.find({ type: 'Svg' })).toBeUndefined();
+			expect(await ui.find({ type: 'Text', text: '>_CONSTELLATION://' })).toBeDefined();
 		});
 	}
 
