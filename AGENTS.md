@@ -323,3 +323,7 @@ constellation index --full --force    # Force reindex
 | `API_UNREACHABLE` | API not running | Check network / API URL in `constellation.json` |
 
 See `skills/constellation-troubleshooting/references/error-codes.md` for full reference.
+
+## Worktrees
+
+Create git worktrees only under this repo's `.claude/worktrees/<branch-slug>` (already gitignored), e.g. `git worktree add .claude/worktrees/feat-x -b feat/x origin/main`. Never create them outside the repo (e.g. sibling `../constellation-<name>-<branch>` folders) or in a `.worktrees/` directory.
