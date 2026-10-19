@@ -7,7 +7,7 @@ While Constellation's MCP server provides raw code intelligence capabilities, th
 | Feature | Benefit |
 |---------|---------|
 | **Slash Commands** | Quick access to common workflows |
-| **Contextual Skills** | Claude automatically loads relevant knowledge — including proactive impact analysis before risky changes |
+| **Contextual Skills** | Claude automatically loads relevant knowledge, including proactive impact analysis before risky changes |
 | **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, in the search tools' descriptions, and before symbol-like searches inside indexed projects, and adds a one-line `code_intel` hint to the result of a symbol search |
 
 ## Features
@@ -18,9 +18,9 @@ Execute powerful analysis with simple slash commands:
 
 | Command | Description |
 |---------|-------------|
-| `/constellation:status` | Check API connectivity and project indexing status |
+| `/constellation:status` | Check API connectivity and authentication with a `ping` (no index details) |
 | `/constellation:diagnose` | Quick health check for connectivity and authentication |
-| `/constellation:impact <symbol> <file>` | Analyze blast radius before changing a symbol |
+| `/constellation:impact <symbol> [file-path]` | Analyze blast radius before changing a symbol |
 | `/constellation:deps <file> [--reverse]` | Map dependencies or find what depends on a file |
 | `/constellation:unused` | Discover orphaned exports and dead code |
 | `/constellation:architecture` | Get a high-level overview of your codebase structure |
@@ -97,7 +97,7 @@ The hooks above come from a hooks module (`hooks/register.ts`) that Claude Code 
 - **`/constellation` command:** a pane with Status, Diagnose, Deps, Unused, Explore and Stats tabs (keys `1` to `6`, `r` to refresh, `Esc` to close), run as `/constellation [status|diagnose|deps <file>|unused [kind]|explore [query]|stats]`. The Stats tab shows the [adoption counter](#adoption-counter) for this session, today and the last 30 days, all three read at the same moment (Refresh reads them again); it sends no query and opens without a key or an indexed project. It starts no model turn and works while Claude is mid-turn. Where the session cannot draw a pane (for example VS Code), it answers with a few lines of text instead. The Markdown `/constellation:*` commands remain.
 - **Layout:** the pane opens with the Constellation banner in the CLI's gradient, then the project name with the index's commit and age, the tabs with a one-line description, labeled rows, and a line naming the keys. The header follows the pane's width: the full banner from 72 columns, a smaller boxed header from 23, and one line below that or in the Desktop app.
 - **Project picker:** run from a folder that holds several Constellation projects (such as a monorepo root), the pane lists them, one per row with when each was indexed, its languages and its file count. Press a row's number (or Enter on the first) to open it. The pick is remembered for that folder across sessions; `p` (switch project) in the pane's header forgets it and shows the list again.
-- **Colors:** the `colors` option, set with `/config` or `claude plugin configure constellation`. `brand` (the default) uses the Constellation palette and switches to Claude Code's own theme colors on light, ANSI and color-blind themes; `theme` always uses Claude Code's theme colors; `none` draws no color. Every status also carries a word and a symbol, so no setting loses information.
+- **Colors:** the `colors` option, set with `/config` or `claude plugin configure constellation`, colors the `/constellation` pane, the `code_intel` tool rows and the lines above the prompt. `brand` (the default) uses the Constellation palette; on light themes only gold and green change, to Claude Code's warning and success colors, and ANSI and color-blind themes get Claude Code's theme colors. `theme` always uses Claude Code's theme colors; `none` draws no color. Every status also carries a word and a symbol, so no setting loses information.
 - **Impact gate:** the `impactGate` option, set with `/config` or `claude plugin configure constellation`, is `off` by default. `dialog` asks you before an edit Claude Code would run without asking, to a file whose impact is at or above `impactThreshold`, offering Proceed, Proceed and don't ask again for this file, or Cancel; an edit already headed to the permission prompt gets a one-line impact summary beside it instead. In auto mode, where such an edit goes to the auto-mode classifier rather than to you, both `dialog` and `native` ask you first, and the classifier still decides after you choose Proceed. `native` sends that edit to Claude Code's own permission prompt, with the summary as a toast. `require-analysis` refuses Claude's first edit to such a file once, with the impact report as the reason, unless Claude already ran a `code_intel` impact query (`impactAnalysis`, `traceSymbolUsage` or `getDependents`) naming the file or a symbol its dependents import; the retry goes through. It is the mode for CI and headless runs, where no one can answer a dialog or a prompt. `impactThreshold` is `high` (the default) or `critical`. Dependents come from the last indexed commit, so a branch with unindexed changes can show fewer or more than the working tree has. Counts can also fall short where imports go through `tsconfig` path aliases or `export *` barrels. Any failure to read the impact, or a lookup that takes more than 3 seconds, lets the edit through; in `require-analysis` that edit was the file's one check, so later edits to it go through as well.
 - **Index freshness:** when the index is behind your checkout or was taken at another commit, a line shows above the prompt, for example `✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind · indexed 2h ago`, with the brand mark in blue. A failed `ping` shows its error and the next step instead. Nothing is shown when the index matches HEAD. The check runs at session start, after Claude runs a git commit, pull, checkout, merge or rebase, when the working directory changes and every 5 minutes. A session that cannot draw gets one log line.
 - **Tool rows:** `code_intel` calls and results in the transcript get compact rows, for example `✦ >_CONSTELLATION://CODE_INTEL · impactAnalysis · constellation-core` and `✗ HIGH · 23 dependents · 140 ms · as of abc1234`. The result row summarizes what came back; an error shows its headline and the next step, for example `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`. An interrupted call, a result too large to read and a failure without an error code keep Claude Code's own row. Colors follow the `colors` option. With `--verbose`, Claude Code's own drawing also shows under the row.
@@ -149,11 +149,10 @@ claude plugin install constellation@constellation-plugins --scope project
 ```
 > /constellation:status
 
-Status: Connected
-Project: my-awesome-app
-Files Indexed: 1,247
-Symbols: 8,932
-Languages: TypeScript, JavaScript
+✦ >_CONSTELLATION://CODE_INTEL · status
+Connection   ✓ ok
+Auth         ✓ ok
+ℹ Run /constellation:diagnose to check the project's index.
 ```
 
 ### Analyze Before Refactoring
@@ -161,15 +160,18 @@ Languages: TypeScript, JavaScript
 ```
 > /constellation:impact validateUser src/auth/validator.ts
 
-Symbol: validateUser (function)
-Risk Level: MEDIUM
-Files Affected: 12
-Symbols Affected: 34
-Impacted Test Files: 3
-
-Recommendations:
-- Update unit tests in auth.spec.ts
-- Check integration with UserController
+✦ >_CONSTELLATION://CODE_INTEL · impact
+validateUser · function · src/auth/validator.ts:18
+Risk         ⚠ MEDIUM · exported and called from the auth and user modules
+Scope        12 files · 9 direct dependents · exported
+Tests        3 test files · 9 production files
+Dependents
+  • login · function · src/auth/login.ts:42
+  • UserController · class · src/users/user.controller.ts:15
+  ...
+Recommendations
+  • Update unit tests in auth.spec.ts
+  • Check integration with UserController
 ```
 
 ### Find Dead Code
@@ -177,12 +179,13 @@ Recommendations:
 ```
 > /constellation:unused --kind function
 
-Found 7 orphaned functions:
-├── src/utils/legacy.ts
-│   ├── formatLegacyDate (line 23)
-│   └── parseLegacyConfig (line 45)
-├── src/helpers/deprecated.ts
-│   └── oldValidation (line 12)
+✦ >_CONSTELLATION://CODE_INTEL · unused
+7 unused exports · 7 function
+src/utils/legacy.ts · 2
+  • formatLegacyDate · function · line 31 · No external references · confidence 0.9
+  • parseLegacyConfig · function · line 58 · No external references · confidence 0.9
+src/helpers/deprecated.ts · 1
+  • oldValidation · function · line 20 · No external references · confidence 0.8
 ...
 ```
 
@@ -191,17 +194,17 @@ Found 7 orphaned functions:
 ```
 > /constellation:deps src/services/payment.service.ts
 
-Dependencies (12):
-├── Internal (8)
-│   ├── src/models/payment.model.ts
-│   ├── src/utils/currency.ts
-│   └── ...
-└── External (4)
-    ├── stripe
-    ├── lodash
-    └── ...
-
-No circular dependencies detected.
+✦ >_CONSTELLATION://CODE_INTEL · deps
+src/services/payment.service.ts · 8 internal · 4 external
+Internal
+  • src/models/payment.model.ts · Payment, PaymentStatus
+  • src/utils/currency.ts · formatCurrency
+  ...
+External
+  • stripe
+  • lodash
+  ...
+Cycles       ✓ none
 ```
 
 ## Troubleshooting
@@ -211,14 +214,14 @@ No circular dependencies detected.
 | Issue | Solution |
 |-------|----------|
 | `AUTH_ERROR` | Check `CONSTELLATION_ACCESS_KEY` is set correctly, use `constellation auth` CLI command to set |
-| `PROJECT_NOT_INDEXED` | Run `constellation index --full` in your project |
+| `PROJECT_NOT_INDEXED` | Run `constellation index` in your project |
 | Commands not appearing | Restart Claude Code or check plugin path |
 
 ## Documentation
 
-- [Constellation Documentation](https://docs.constellationdev.io) — Full platform documentation
-- [MCP Server](https://github.com/shiftinbits/constellation-mcp) — Underlying MCP server
-- [Claude Code Plugins](https://docs.anthropic.com/claude-code/plugins) — Plugin development guide
+- [Constellation Documentation](https://docs.constellationdev.io): Full platform documentation
+- [MCP Server](https://github.com/shiftinbits/constellation-mcp): Underlying MCP server
+- [Claude Code Plugins](https://docs.anthropic.com/claude-code/plugins): Plugin development guide
 
 ## License
 

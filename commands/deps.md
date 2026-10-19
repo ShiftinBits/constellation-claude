@@ -26,11 +26,22 @@ const [deps, circles] = await Promise.all([
 return { dependencies: deps, circularDependencies: circles };
 ```
 
-Present:
-1. **Summary**: Count of internal vs external dependencies
-2. **Internal Dependencies**: Each file and what symbols are imported from it
-3. **External Packages**: List of npm packages used
-4. **Circular Dependencies**: If any cycles detected, show severity and the cycle path
+Present, starting with the brand line (values on one row joined with ` · `):
+
+```
+✦ >_CONSTELLATION://CODE_INTEL · deps
+<file-path> · <n> internal · <m> external
+Internal
+  • <file> · <symbols imported from it>
+External
+  • <package>
+Cycles       ✓ none
+```
+
+1. **Summary**: count of internal vs external dependencies, on the line under the brand line
+2. **Internal**: each file and what symbols are imported from it
+3. **External**: the packages used
+4. **Cycles**: `✓ none`, or for each cycle found `✗ <severity> · a.ts ▸ b.ts ▸ a.ts` (the severity and the cycle path)
 
 **For dependents (with --reverse flag):**
 
@@ -41,9 +52,20 @@ const result = await api.getDependents({ filePath: "$1", depth: 2 });
 return result;
 ```
 
-Present:
-1. **Summary**: How many files depend on this one
-2. **Dependents**: Each file and what it imports from this file
-3. **Note**: Suggest reviewing these files if planning changes
+Present, starting with the brand line (values on one row joined with ` · `):
+
+```
+✦ >_CONSTELLATION://CODE_INTEL · deps
+<file-path> · <n> dependent files
+Dependents
+  • <file> · <symbols it imports from this file>
+ℹ Review these files before changing <file-path>.
+```
+
+1. **Summary**: how many files depend on this one, on the line under the brand line
+2. **Dependents**: each file and what it imports from this file
+3. **Note**: suggest reviewing these files if planning changes
 
 Highlight any circular dependencies as potential issues to address.
+
+**If error**, report it under the brand line as `✗ <error.code> · <headline> · <next step>`: the headline is error.message without its `[CODE]` prefix, the next step the first command in error.guidance, with any other guidance indented below.

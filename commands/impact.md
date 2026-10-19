@@ -1,6 +1,6 @@
 ---
 description: Analyze the impact of changing a symbol or file
-argument-hint: "<symbol-name> <file-path>"
+argument-hint: "<symbol-name> [file-path]"
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
@@ -25,14 +25,25 @@ const result = await api.impactAnalysis({
 return result;
 ```
 
-**If successful**, present:
-1. **Symbol**: Name, kind (function/class/etc), and location
-2. **Risk Assessment**: Risk level from result.data.breakingChangeRisk.riskLevel (low/medium/high/critical) and contributing factors
-3. **Impact Scope**: Files and dependents affected from result.data.summary (impactedFileCount, directDependentCount), whether it's exported (result.data.symbol.isExported)
-4. **Direct Dependents**: Top 10 from result.data.directDependents
-5. **Test Exposure**: Impacted test files vs production files from result.data.summary (testFileCount, productionFileCount)
-6. **Recommendations**: From result.data.breakingChangeRisk.recommendations
+**If successful**, report in this layout, starting with the brand line. Values on one row are joined with ` · `:
+
+```
+✦ >_CONSTELLATION://CODE_INTEL · impact
+<name> · <kind> · <filePath>:<line>
+Risk         <risk> · <one-line rationale from result.data.breakingChangeRisk.factors>
+Scope        <impactedFileCount> files · <directDependentCount> direct dependents · <exported | not exported>
+Tests        <testFileCount> test files · <productionFileCount> production files
+Dependents
+  • <name> · <kind> · <filePath>:<line>   (top 10 from result.data.directDependents)
+Recommendations
+  • <each of result.data.breakingChangeRisk.recommendations>
+```
+
+- **Symbol**: name, kind and location from result.data.symbol
+- **Risk**: result.data.breakingChangeRisk.riskLevel as a glyph and an uppercase word: `✓ LOW`, `⚠ MEDIUM`, `✗ HIGH`, `✗ CRITICAL`
+- **Scope**: from result.data.summary (impactedFileCount, directDependentCount) and result.data.symbol.isExported
+- **Tests**: impacted test files vs production files from result.data.summary (testFileCount, productionFileCount)
 
 **If high or critical risk**, emphasize caution and suggest reviewing dependents before making changes.
 
-**If error**, explain the error and provide guidance from the error response.
+**If error**, report it under the brand line as `✗ <error.code> · <headline> · <next step>`: the headline is error.message without its `[CODE]` prefix, the next step the first command in error.guidance (for example `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`), with any other guidance indented below.
