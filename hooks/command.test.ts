@@ -1818,6 +1818,24 @@ describe('registration', () => {
 		expect(codes).toEqual(['return await api.ping()']);
 	});
 
+	test('with showFreshness off and the key already set, nothing is pinged and git never runs', { options: { showFreshness: false } }, async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { key: STORED_KEY, ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		await clock.advance(TICK);
+		expect(codes).toEqual([]);
+		expect(revParses()).toBe(0);
+	});
+
+	test("with showFreshness off, a stored key's connection check still runs, with no git after it", { options: { showFreshness: false } }, async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		await clock.advance(TICK);
+		expect(codes).toEqual(['return await api.ping()']);
+		expect(revParses()).toBe(0);
+	});
+
 	test('with the key already set, an AUTH_ERROR ping does not reload the plugins', async ($, on) => {
 		const { clock, codes } = storedKeyWorld(on, { key: STORED_KEY, ping: failure('AUTH_ERROR', 'Bad key') });
 		const reloads: string[] = [];

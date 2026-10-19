@@ -1,4 +1,4 @@
-import type { ElementTable, On, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
+import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
 import { badge, brandMark, branded, forTheme, status } from './theme';
@@ -49,6 +49,8 @@ let logged = false;
 /** The latest recheck; an older one that finishes after a newer started drops its result. */
 let seq = 0;
 let timer: Timer | undefined;
+/** The `showFreshness` option. Off, no project is tracked, so no git runs and no line shows. */
+let enabled = true;
 
 /** How long ago `iso` was: "just now", "5m ago", "2h ago" or "3d ago". Undefined when `iso` is not a date. */
 function age(iso: string, now: number): string | undefined {
@@ -224,9 +226,17 @@ export async function observeEnvelope(
 	await compare(before, run, invalidate, log);
 }
 
-/** Tracks the project at `at`. A different root drops what was known about the last one; true when it changed. */
+/** Whether the `showFreshness` option is on. */
+export function showsFreshness(): boolean {
+	return enabled;
+}
+
+/**
+ * Tracks the project at `at`. A different root drops what was known about the
+ * last one; true when it changed. With `showFreshness` off nothing is tracked.
+ */
 export function track(at: string): boolean {
-	if (at === root) return false;
+	if (!enabled || at === root) return false;
 	root = at;
 	index = undefined;
 	local = undefined;
@@ -247,11 +257,12 @@ export function freshnessLine(now: number): { view: FreshnessView; text: string 
 }
 
 /**
- * Starts the indicator over. A Bash call that ran
- * a git commit, pull, checkout, merge or rebase compares the checkout again;
- * the call's result goes back untouched and does not wait for git.
+ * Starts the indicator over and keeps the `showFreshness` option (an unset
+ * value counts as on). A Bash call that ran a git commit, pull, checkout,
+ * merge or rebase compares the checkout again; the call's result goes back
+ * untouched and does not wait for git. With the option off no hook is registered.
  */
-export function registerFreshness(on: On): void {
+export function registerFreshness(on: On, options: PluginOptions): void {
 	timer?.cancel();
 	timer = undefined;
 	index = undefined;
@@ -260,6 +271,8 @@ export function registerFreshness(on: On): void {
 	root = undefined;
 	logged = false;
 	seq = 0;
+	enabled = options.showFreshness !== false;
+	if (!enabled) return;
 
 	on('tool.call', { tool: /^Bash$/ }, async ($, e, next) => {
 		const r = await next(e);

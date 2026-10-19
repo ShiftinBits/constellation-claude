@@ -120,7 +120,7 @@ function load(options: PluginOptions) {
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On);
-	registerFreshness(capture as unknown as On);
+	registerFreshness(capture as unknown as On, options);
 	invalidations = 0;
 	gitRuns.length = 0;
 	configReads = 0;

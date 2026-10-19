@@ -1,6 +1,6 @@
-import type { On } from 'claude-code';
+import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
-import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
+import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, showsFreshness, startTicks, track } from './freshness';
 import { GIT, GIT_ENV, GIT_TIMEOUT_MS } from './lib';
 import { BRAND, palette } from './theme';
 
@@ -27,7 +27,7 @@ function fakeRun(answers: { head?: Answer; count?: Answer }) {
 }
 
 const onBranch = (name: string, sha = COMMIT): Answer => ({ exitCode: 0, stdout: `${sha}\nrefs/heads/${name}\n` });
-const fresh = () => registerFreshness((() => undefined) as unknown as On);
+const fresh = (options: Record<string, unknown> = {}) => registerFreshness((() => undefined) as unknown as On, options as PluginOptions);
 
 describe('freshnessView and freshnessText', () => {
 	const index = { asOfCommit: OLD, lastIndexedAt: TWO_HOURS_AGO };
@@ -121,6 +121,27 @@ describe('compareLocal', () => {
 	test('fails open when rev-parse fails or any run rejects', async () => {
 		expect(await compareLocal(fakeRun({ head: { exitCode: 128, stdout: '' } }).run, ROOT, OLD)).toBeUndefined();
 		expect(await compareLocal(fakeRun({ head: onBranch('main'), count: new Error('timeout') }).run, ROOT, OLD)).toBeUndefined();
+	});
+});
+
+describe('showFreshness', () => {
+	test('off, it registers no hook, tracks no project, runs no git and shows no line', async () => {
+		const events: string[] = [];
+		registerFreshness(((event: string) => void events.push(event)) as unknown as On, { showFreshness: false } as PluginOptions);
+		expect(events).toEqual([]);
+		expect(showsFreshness()).toBe(false);
+		expect(track(ROOT)).toBe(false);
+		const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
+		await observeEnvelope({ success: true, asOfCommit: OLD }, ROOT, git.run, () => undefined);
+		await recheck(git.run, () => undefined);
+		expect(git.calls).toEqual([]);
+		expect(freshnessLine(Date.now())).toBeUndefined();
+	});
+
+	test('unset, it counts as on', () => {
+		fresh();
+		expect(showsFreshness()).toBe(true);
+		expect(track(ROOT)).toBe(true);
 	});
 });
 
@@ -361,7 +382,7 @@ function bashHook(key: string | undefined = 'ak:test-key') {
 		if (event !== 'tool.call') return;
 		matcher = rest[0];
 		handler = rest[rest.length - 1] as BashHandler;
-	}) as unknown as On);
+	}) as unknown as On, {} as PluginOptions);
 	track(ROOT);
 	const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
 	let draws = 0;

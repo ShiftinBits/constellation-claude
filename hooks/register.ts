@@ -26,5 +26,5 @@ export const register: Register = (on, options) => {
 	registerPrImpact(on, options);
 	registerToolRows(on);
 	registerOnboarding(on);
-	registerFreshness(on);
+	registerFreshness(on, options);
 };

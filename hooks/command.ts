@@ -9,7 +9,7 @@ import type { Hit } from './explore';
 import { byFile, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
-import { observeEnvelope, recheck, startTicks, track } from './freshness';
+import { observeEnvelope, recheck, showsFreshness, startTicks, track } from './freshness';
 import { checkConnection, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, badge, branded, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
@@ -641,7 +641,8 @@ export function registerCommand(on: On): void {
 		} catch {
 			root = null;
 		}
-		if (root !== null) {
+		// With showFreshness off, a stored key's connection check still runs; nothing else does.
+		if (root !== null && (found !== undefined || showsFreshness())) {
 			const at = root;
 			const again = () => recheck(ports.run, ports.invalidate, ports.log);
 			track(at);
@@ -663,7 +664,7 @@ export function registerCommand(on: On): void {
 			}
 			try {
 				// Every five minutes git alone compares the checkout again; code_intel is never called on the timer.
-				startTicks(() => $.clock.every(5 * 60_000, () => void again().catch(() => undefined)));
+				if (showsFreshness()) startTicks(() => $.clock.every(5 * 60_000, () => void again().catch(() => undefined)));
 			} catch {
 				// No timer: git commands the agent runs and code_intel answers still update the indicator.
 			}
