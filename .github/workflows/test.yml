@@ -46,10 +46,11 @@ jobs:
       # writes the engine's type declarations (.claude-plugin/types/) and the
       # root tsconfig.json, both git-ignored, that tsc needs. /constellation is
       # a mod command, so it runs with no model call and no sign-in, and it
-      # checks that the hooks module loads.
+      # checks that the hooks module loads. Print mode refuses the command's own
+      # code_intel call unless the tool is allowed.
       - name: "Build: load the plugin and run /constellation"
         run: |
-          out="$(claude -p "/constellation status" --plugin-dir .)"
+          out="$(claude -p "/constellation status" --plugin-dir . --allowedTools mcp__constellation__code_intel)"
           echo "$out"
           grep -qF ">_CONSTELLATION://CODE_INTEL · Status" <<<"$out"
           test -f .claude-plugin/types/claude-code/index.d.ts
