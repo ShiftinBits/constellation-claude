@@ -54,7 +54,7 @@ API          ✓ ok
 Auth         ✗ error
 Index        · not checked
 
-✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth
+✗ AUTH_ERROR · Your access key wasn't accepted · const auth
 ```
 
 **PROJECT_NOT_INDEXED:**
@@ -65,7 +65,7 @@ API          ✓ ok
 Auth         ✓ ok
 Index        ⚠ not indexed
 
-✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · constellation index
+✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · const index
 ```
 
 **API_UNREACHABLE:**
@@ -88,7 +88,7 @@ API          ✓ ok
 Auth         · not checked
 Index        · not checked
 
-✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance>
+✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`)>
   <any other error.guidance lines, one per line>
 ```
 

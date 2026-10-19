@@ -10,26 +10,26 @@
 
 | Code | Message | Cause | Fix | Recoverable |
 |------|---------|-------|-----|-------------|
-| `AUTH_ERROR` | Authentication failed | Missing or invalid API key | Run `constellation auth` | No |
+| `AUTH_ERROR` | Authentication failed | Missing or invalid API key | Run `const auth` | No |
 | `AUTHZ_ERROR` | Authorization denied | Key lacks permission for this project | Check project access in web UI | No |
-| `AUTH_EXPIRED` | API key expired | Key has been rotated or revoked | Regenerate key in web UI, run `constellation auth` | No |
+| `AUTH_EXPIRED` | API key expired | Key has been rotated or revoked | Regenerate key in web UI, run `const auth` | No |
 
 ## Configuration Errors
 
 | Code | Message | Cause | Fix | Recoverable |
 |------|---------|-------|-----|-------------|
-| `NOT_CONFIGURED` | Project not configured | Missing or invalid `constellation.json` | Run `constellation init` | No |
+| `NOT_CONFIGURED` | Project not configured | Missing or invalid `constellation.json` | Run `const init` | No |
 | `API_UNREACHABLE` | Cannot reach API | Network error, server down, wrong URL | Check network, verify API URL in `constellation.json` | Yes |
 
 ## Project Errors
 
 | Code | Message | Cause | Fix | Recoverable |
 |------|---------|-------|-----|-------------|
-| `PROJECT_NOT_INDEXED` | Project needs indexing | Never indexed or index was cleared | Run `constellation index --full` | Yes* |
+| `PROJECT_NOT_INDEXED` | Project needs indexing | Never indexed or index was cleared | Run `const index --full` | Yes* |
 | `PROJECT_NOT_REGISTERED` | Project not found | Project ID not recognized by API | Verify project ID or check organization access | No |
 | `PROJECT_INACTIVE` | Project deactivated | Project has been deactivated | Reactivate in web UI | No |
-| `BRANCH_NOT_FOUND` | Branch not in index | Branch hasn't been indexed | Run `constellation index --full` on the branch | Yes* |
-| `STALE_INDEX` | Index outdated | Index is significantly behind current code | Run `constellation index --full --force` | Yes* |
+| `BRANCH_NOT_FOUND` | Branch not in index | Branch hasn't been indexed | Run `const index --full` on the branch | Yes* |
+| `STALE_INDEX` | Index outdated | Index is significantly behind current code | Run `const index --full --force` | Yes* |
 
 ## Query Errors
 

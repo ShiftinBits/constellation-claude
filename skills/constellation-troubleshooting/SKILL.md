@@ -29,7 +29,7 @@ Check error.code:
 - API_UNREACHABLE --> Connectivity section
 ```
 
-When you report an error to the user, start with `✦ >_CONSTELLATION://CODE_INTEL · <topic>` and put the error on one line as `✗ CODE · headline · next step`, for example `✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · constellation index`.
+When you report an error to the user, start with `✦ >_CONSTELLATION://CODE_INTEL · <topic>` and put the error on one line as `✗ CODE · headline · next step`, for example `✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · const index`. Write every CLI command with its `const` shorthand (`const auth`, `const index`), even where the error guidance spells out `constellation`.
 
 In the terminal and the desktop app, the Constellation onboarding band above the prompt offers **Sign in** and **Index this project** buttons (on Windows it names the command to run in a terminal instead). The manual steps below still apply.
 
@@ -71,7 +71,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 1. **Configure credentials:**
 
    ```bash
-   constellation auth
+   const auth
    ```
 
 2. **Check if access key is properly set:**
@@ -90,13 +90,13 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 
    ```bash
    cd /path/to/your/project
-   constellation index
+   const index
    ```
 
 2. **Force reindex if stale:**
 
    ```bash
-   constellation index --full --force
+   const index --full --force
    ```
 
 ## Connectivity Issues (API_UNREACHABLE)

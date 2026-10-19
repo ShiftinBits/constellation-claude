@@ -372,7 +372,7 @@ describe('readStoredKeyAtStart', () => {
 		const { ports, seen } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '\n' }) });
 		expect(await readStoredKeyAtStart(REPO, ports)).toBeUndefined();
 		expect(seen.invalidations).toBe(1);
-		expect(seen.logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run constellation auth']);
+		expect(seen.logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run const auth']);
 		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
@@ -681,8 +681,8 @@ describe('observeCodeIntel', () => {
 		resetOnboarding();
 		observeCodeIntel(errored('CWD_NOT_INDEXED'), true, () => undefined, log);
 		expect(logs).toEqual([
-			'✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run constellation auth',
-			'✦ >_CONSTELLATION://CODE_INTEL · Not set up for this project · run constellation init',
+			'✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run const auth',
+			'✦ >_CONSTELLATION://CODE_INTEL · Not set up for this project · run const init',
 		]);
 	});
 });
@@ -733,7 +733,7 @@ describe('band', () => {
 		const tree = draw('no-project');
 		const text = shown(tree);
 		expect(text).toContain('Not set up for this project');
-		expect(text).toContain('constellation init');
+		expect(text).toContain('const init');
 		expect(nodes(tree).find((n) => n.type === 'Link')?.props['href']).toBe('https://app.constellationdev.io');
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
@@ -931,7 +931,7 @@ describe('the band as a loaded plugin', () => {
 			answer.next = errored('PROJECT_NOT_INDEXED');
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run const auth']);
 		});
 
 		test(`on ${surfaces.join() || 'no surface'} a session with no key logs nothing at start, then one line for the agent's AUTH_ERROR`, async ($, on) => {
@@ -942,7 +942,7 @@ describe('the band as a loaded plugin', () => {
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run const auth']);
 		});
 	}
 
@@ -971,7 +971,7 @@ describe('the band as a loaded plugin', () => {
 });
 
 const CLI = '/usr/local/bin/constellation';
-const INIT_HINT = 'Connected. Run constellation init in this repo to set it up';
+const INIT_HINT = 'Connected. Run const init in this repo to set it up';
 const MANUAL = 'https://app.constellationdev.io/auth/cli?callback_port=5555&state=abc';
 
 /** Lets every chain of resolved promises a press started run to its end. */
@@ -1147,7 +1147,7 @@ describe('the Sign in button', () => {
 		expect(seen.envSet).toEqual([]);
 		const text = shown(await band.draw());
 		expect(text).toContain('Sign-in failed');
-		expect(text).toContain('Run constellation auth in a terminal');
+		expect(text).toContain('Run const auth in a terminal');
 	});
 
 	test('a new stored key sets the env, takes the band down and reloads only through after(0)', async () => {
@@ -1420,7 +1420,7 @@ describe('the Index button', () => {
 		expect(spawns).toEqual([]);
 		const text = shown(await band.draw());
 		expect(text).toContain("This project hasn't been indexed yet");
-		expect(text).toContain('Run constellation index in a terminal, in the project directory');
+		expect(text).toContain('Run const index in a terminal, in the project directory');
 	});
 
 	test('a missing CLI shows the install hint and spawns nothing', async () => {
@@ -1439,8 +1439,8 @@ describe('the Index button', () => {
 describe('with no /bin/sh (Windows)', () => {
 	test('the band names the command to run in a terminal and offers only Dismiss, so nothing can spawn', async () => {
 		for (const [code, step] of [
-			['AUTH_ERROR', 'Run constellation auth in a terminal'],
-			['PROJECT_NOT_INDEXED', 'Run constellation index in a terminal, in the project directory'],
+			['AUTH_ERROR', 'Run const auth in a terminal'],
+			['PROJECT_NOT_INDEXED', 'Run const index in a terminal, in the project directory'],
 		] as const) {
 			const { world, spawns } = buttonWorld(host().run);
 			const band = loadBand(new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
@@ -1454,13 +1454,13 @@ describe('with no /bin/sh (Windows)', () => {
 		}
 	});
 
-	test('a not set up band on Windows says to run constellation auth', async () => {
+	test('a not set up band on Windows says to run const auth', async () => {
 		const band = loadBand(new Map(), { fs: { exists: async () => false } });
 		const ports = fakePorts({ run: async () => ({ exitCode: 1, stdout: '' }) }).ports;
 		await readStoredKeyAtStart(REPO, { ...ports, exists: async (p) => p === `${REPO}/.git` });
 		const tree = await band.draw();
 		expect(shown(tree)).toContain("Not signed in");
-		expect(shown(tree)).toContain('Run constellation auth in a terminal');
+		expect(shown(tree)).toContain('Run const auth in a terminal');
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
 });

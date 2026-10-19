@@ -49,4 +49,5 @@ Whenever you present Constellation or `code_intel` results, follow the plugin's 
 - **Statuses:** a glyph and a lowercase word: `✓ ok`, `⏱ indexing`, `⚠ stale`, `✗ error`, `·` for unknown or not checked
 - **Separators:** join fields on one line with ` · `
 - **Risk:** `✓ LOW`, `⚠ MEDIUM`, `✗ HIGH`, `✗ CRITICAL`
-- **Errors:** `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`
+- **CLI commands:** always the `const` shorthand (`const auth`, `const index`), even when the error guidance spells out `constellation`
+- **Errors:** `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · const auth`

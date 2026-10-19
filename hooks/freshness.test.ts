@@ -79,7 +79,7 @@ describe('freshnessView and freshnessText', () => {
 
 	test('an error with no index reads code, headline and next step', () => {
 		const view = freshnessView(undefined, undefined, { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] });
-		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ✗ WEIRD · The graph melted · constellation index');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ✗ WEIRD · The graph melted · const index');
 	});
 });
 
@@ -334,7 +334,7 @@ describe('freshnessBand', () => {
 		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
 		expect(sep).toEqual({ children: ' · ' });
 		expect(code).toEqual({ children: [{ type: 'Text', props: { color: palette.stellar, children: '✗ WEIRD' } }] });
-		expect(step).toEqual({ dimColor: true, children: ' · constellation index' });
+		expect(step).toEqual({ dimColor: true, children: ' · const index' });
 	});
 
 	test('an error with no next step keeps the headline plain', () => {

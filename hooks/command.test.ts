@@ -397,8 +397,8 @@ describe('summarize', () => {
 
 	test('an error is the code, the message and the guidance', () => {
 		const s = summarize('status', { success: false, error: { code: 'AUTH_ERROR', message: 'Bad key', guidance: ['Run constellation auth'] } });
-		expect(s.lines).toEqual(["✗ Your access key wasn't accepted", '  Bad key', '', '  Next steps', '  1. constellation auth', '', '  Code   AUTH_ERROR']);
-		expect(s.explanation).toMatchObject({ title: "Your access key wasn't accepted", steps: ['constellation auth'], code: 'AUTH_ERROR' });
+		expect(s.lines).toEqual(["✗ Your access key wasn't accepted", '  Bad key', '', '  Next steps', '  1. const auth', '', '  Code   AUTH_ERROR']);
+		expect(s.explanation).toMatchObject({ title: "Your access key wasn't accepted", steps: ['const auth'], code: 'AUTH_ERROR' });
 		expect(s.error?.code).toBe('AUTH_ERROR');
 	});
 });
@@ -428,7 +428,7 @@ describe('command.run without a pane', () => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($);
 		expect(r.text?.split('\n').slice(0, 2)).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Status', "✗ Your access key wasn't accepted"]);
-		expect(r.text).toContain('  1. constellation auth');
+		expect(r.text).toContain('  1. const auth');
 		expect(r.text).toContain('  Code   AUTH_ERROR');
 	});
 
@@ -454,7 +454,7 @@ describe('command.run without a pane', () => {
 	test('an explore error answers with its guidance', async ($, on) => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($, 'explore Graph');
-		expect(r.text).toContain('  1. constellation auth');
+		expect(r.text).toContain('  1. const auth');
 	});
 
 	test('deps needs a file', async ($, on) => {
@@ -777,7 +777,7 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Text', text: '✗ error' })).toBeDefined();
 		expect((await exact(ui, "This project hasn't been indexed yet"))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'Not indexed'))?.props['dimColor']).toBe(true);
-		expect((await exact(ui, 'constellation index'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'const index'))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'PROJECT_NOT_INDEXED'))?.props['dimColor']).toBe(true);
 		expect(await ui.find({ type: 'Button', key: 'dep:x' })).toBeUndefined();
 	});
@@ -1405,7 +1405,7 @@ describe('the symbol explorer', () => {
 		world(on, { answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const ui = await openExplore($, 'terminal');
 		expect(await reads(ui, /Your access key wasn't accepted/)).toBe(true);
-		expect(await exact(ui, 'constellation auth')).toBeDefined();
+		expect(await exact(ui, 'const auth')).toBeDefined();
 	});
 
 	test('an error on the drill draws the guidance in the detail view', async ($, on) => {

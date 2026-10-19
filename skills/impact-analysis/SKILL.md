@@ -92,7 +92,7 @@ Next         <proceed | review the listed files | stage in N steps | add tests f
 5. **Tests**: impacted test files vs production files from `data.summary`
 6. **Next**: one concrete next step
 
-A failed call is reported as `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`.
+A failed call is reported as `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · const auth`.
 
 For high or critical risk, lead with the warning and offer to suggest a safer change order.
 

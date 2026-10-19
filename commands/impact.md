@@ -46,4 +46,4 @@ Recommendations
 
 **If high or critical risk**, emphasize caution and suggest reviewing dependents before making changes.
 
-**If error**, report it under the brand line as `✗ <error.code> · <headline> · <next step>`: the headline is error.message without its `[CODE]` prefix, the next step the first command in error.guidance (for example `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`), with any other guidance indented below.
+**If error**, report it under the brand line as `✗ <error.code> · <headline> · <next step>`: the headline is error.message without its `[CODE]` prefix, the next step the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`) (for example `✗ AUTH_ERROR · Your access key wasn't accepted · const auth`), with any other guidance indented below.

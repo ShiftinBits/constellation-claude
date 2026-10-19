@@ -365,10 +365,10 @@ describe('error row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountResult($, surface, `auth-${surface}`, errored(AUTH), true);
-			expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth`);
+			expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · const auth`);
 			expect(await line(ui)).not.toContain('code_intel');
 			expect((await exact(ui, '✗ AUTH_ERROR'))?.props['color']).toBe(palette.stellar);
-			expect((await exact(ui, 'constellation auth'))?.props['dimColor']).toBe(true);
+			expect((await exact(ui, 'const auth'))?.props['dimColor']).toBe(true);
 		}
 	});
 
@@ -388,7 +388,7 @@ describe('error row', () => {
 	test('an error envelope not marked as errored is an error row too', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'unmarked', JSON.stringify({ success: false, error: AUTH, time: 12 }));
-		expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth · 12 ms`);
+		expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · const auth · 12 ms`);
 	});
 
 	test('an errored call whose output is not an envelope keeps Claude Code row', async ($, on) => {

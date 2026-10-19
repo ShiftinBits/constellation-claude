@@ -41,13 +41,13 @@ const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
 
 /** What a sign-in that stored a new key says, before the reload. */
 const CONNECTED = 'Connected';
-const CONNECTED_NO_PROJECT = 'Connected. Run constellation init in this repo to set it up';
+const CONNECTED_NO_PROJECT = 'Connected. Run const init in this repo to set it up';
 
 /** A failed sign-in's line where the CLI said nothing, and the sign-in step where no `/bin/sh` runs (Windows). */
-const AUTH_IN_TERMINAL = 'Run constellation auth in a terminal';
+const AUTH_IN_TERMINAL = 'Run const auth in a terminal';
 
 /** An index press where no `constellation.json` sits at or above the session's directory, and the index step where no `/bin/sh` runs. */
-const INDEX_IN_PROJECT = 'Run constellation index in a terminal, in the project directory';
+const INDEX_IN_PROJECT = 'Run const index in a terminal, in the project directory';
 
 /** The band's states. The first that holds wins, in this order. */
 export type OnboardingState = 'not-set-up' | 'sign-in-again' | 'no-project' | 'not-registered' | 'not-indexed' | 'working';
@@ -163,11 +163,11 @@ type Notify = Pick<OnboardingPorts, 'invalidate'> & Partial<Pick<OnboardingPorts
 
 /** The one line a session that cannot draw the band gets, with the command to run. */
 const LOG_STEP: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
-	'not-set-up': 'run constellation auth',
-	'sign-in-again': 'run constellation auth',
-	'no-project': 'run constellation init',
+	'not-set-up': 'run const auth',
+	'sign-in-again': 'run const auth',
+	'no-project': 'run const init',
 	'not-registered': 'check projectId in constellation.json',
-	'not-indexed': 'run constellation index',
+	'not-indexed': 'run const index',
 };
 
 /** The states an error put up, which a later success takes down. */
@@ -676,7 +676,7 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 		el.Text({ wrap: 'truncate', children: [brandMark(el, view.tint), ' · ', badge(el, '', tone), ' ', el.Text({ bold: true, children: headline })] }),
 	];
 	if (view.state === 'no-project') {
-		rows.push(el.Text({ children: 'Run constellation init in a terminal, with the project ID from the web app:' }), el.Link({ href: WEB_APP }));
+		rows.push(el.Text({ children: 'Run const init in a terminal, with the project ID from the web app:' }), el.Link({ href: WEB_APP }));
 	}
 	if (view.state === 'not-registered') {
 		rows.push(el.Text({ children: 'Check projectId in constellation.json against the web app:' }), el.Link({ href: WEB_APP }));

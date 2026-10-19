@@ -27,11 +27,11 @@ Auth         ✓ ok
 
 | Error Code | Line |
 |------------|------|
-| `AUTH_ERROR` | `✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth` |
+| `AUTH_ERROR` | `✗ AUTH_ERROR · Your access key wasn't accepted · const auth` |
 | `PROJECT_NOT_REGISTERED` | `✗ PROJECT_NOT_REGISTERED · This project isn't registered with Constellation · check the project ID in constellation.json and your organization access` |
 | `PROJECT_INACTIVE` | `✗ PROJECT_INACTIVE · This project has been deactivated · check the project at app.constellationdev.io` |
 | `API_UNREACHABLE` | `✗ API_UNREACHABLE · Constellation's API can't be reached · check your network and the apiUrl in constellation.json` |
-| Other codes | `✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance>`, with any other guidance indented below |
+| Other codes | `✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`)>`, with any other guidance indented below |
 | Missing error object | `✗ INVALID_RESPONSE · Unexpected response structure · run /constellation:diagnose`, then the raw result |
 
 **If the tool call fails entirely**, report:
