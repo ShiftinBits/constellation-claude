@@ -181,7 +181,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 	};
 }
 
-const LINE = '>_CONSTELLATION://';
+const LINE = '✦ >_CONSTELLATION://CODE_INTEL ·';
 
 describe('turn summary line', () => {
 	test('two edits give one line with the union of their dependents and its test files', async () => {

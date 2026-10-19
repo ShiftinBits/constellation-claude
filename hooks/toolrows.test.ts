@@ -178,8 +178,8 @@ describe('call row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountUse($, surface, `use-${surface}`, { code: CALL_CODE, cwd: '/x/constellation-core' });
-			expect(await line(ui)).toBe('✦ code_intel · impactAnalysis, getDependents · constellation-core');
-			expect((await exact(ui, '✦ code_intel'))?.props['color']).toBe(palette.nebula);
+			expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL · impactAnalysis, getDependents · constellation-core');
+			expect((await exact(ui, '✦ >_CONSTELLATION://CODE_INTEL'))?.props['color']).toBe(palette.nebula);
 			expect((await exact(ui, 'constellation-core'))?.props['dimColor']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: 'fallthrough' })).toBeUndefined();
 		}
@@ -189,7 +189,7 @@ describe('call row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountUse($, surface, `bare-${surface}`, { code: 'return 1' });
-			expect(await line(ui)).toBe('✦ code_intel');
+			expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL');
 		}
 	});
 
@@ -197,7 +197,7 @@ describe('call row', () => {
 		world(on);
 		const props = { ...useProps('running', { code: 'return await api.ping()', cwd: '/x/app' }), isRunning: true };
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'ToolUse', requestId: 'running', props });
-		expect(await line(ui)).toBe('✦ code_intel · ping · app · running');
+		expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ping · app · running');
 		expect((await exact(ui, 'running'))?.props['dimColor']).toBe(true);
 	});
 
@@ -432,7 +432,7 @@ describe('colors', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const use = await mountUse($, surface, `plain-${surface}`, { code: CALL_CODE, cwd: '/x/app' });
-			expect(await line(use)).toBe('✦ code_intel · impactAnalysis, getDependents · app');
+			expect(await line(use)).toBe('✦ >_CONSTELLATION://CODE_INTEL · impactAnalysis, getDependents · app');
 			const result = await mountResult($, surface, `plain-${surface}`, reply(IMPACT));
 			expect(await line(result)).toBe('✗ HIGH · 8 dependents · 1 test file · 140 ms · as of 0123456');
 			for (const ui of [use, result]) {
@@ -522,7 +522,7 @@ describe('cache', () => {
 	test('a result row names the project its call row stored', async () => {
 		resetToolRows();
 		const rows = direct();
-		expect(await rows.use('stored', '/x/app')).toBe('✦ code_intel · ping · app');
+		expect(await rows.use('stored', '/x/app')).toBe('✦ >_CONSTELLATION://CODE_INTEL · ping · app');
 		expect(await rows.result('stored')).toBe('✓ connected · app · 140 ms · as of 0123456');
 	});
 

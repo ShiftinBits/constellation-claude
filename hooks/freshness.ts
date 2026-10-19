@@ -1,7 +1,7 @@
 import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
-import { forTheme, status } from './theme';
+import { brandMark, branded, forTheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /** Runs a command, as `$.process.run`. */
@@ -95,34 +95,38 @@ function stateParts(view: Exclude<FreshnessView, { kind: 'error' }>, now: number
 export function freshnessText(view: FreshnessView, now: number): string {
 	if (view.kind === 'error') {
 		const ex = explain(view.failure);
-		return ['✦ ' + view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP);
+		return branded([view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP));
 	}
 	const { head, since } = stateParts(view, now);
-	return `✦ ${[head, ...(since === undefined ? [] : [since])].join(SEP)}`;
+	return branded([head, ...(since === undefined ? [] : [since])].join(SEP));
 }
 
 /**
- * The indicator as one row: the mark and state words painted (gold for behind
- * and mismatch, red for an error), the index age dim. An
- * error's headline is primary text and its next step dim. `el` is the table
- * from `$.ui.resolve(e)`.
+ * The indicator as one row: the brand mark in blue, then the state words in
+ * primary text and the index age dim. An error's code is red, its headline
+ * primary text and its next step dim. `el` is the table from `$.ui.resolve(e)`.
  */
 export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Scheme, now: number): RenderElement {
-	const tone = forTheme(status(view.kind === 'error' ? 'error' : 'stale'), tint);
-	const painted = (text: string) => el.Text({ ...(tone.color === undefined ? {} : { color: tone.color }), children: text });
 	const dim = (text: string) => el.Text({ dimColor: true, children: text });
 	if (view.kind === 'error') {
+		const tone = forTheme(status('error'), tint);
 		const ex = explain(view.failure);
 		const step = ex.steps[0];
 		return el.Text({
 			wrap: 'truncate',
-			children: [painted(`✦ ${view.failure.code}`), el.Text({ children: `${SEP}${ex.title}` }), ...(step === undefined ? [] : [dim(`${SEP}${step}`)])],
+			children: [
+				brandMark(el, tint),
+				SEP,
+				el.Text({ ...(tone.color === undefined ? {} : { color: tone.color }), children: view.failure.code }),
+				`${SEP}${ex.title}`,
+				...(step === undefined ? [] : [dim(`${SEP}${step}`)]),
+			],
 		});
 	}
 	const { head, since } = stateParts(view, now);
 	return el.Text({
 		wrap: 'truncate',
-		children: [painted(`✦ ${head}`), ...(since === undefined ? [] : [dim(`${SEP}${since}`)])],
+		children: [brandMark(el, tint), `${SEP}${head}`, ...(since === undefined ? [] : [dim(`${SEP}${since}`)])],
 	});
 }
 

@@ -2,6 +2,7 @@ import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { type Blast, blastRadius } from './blast';
 import { type GhPrCreate, ghPrCreate } from './classify';
 import { absolute, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
+import { branded } from './theme';
 
 /** What happens before `gh pr create`. */
 type Mode = 'require' | 'inform' | 'off';
@@ -145,7 +146,7 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 			const r = await next(e);
 			if (r.deny !== undefined || r.isError) return r;
 			const section = await pending;
-			if (section !== undefined) $.ui.log(section);
+			if (section !== undefined) $.ui.log(`${branded('PR impact')}\n${section}`);
 			return r;
 		}
 

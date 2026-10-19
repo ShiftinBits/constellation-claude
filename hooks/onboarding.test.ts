@@ -373,7 +373,7 @@ describe('readStoredKeyAtStart', () => {
 		const { ports, seen } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '\n' }) });
 		expect(await readStoredKeyAtStart(REPO, ports)).toBeUndefined();
 		expect(seen.invalidations).toBe(1);
-		expect(seen.logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
+		expect(seen.logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · not signed in: run constellation auth']);
 		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
 	});
 
@@ -548,15 +548,15 @@ describe('connect', () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const { ports, seen, timers, fire } = fakePorts();
-		await connect(KEY, ports, '✦ Constellation connected');
+		await connect(KEY, ports, '✦ >_CONSTELLATION://CODE_INTEL · Connected');
 		expect(seen.envSet.map(isKey)).toEqual([true]);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Connected']);
 		expect(seen.reloads).toBe(0);
 		expect(timers).toHaveLength(1);
 		await fire();
 		expect(seen.reloads).toBe(1);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Connected']);
 	});
 });
 
@@ -682,8 +682,8 @@ describe('observeCodeIntel', () => {
 		resetOnboarding();
 		observeCodeIntel(errored('CWD_NOT_INDEXED'), true, () => undefined, log);
 		expect(logs).toEqual([
-			'>_CONSTELLATION:// sign-in failed: run constellation auth',
-			'>_CONSTELLATION:// not set up for this project: run constellation init',
+			'✦ >_CONSTELLATION://CODE_INTEL · sign-in failed: run constellation auth',
+			'✦ >_CONSTELLATION://CODE_INTEL · not set up for this project: run constellation init',
 		]);
 	});
 });
@@ -944,7 +944,7 @@ describe('the band as a loaded plugin', () => {
 			answer.next = errored('PROJECT_NOT_INDEXED');
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['>_CONSTELLATION:// sign-in failed: run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · sign-in failed: run constellation auth']);
 		});
 
 		test(`on ${surfaces.join() || 'no surface'} a session with no key logs nothing at start, then one line for the agent's AUTH_ERROR`, async ($, on) => {
@@ -955,7 +955,7 @@ describe('the band as a loaded plugin', () => {
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · not signed in: run constellation auth']);
 		});
 	}
 
@@ -984,7 +984,7 @@ describe('the band as a loaded plugin', () => {
 });
 
 const CLI = '/usr/local/bin/constellation';
-const INIT_HINT = '✦ Constellation connected. Run constellation init in this repo to set it up';
+const INIT_HINT = '✦ >_CONSTELLATION://CODE_INTEL · Connected. Run constellation init in this repo to set it up';
 const MANUAL = 'https://app.constellationdev.io/auth/cli?callback_port=5555&state=abc';
 
 /** Lets every chain of resolved promises a press started run to its end. */
@@ -1174,10 +1174,10 @@ describe('the Sign in button', () => {
 		expect(timers).toHaveLength(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
 		// The toast goes out before the reload, which unloads the module.
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Connected']);
 		await fire();
 		expect(seen.reloads).toBe(1);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Connected']);
 	});
 
 	test('a new key with no project toasts the init hint before the reload, and only that', async () => {
@@ -1329,7 +1329,7 @@ describe('the Index button', () => {
 		await settle();
 		expect(seen.pings).toEqual(['return await api.ping()']);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		expect(seen.toasts).toEqual(['✦ Constellation indexed this project']);
+		expect(seen.toasts).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Indexed this project']);
 	});
 
 	test('an exit 0 with PROJECT_NOT_INDEXED stays not indexed, with the last line', async () => {

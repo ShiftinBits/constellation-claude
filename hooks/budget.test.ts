@@ -419,7 +419,7 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', { text: JSON.stringify({ success: true, result: {}, asOfCommit: old }) });
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(0)?.text).toBe('✦ index 3 commits behind');
+		expect(freshnessLine(0)?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind');
 		expect(invalidations).toBe(1);
 	});
 
@@ -477,7 +477,7 @@ describe('freshness band above the prompt', () => {
 	test('behind shows the state and index age above a lower mod element', async () => {
 		const m = await behind();
 		const tree = await m.draw();
-		expect(flat(tree)).toBe('✦ index 3 commits behind · indexed 2h ago beneath');
+		expect(flat(tree)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago beneath');
 		expect(Reflect.get(Reflect.get(tree, 'props'), 'flexDirection')).toBe('column');
 		expect(configReads).toBe(1);
 	});
@@ -485,7 +485,7 @@ describe('freshness band above the prompt', () => {
 	test('draws the row alone when nothing draws beneath', async () => {
 		const m = await behind();
 		for (const none of [{ type: 'engine', ref: 0 }, { type: 'Box', props: { children: [] } }]) {
-			expect(flat(await m.draw(none))).toBe('✦ index 3 commits behind · indexed 2h ago');
+			expect(flat(await m.draw(none))).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
 		}
 	});
 
@@ -494,7 +494,7 @@ describe('freshness band above the prompt', () => {
 		track(PROJECT);
 		const failed = { success: false, error: { code: 'API_UNREACHABLE', message: 'unreachable' } };
 		await m.program('main', 'return await api.ping()', { text: JSON.stringify(failed) });
-		expect(shown(await m.draw())).toContain('✦ API_UNREACHABLE');
+		expect(shown(await m.draw())).toContain('API_UNREACHABLE');
 	});
 
 	test('yields to a survey', async () => {
@@ -528,7 +528,7 @@ describe('freshness band above the prompt', () => {
 		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, 'src/lib');
 		await settle();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(Date.now())?.text).toBe('✦ index 3 commits behind · indexed 2h ago');
+		expect(freshnessLine(Date.now())?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
 	});
 
 	test("an agent's call outside any project runs no git", async () => {
@@ -543,7 +543,7 @@ describe('freshness band above the prompt', () => {
 
 	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
 		const m = await behind({ cannotDraw: true });
-		expect(logLines).toEqual(['✦ index 3 commits behind · indexed 2h ago']);
+		expect(logLines).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago']);
 		await m.program('main', 'return await api.ping()', staleAnswer('ab' + OLD.slice(2)));
 		await settle();
 		expect(logLines).toHaveLength(1);

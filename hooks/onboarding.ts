@@ -12,7 +12,7 @@ import type {
 import { freshnessBand, freshnessLine } from './freshness';
 import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
-import { PROMPT, badge, buttonRow, forTheme, onboarding, scheme } from './theme';
+import { badge, branded, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
 
 /** The access key format the CLI writes: `ak:` and 32 hex digits. */
@@ -41,8 +41,8 @@ const INSTALL_COMMAND = 'npm i -g @constellationdev/cli';
 const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
 
 /** What a sign-in that stored a new key says, before the reload. */
-const CONNECTED = '✦ Constellation connected';
-const CONNECTED_NO_PROJECT = '✦ Constellation connected. Run constellation init in this repo to set it up';
+const CONNECTED = branded('Connected');
+const CONNECTED_NO_PROJECT = branded('Connected. Run constellation init in this repo to set it up');
 
 /** A failed sign-in's line where the CLI said nothing, and the sign-in step where no `/bin/sh` runs (Windows). */
 const AUTH_IN_TERMINAL = 'Run `constellation auth` in a terminal';
@@ -164,11 +164,11 @@ type Notify = Pick<OnboardingPorts, 'invalidate'> & Partial<Pick<OnboardingPorts
 
 /** The one line a session that cannot draw the band gets, with the command to run. */
 const LOG_LINE: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
-	'not-set-up': `${PROMPT} not signed in: run constellation auth`,
-	'sign-in-again': `${PROMPT} sign-in failed: run constellation auth`,
-	'no-project': `${PROMPT} not set up for this project: run constellation init`,
-	'not-registered': `${PROMPT} project not registered: check projectId in constellation.json`,
-	'not-indexed': `${PROMPT} project not indexed: run constellation index`,
+	'not-set-up': branded('not signed in: run constellation auth'),
+	'sign-in-again': branded('sign-in failed: run constellation auth'),
+	'no-project': branded('not set up for this project: run constellation init'),
+	'not-registered': branded('project not registered: check projectId in constellation.json'),
+	'not-indexed': branded('project not indexed: run constellation index'),
 };
 
 /** The states an error put up, which a later success takes down. */
@@ -592,7 +592,7 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 		if (ping?.success === true) {
 			buffer = '';
 			apply(undefined, ports);
-			ports.toast('✦ Constellation indexed this project');
+			ports.toast(branded('Indexed this project'));
 			return;
 		}
 		const code = ping?.error?.code;

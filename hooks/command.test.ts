@@ -419,7 +419,7 @@ describe('command.run without a pane', () => {
 	test('status text names the connection', async ($, on) => {
 		world(on, { surfaces: ['vscode'] });
 		const r = await run($);
-		expect(r.text?.split('\n')[0]).toBe('>_CONSTELLATION:// status');
+		expect(r.text?.split('\n')[0]).toBe('✦ >_CONSTELLATION://CODE_INTEL · status');
 		expect(r.text).toContain('Connection: ok');
 		expect(r.text).toContain('Project: app');
 	});
@@ -427,7 +427,7 @@ describe('command.run without a pane', () => {
 	test('an error answers with its code and guidance', async ($, on) => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($);
-		expect(r.text?.split('\n').slice(0, 2)).toEqual(['>_CONSTELLATION:// status', "✗ Your access key wasn't accepted"]);
+		expect(r.text?.split('\n').slice(0, 2)).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · status', "✗ Your access key wasn't accepted"]);
 		expect(r.text).toContain('  1. constellation auth');
 		expect(r.text).toContain('  Code   AUTH_ERROR');
 	});
@@ -445,7 +445,7 @@ describe('command.run without a pane', () => {
 		const r = await run($, 'explore Graph');
 		expect(codes).toEqual([searchCode('Graph')]);
 		const lines = (r.text ?? '').split('\n');
-		expect(lines[0]).toBe('>_CONSTELLATION:// explore');
+		expect(lines[0]).toBe('✦ >_CONSTELLATION://CODE_INTEL · explore');
 		expect(lines.filter((l) => l.startsWith('- function'))).toHaveLength(5);
 		expect(lines[1]).toBe('- function Graph src/f7.ts:8');
 		expect(r.text).toContain('as of 0123456');
@@ -1572,7 +1572,7 @@ describe('the stats tab', () => {
 		await searchThrice($, on);
 		const r = await run($, 'stats');
 		expect(r.text?.split('\n')).toEqual([
-			'>_CONSTELLATION:// stats',
+			'✦ >_CONSTELLATION://CODE_INTEL · stats',
 			`- This session: ${SESSION_ROW}`,
 			'- Today: 4 code_intel calls (1.5 s) · 3 symbol-like searches · 2 literal searches · 57% structural lookups',
 			'- Last 30 days: 8 code_intel calls (4.0 s) · 7 symbol-like searches · 4 literal searches · 53% structural lookups',
@@ -1586,7 +1586,7 @@ describe('the stats tab', () => {
 		world(on, { surfaces: ['vscode'], throws: 'store.keys' });
 		const r = await run($, 'stats');
 		expect(r.text?.split('\n')).toEqual([
-			'>_CONSTELLATION:// stats',
+			'✦ >_CONSTELLATION://CODE_INTEL · stats',
 			'- This session: 0 code_intel calls (0 ms) · 0 symbol-like searches · 0 literal searches · n/a structural lookups (main: 0 code_intel calls, 0 symbol-like searches · subagents: 0 code_intel calls, 0 symbol-like searches)',
 			'- The stored history could not be read.',
 		]);
@@ -1607,7 +1607,7 @@ describe('the stats tab', () => {
 		expect(lines).toBeUndefined();
 		releaseSets();
 		await reply;
-		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITH_SESSION, TODAY_WITH_SESSION.replace('Today', 'Last 30 days')]);
+		expect(lines).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · stats', `- This session: ${SESSION_ROW}`, TODAY_WITH_SESSION, TODAY_WITH_SESSION.replace('Today', 'Last 30 days')]);
 	});
 
 	test('a save that never lands holds the read for a second and no longer', COUNTING, async ($, on) => {
@@ -1622,7 +1622,7 @@ describe('the stats tab', () => {
 		expect(lines).toBeUndefined();
 		await clock.advance(1);
 		await reply;
-		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITHOUT, TODAY_WITHOUT.replace('Today', 'Last 30 days')]);
+		expect(lines).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · stats', `- This session: ${SESSION_ROW}`, TODAY_WITHOUT, TODAY_WITHOUT.replace('Today', 'Last 30 days')]);
 	});
 
 	test('a readable store with nothing in it draws today and the last 30 days as zeros', async ($, on) => {

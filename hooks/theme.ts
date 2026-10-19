@@ -325,6 +325,20 @@ export function banner(el: ElementTable, to: Scheme): RenderElement {
 /** The name the boxed and one-line headers draw in bold, and the text reply's first line opens with. */
 export const PROMPT = '>_CONSTELLATION://';
 
+/** What every line the plugin shows outside its pane opens with, so a person always knows it came from Constellation. */
+export const BRAND = `✦ ${PROMPT}CODE_INTEL`;
+
+/** `text` after `BRAND`, for a log, a toast or text Claude reads: plain strings that carry no color. */
+export function branded(text: string): string {
+	return `${BRAND} · ${text}`;
+}
+
+/** `BRAND` in nebula blue, as the scheme draws it, to open a drawn row. */
+export function brandMark(el: ElementTable, to: Scheme): RenderElement {
+	const color = paint(palette.nebula, to);
+	return el.Text({ ...(color === undefined ? {} : { color }), children: BRAND });
+}
+
 /** A smaller boxed header for a site too narrow for the banner, 23 columns wide. */
 const BOX_ART = [
 	'╭─────────────────────╮',

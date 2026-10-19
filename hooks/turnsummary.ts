@@ -1,7 +1,7 @@
 import type { On, PluginOptions } from 'claude-code';
 import { type Blast, blastRadius } from './blast';
 import { absolute, type McpPort, plural, projectRoot, relativeTo, stringArg, withinDeadline } from './lib';
-import { PROMPT } from './theme';
+import { branded } from './theme';
 
 /**
  * How long the end of a turn waits for the lookup before it shows no line. The
@@ -38,7 +38,7 @@ function summaryLine(n: number, k: number, queried: number, blast: Blast): strin
 	const commit = blast.asOfCommit === undefined ? '' : ` · as of ${blast.asOfCommit}`;
 	const of = blast.skipped === undefined ? '' : ` of the first ${queried - blast.skipped} files`;
 	const count = blast.atLimit === undefined ? plural(blast.dependents.length, 'downstream dependent') : `${blast.dependents.length}+ downstream dependents`;
-	return `${PROMPT} ${plural(n, 'file')} changed${fresh} · ${count}${of} (${tests})${commit}`;
+	return branded(`${plural(n, 'file')} changed${fresh} · ${count}${of} (${tests})${commit}`);
 }
 
 /**

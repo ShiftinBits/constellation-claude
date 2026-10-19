@@ -2,10 +2,7 @@ import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 
 import { isTestFile } from './blast';
 import { explain } from './explain';
 import { type CodeIntelEnvelope, isRecord, num, parseToolText, plural, projectName } from './lib';
-import { badge, forTheme, kind, palette, risk, type Scheme, scheme, status, type Tone } from './theme';
-
-/** The mark that opens a code_intel call row. */
-const mark: Tone = { color: palette.nebula, word: 'code_intel', glyph: '✦' };
+import { badge, brandMark, forTheme, kind, risk, type Scheme, scheme, status, type Tone } from './theme';
 
 const SEP = ' · ';
 
@@ -97,7 +94,7 @@ function joined(parts: RenderNode[]): RenderNode[] {
 
 /** The children of a call row: the mark, the methods called, the project, and `running` until it ends. */
 function callRow(el: ElementTable, methods: string[], project: string | undefined, running: boolean, to: Scheme): RenderNode[] {
-	const parts: RenderNode[] = [badge(el, '', forTheme(mark, to))];
+	const parts: RenderNode[] = [brandMark(el, to)];
 	if (methods.length > 0) parts.push(methods.join(', '));
 	if (project) parts.push(dim(el, project));
 	if (running) parts.push(dim(el, 'running'));

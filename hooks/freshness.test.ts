@@ -2,6 +2,7 @@ import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
 import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
 import { GIT, GIT_ENV, GIT_TIMEOUT_MS } from './lib';
+import { BRAND, palette } from './theme';
 
 const ROOT = '/work/app';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -45,26 +46,26 @@ describe('freshnessView and freshnessText', () => {
 
 	test('says how many commits the index is behind', () => {
 		const view = freshnessView(index, local(), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 4 commits behind · indexed 2h ago');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind · indexed 2h ago');
 	});
 
 	test('uses the singular for one commit', () => {
 		const view = freshnessView(index, local({ behind: 1 }), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 1 commit behind · indexed 2h ago');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 1 commit behind · indexed 2h ago');
 	});
 
 	test('a zero or unknown count is a mismatch with the short commit', () => {
 		for (const behind of [0, undefined]) {
 			const view = freshnessView(index, local({ behind }), undefined);
-			expect(view && freshnessText(view, NOW)).toBe('✦ index at fedcba9 · indexed 2h ago');
+			expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index at fedcba9 · indexed 2h ago');
 		}
 	});
 
 	test('leaves the age out when absent or unparseable', () => {
 		const view = freshnessView({ asOfCommit: OLD, lastIndexedAt: 'soon' }, local(), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 4 commits behind');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind');
 		const none = freshnessView({ asOfCommit: OLD }, local(), undefined);
-		expect(none && freshnessText(none, NOW)).toBe('✦ index 4 commits behind');
+		expect(none && freshnessText(none, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind');
 	});
 
 	test('ages read just now, minutes, hours and days', () => {
@@ -79,7 +80,7 @@ describe('freshnessView and freshnessText', () => {
 
 	test('an error with no index reads code, headline and next step', () => {
 		const view = freshnessView(undefined, undefined, { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] });
-		expect(view && freshnessText(view, NOW)).toBe('✦ WEIRD · The graph melted · constellation index');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · WEIRD · The graph melted · constellation index');
 	});
 });
 
@@ -140,13 +141,13 @@ describe('observeEnvelope and recheck', () => {
 		const invalidate = () => void (draws += 1);
 		const { run } = behindBy4();
 		await observeEnvelope(ok(OLD), ROOT, run, invalidate);
-		expect(lineText()).toMatch(/^✦ index 4 commits behind · indexed /);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · index 4 commits behind · indexed /);
 		expect(draws).toBe(1);
 		await observeEnvelope(ok(OLD), ROOT, run, invalidate);
 		expect(draws).toBe(1);
 		const newer = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '2\n' } });
 		await observeEnvelope(ok(OLD.replace(/^f/, 'e')), ROOT, newer.run, invalidate);
-		expect(lineText()).toMatch(/^✦ index 2 commits behind/);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · index 2 commits behind/);
 		expect(draws).toBe(2);
 	});
 
@@ -179,7 +180,7 @@ describe('observeEnvelope and recheck', () => {
 		}
 		let draws = 0;
 		await observeEnvelope({ success: false, error: { code: 'WEIRD', message: 'It broke' } }, ROOT, run, () => void (draws += 1));
-		expect(lineText()).toMatch(/^✦ WEIRD · It broke/);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · WEIRD · It broke/);
 		expect(draws).toBe(1);
 		await observeEnvelope({ success: true }, ROOT, run, () => void (draws += 1));
 		expect(lineText()).toBeUndefined();
@@ -281,35 +282,43 @@ describe('freshnessBand', () => {
 	const el = {
 		Text: (props: Record<string, unknown>) => ({ type: 'Text', props }),
 	} as unknown as Parameters<typeof freshnessBand>[0];
+	/** The row's children: an element as its props, a bare string as `{ children }`. */
 	const pieces = (tint: Parameters<typeof freshnessBand>[2], view: Parameters<typeof freshnessBand>[1]) => {
 		const row = freshnessBand(el, view, tint, NOW);
-		return (Reflect.get(Reflect.get(row, 'props'), 'children') as { props: Record<string, unknown> }[]).map((c) => c.props);
+		return (Reflect.get(Reflect.get(row, 'props'), 'children') as unknown[]).map((c) =>
+			typeof c === 'string' ? { children: c } : (c as { props: Record<string, unknown> }).props,
+		);
 	};
 
-	test('paints the mark and state words and dims the age', () => {
-		const [head, since] = pieces('brand', { kind: 'behind', behind: 4, lastIndexedAt: TWO_HOURS_AGO });
-		expect(head).toMatchObject({ children: '✦ index 4 commits behind', color: expect.any(String) });
+	test('opens with the brand mark in nebula blue, the state words plain and the age dim', () => {
+		const [mark, head, since] = pieces('brand', { kind: 'behind', behind: 4, lastIndexedAt: TWO_HOURS_AGO });
+		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
+		expect(head).toEqual({ children: ' · index 4 commits behind' });
 		expect(since).toEqual({ dimColor: true, children: ' · indexed 2h ago' });
 	});
 
-	test('a mismatch names the indexed commit', () => {
-		const [head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD });
-		expect(head?.['children']).toBe('✦ index at fedcba9');
+	test('the theme scheme draws the mark in the theme blue', () => {
+		const [mark] = pieces('theme', { kind: 'behind', behind: 4 });
+		expect(mark?.['color']).toBe('suggestion');
 	});
 
-	test('an error paints the code in another color, keeps the headline plain and dims the next step', () => {
-		const behind = pieces('brand', { kind: 'behind', behind: 1 })[0];
-		const [code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
-		expect(code?.['children']).toBe('✦ WEIRD');
-		expect(code?.['color']).not.toBe(behind?.['color']);
-		expect(headline).not.toHaveProperty('color');
-		expect(headline).not.toHaveProperty('dimColor');
+	test('a mismatch names the indexed commit', () => {
+		const [, head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD });
+		expect(head?.['children']).toBe(' · index at fedcba9');
+	});
+
+	test('an error paints the code red, keeps the headline plain and dims the next step', () => {
+		const [mark, sep, code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
+		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
+		expect(sep).toEqual({ children: ' · ' });
+		expect(code).toEqual({ color: palette.stellar, children: 'WEIRD' });
+		expect(headline).toEqual({ children: ' · The graph melted' });
 		expect(step).toMatchObject({ dimColor: true });
 	});
 
 	test('the none scheme draws no color', () => {
-		const [head] = pieces('none', { kind: 'behind', behind: 2 });
-		expect(head).not.toHaveProperty('color');
+		const [mark] = pieces('none', { kind: 'behind', behind: 2 });
+		expect(mark).toEqual({ children: BRAND });
 	});
 });
 

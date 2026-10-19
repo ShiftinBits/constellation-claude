@@ -540,7 +540,7 @@ describe('PR impact in inform mode', () => {
 		// The branch is only for require mode's once-per-branch rule.
 		expect(calls.runs.map((run) => run.argv)).not.toContain(REV_PARSE);
 		expect(calls.logs).toHaveLength(1);
-		expect(calls.logs[0]).toStartWith('## Impact\n');
+		expect(calls.logs[0]).toStartWith('✦ >_CONSTELLATION://CODE_INTEL · PR impact\n## Impact\n');
 		expect(calls.logs[0]).toContain('- **Changed files:** 2');
 	});
 

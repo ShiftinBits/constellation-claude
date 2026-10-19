@@ -12,7 +12,7 @@ import type { Explanation } from './explain';
 import { observeEnvelope, recheck, startTicks, track } from './freshness';
 import { checkConnection, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
-import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, badge, branded, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -678,7 +678,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const draws = canDraw(await $.session.surfaces());
 		if (tab === 'stats' && !draws) {
 			const { session, stored } = await readStats($);
-			return { text: [`${PROMPT} ${tab}`, ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
+			return { text: [branded(tab), ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
 		}
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
@@ -702,9 +702,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			);
 			const summary = summarize(tab, envelope, { path, project: projectName(dir), query });
 			const meta = metadata(envelope);
-			if (summary.explanation !== undefined) return { text: [`${PROMPT} ${tab}`, ...summary.lines].join('\n') };
+			if (summary.explanation !== undefined) return { text: [branded(tab), ...summary.lines].join('\n') };
 			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
-			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
+			return { text: [branded(tab), ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
 		reset();
 		unusedKind = kind;
