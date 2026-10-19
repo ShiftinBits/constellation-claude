@@ -147,7 +147,7 @@ export type OnboardingPorts = {
 	/** Reads a file's text, as `$.fs.read`. */
 	read: (path: string) => Promise<string>;
 	/** Sets `CONSTELLATION_ACCESS_KEY` for the session and what it starts. */
-	envSet: (key: string) => Promise<void>;
+	envSet: (key: string) => Promise<unknown>;
 	after: (ms: number, fn: () => void) => void;
 	mcp: McpPort;
 	/** Runs `/reload-plugins`, which restarts the MCP server with the session's environment. */

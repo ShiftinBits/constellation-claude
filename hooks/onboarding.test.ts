@@ -1520,7 +1520,7 @@ describe('Sign in as a loaded plugin', () => {
 		});
 		on('env.set', (_$, e) => {
 			setKey = e.value;
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('command.run', (_$, e) => {
 			commands.push(e.command);

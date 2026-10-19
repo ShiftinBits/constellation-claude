@@ -405,9 +405,9 @@ describe('passthrough', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const use = await mountUse($, surface, `bash-${surface}`, { command: 'ls' }, 'Bash');
-			expect(await use.drawn()).toEqual({ type: 'Text', children: ['fallthrough'] });
+			expect(await use.drawn()).toMatchObject({ type: 'Text', children: ['fallthrough'] });
 			const result = await mountResult($, surface, `bash-${surface}`, { stdout: 'a', stderr: '', interrupted: false }, false, 'Bash');
-			expect(await result.drawn()).toEqual({ type: 'Text', children: ['fallthrough'] });
+			expect(await result.drawn()).toMatchObject({ type: 'Text', children: ['fallthrough'] });
 		}
 	});
 

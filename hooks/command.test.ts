@@ -1733,7 +1733,7 @@ describe('registration', () => {
 		on('env.set', (_, e) => {
 			order.push(`env.set:${e.name}`);
 			setValue = e.value;
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('session.start', (_, e) => {
 			order.push('session.start');
@@ -1783,7 +1783,7 @@ describe('registration', () => {
 		});
 		on('env.set', (_, e) => {
 			set.push(e.value);
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('session.start', (_, e) => ({ cwd: e.cwd }));
 		on('session.surfaces', () => ({ value: ['terminal'] }));
