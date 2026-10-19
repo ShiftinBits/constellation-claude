@@ -7,6 +7,7 @@ import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort }
 import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
 import { registerOnboarding } from './onboarding';
 import { registerSession } from './session';
+import { BRAND } from './theme';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -494,7 +495,9 @@ describe('freshness band above the prompt', () => {
 		track(PROJECT);
 		const failed = { success: false, error: { code: 'API_UNREACHABLE', message: 'unreachable' } };
 		await m.program('main', 'return await api.ping()', { text: JSON.stringify(failed) });
-		expect(shown(await m.draw())).toContain('API_UNREACHABLE');
+		const text = shown(await m.draw());
+		expect(text).toContain(BRAND);
+		expect(text).toContain('API_UNREACHABLE');
 	});
 
 	test('yields to a survey', async () => {
