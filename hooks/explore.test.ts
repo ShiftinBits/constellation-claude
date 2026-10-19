@@ -92,7 +92,7 @@ describe('usageLines', () => {
 		const directUsages = Array.from({ length: 20 }, (_, i) => ({ filePath: `f${i}.ts`, line: i + 1, usageType: 'call' }));
 		const lines = usageLines({ summary: { totalUsages: 20, filesAffected: 20 }, directUsages });
 		expect(lines).toHaveLength(16);
-		expect(lines.slice(0, 2)).toEqual(['20 usages in 20 files', 'f0.ts:1 call']);
+		expect(lines.slice(0, 2)).toEqual(['20 usages in 20 files', 'f0.ts:1 · call']);
 	});
 
 	test('a row without a line or type is just the file', () => {
@@ -127,9 +127,9 @@ describe('callTree', () => {
 		});
 		expect(tree).toEqual([
 			{ text: 'far', depth: 2 },
-			{ text: 'near  n.ts:1', depth: 1 },
+			{ text: 'near · n.ts:1', depth: 1 },
 			{ text: 'root', depth: 0 },
-			{ text: 'next  x.ts', depth: 1 },
+			{ text: 'next · x.ts', depth: 1 },
 			{ text: 'deep', depth: 2 },
 		]);
 	});

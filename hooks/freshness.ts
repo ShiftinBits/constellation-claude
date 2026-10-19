@@ -1,7 +1,7 @@
 import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
-import { brandMark, branded, forTheme, status } from './theme';
+import { badge, brandMark, branded, forTheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /** Runs a command, as `$.process.run`. */
@@ -95,7 +95,7 @@ function stateParts(view: Exclude<FreshnessView, { kind: 'error' }>, now: number
 export function freshnessText(view: FreshnessView, now: number): string {
 	if (view.kind === 'error') {
 		const ex = explain(view.failure);
-		return branded([view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP));
+		return branded([`✗ ${view.failure.code}`, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP));
 	}
 	const { head, since } = stateParts(view, now);
 	return branded([head, ...(since === undefined ? [] : [since])].join(SEP));
@@ -103,13 +103,14 @@ export function freshnessText(view: FreshnessView, now: number): string {
 
 /**
  * The indicator as one row: the brand mark in blue, then the state words in
- * primary text and the index age dim. An error's code is red, its headline
- * primary text and its next step dim. `el` is the table from `$.ui.resolve(e)`.
+ * primary text and the index age dim. An error is its code as a red `✗` badge
+ * and its next step dim, or its headline when there is no step: the row is
+ * cut at the terminal's width, and the step is the part to act on. `el` is the
+ * table from `$.ui.resolve(e)`.
  */
 export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Scheme, now: number): RenderElement {
 	const dim = (text: string) => el.Text({ dimColor: true, children: text });
 	if (view.kind === 'error') {
-		const tone = forTheme(status('error'), tint);
 		const ex = explain(view.failure);
 		const step = ex.steps[0];
 		return el.Text({
@@ -117,9 +118,8 @@ export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Schem
 			children: [
 				brandMark(el, tint),
 				SEP,
-				el.Text({ ...(tone.color === undefined ? {} : { color: tone.color }), children: view.failure.code }),
-				`${SEP}${ex.title}`,
-				...(step === undefined ? [] : [dim(`${SEP}${step}`)]),
+				badge(el, '', forTheme({ ...status('error'), word: view.failure.code }, tint)),
+				step === undefined ? `${SEP}${ex.title}` : dim(`${SEP}${step}`),
 			],
 		});
 	}

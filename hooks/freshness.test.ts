@@ -80,7 +80,7 @@ describe('freshnessView and freshnessText', () => {
 
 	test('an error with no index reads code, headline and next step', () => {
 		const view = freshnessView(undefined, undefined, { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] });
-		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · WEIRD · The graph melted · constellation index');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ✗ WEIRD · The graph melted · constellation index');
 	});
 });
 
@@ -180,7 +180,7 @@ describe('observeEnvelope and recheck', () => {
 		}
 		let draws = 0;
 		await observeEnvelope({ success: false, error: { code: 'WEIRD', message: 'It broke' } }, ROOT, run, () => void (draws += 1));
-		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · WEIRD · It broke/);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · ✗ WEIRD · It broke/);
 		expect(draws).toBe(1);
 		await observeEnvelope({ success: true }, ROOT, run, () => void (draws += 1));
 		expect(lineText()).toBeUndefined();
@@ -307,13 +307,20 @@ describe('freshnessBand', () => {
 		expect(head?.['children']).toBe(' · index at fedcba9');
 	});
 
-	test('an error paints the code red, keeps the headline plain and dims the next step', () => {
-		const [mark, sep, code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
+	test('an error draws the code as a red ✗ badge and the next step dim', () => {
+		const row = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
+		const [mark, sep, code, step] = row;
+		expect(row).toHaveLength(4);
 		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
 		expect(sep).toEqual({ children: ' · ' });
-		expect(code).toEqual({ color: palette.stellar, children: 'WEIRD' });
-		expect(headline).toEqual({ children: ' · The graph melted' });
-		expect(step).toMatchObject({ dimColor: true });
+		expect(code).toEqual({ children: [{ type: 'Text', props: { color: palette.stellar, children: '✗ WEIRD' } }] });
+		expect(step).toEqual({ dimColor: true, children: ' · constellation index' });
+	});
+
+	test('an error with no next step keeps the headline plain', () => {
+		const row = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted' } });
+		expect(row).toHaveLength(4);
+		expect(row[3]).toEqual({ children: ' · The graph melted' });
 	});
 
 	test('the none scheme draws no color', () => {

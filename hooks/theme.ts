@@ -50,7 +50,8 @@ export type Tone = {
 const DIM = { dimColor: true } as const;
 
 const OK = { color: palette.cosmic, glyph: '✓' } as const;
-const PENDING = { color: palette.solar, glyph: '◐' } as const;
+const PENDING = { color: palette.solar, glyph: '⏱' } as const;
+const WARNING = { color: palette.solar, glyph: '⚠' } as const;
 const ERROR = { color: palette.stellar, glyph: '✗' } as const;
 const INFO = { color: palette.nebula, glyph: 'ℹ' } as const;
 const UNKNOWN_GLYPH = '·';
@@ -61,7 +62,10 @@ const STATUS: Readonly<Record<string, Omit<Tone, 'word'> & { word?: string }>> =
 	success: { ...OK, word: 'ok' },
 	pending: PENDING,
 	indexing: PENDING,
-	stale: PENDING,
+	stale: WARNING,
+	'not indexed': { ...WARNING, word: 'not indexed' },
+	warning: WARNING,
+	degraded: WARNING,
 	error: ERROR,
 	auth: ERROR,
 	critical: ERROR,
@@ -72,7 +76,7 @@ const STATUS: Readonly<Record<string, Omit<Tone, 'word'> & { word?: string }>> =
 
 const RISK: Readonly<Record<string, Tone>> = {
 	low: { ...OK, word: 'LOW' },
-	medium: { ...PENDING, word: 'MEDIUM' },
+	medium: { ...WARNING, word: 'MEDIUM' },
 	high: { ...ERROR, word: 'HIGH' },
 	critical: { ...ERROR, bold: true, word: 'CRITICAL' },
 };
@@ -94,12 +98,12 @@ const KIND: Readonly<Record<string, string>> = {
 
 /**
  * The tones of the onboarding band: not set up and pending are gold, failed is
- * red. Each carries a word and a glyph and no background.
+ * red. Each carries a word and a status glyph (never ✦, the brand mark) and no background.
  */
 export const onboarding = {
-	notSetUp: { color: palette.solar, glyph: '✦', word: 'setup' },
-	pending: { color: palette.solar, glyph: '◐', word: 'working' },
-	failed: { color: palette.stellar, glyph: '✦', word: 'failed' },
+	notSetUp: { color: palette.solar, glyph: '⚠', word: 'setup' },
+	pending: { color: palette.solar, glyph: '⏱', word: 'working' },
+	failed: { color: palette.stellar, glyph: '✗', word: 'failed' },
 } as const satisfies Readonly<Record<string, Tone>>;
 
 function lookup<T>(table: Readonly<Record<string, T>>, key: string): T | undefined {
@@ -113,7 +117,8 @@ function dim(word: string): Tone {
 
 /**
  * The tone of a status string from API data: healthy, indexed and success are
- * green and read "ok"; pending, indexing and stale are gold; error, auth and
+ * green and read "ok"; pending and indexing are gold ⏱; stale, not indexed,
+ * warning and degraded are gold ⚠; error, auth and
  * critical are red; info is blue; unknown, disabled and any other value are dim.
  */
 export function status(kind: string): Tone {

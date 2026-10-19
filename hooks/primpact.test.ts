@@ -4,6 +4,7 @@ import { type Blast, probe } from './blast';
 import { ghPrCreate } from './classify';
 import { buildImpactSection, PR_DEADLINE_MS, registerPrImpact, resetPrImpact } from './primpact';
 import { registerSession } from './session';
+import { BRAND } from './theme';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -292,7 +293,7 @@ describe('PR impact in require mode', () => {
 		const { r, ran } = await bash(PLAIN);
 		expect(ran).toBe(false);
 		const deny = denyOf(r);
-		expect(deny).toStartWith('## Impact\n');
+		expect(deny).toStartWith(`${BRAND} · PR impact\n## Impact\n`);
 		expect(deny).toContain('- **Changed files:** 2');
 		expect(deny).toContain('- **Downstream dependents:** 2 (1 test file)');
 		expect(deny).toContain('`makeA`, `A`');

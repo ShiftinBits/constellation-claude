@@ -12,7 +12,7 @@ import type {
 import { freshnessBand, freshnessLine } from './freshness';
 import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
-import { badge, branded, buttonRow, forTheme, onboarding, scheme } from './theme';
+import { badge, brandMark, branded, buttonRow, forTheme, onboarding, scheme } from './theme';
 import type { Scheme, Tone } from './theme';
 
 /** The access key format the CLI writes: `ak:` and 32 hex digits. */
@@ -41,14 +41,14 @@ const INSTALL_COMMAND = 'npm i -g @constellationdev/cli';
 const INSTALL_DOCS = 'https://docs.constellationdev.io/cli/#installation';
 
 /** What a sign-in that stored a new key says, before the reload. */
-const CONNECTED = branded('Connected');
-const CONNECTED_NO_PROJECT = branded('Connected. Run constellation init in this repo to set it up');
+const CONNECTED = 'Connected';
+const CONNECTED_NO_PROJECT = 'Connected. Run constellation init in this repo to set it up';
 
 /** A failed sign-in's line where the CLI said nothing, and the sign-in step where no `/bin/sh` runs (Windows). */
-const AUTH_IN_TERMINAL = 'Run `constellation auth` in a terminal';
+const AUTH_IN_TERMINAL = 'Run constellation auth in a terminal';
 
 /** An index press where no `constellation.json` sits at or above the session's directory, and the index step where no `/bin/sh` runs. */
-const INDEX_IN_PROJECT = 'Run `constellation index` in a terminal, in the project directory';
+const INDEX_IN_PROJECT = 'Run constellation index in a terminal, in the project directory';
 
 /** The band's states. The first that holds wins, in this order. */
 export type OnboardingState = 'not-set-up' | 'sign-in-again' | 'no-project' | 'not-registered' | 'not-indexed' | 'working';
@@ -163,12 +163,12 @@ export type OnboardingPorts = {
 type Notify = Pick<OnboardingPorts, 'invalidate'> & Partial<Pick<OnboardingPorts, 'log'>>;
 
 /** The one line a session that cannot draw the band gets, with the command to run. */
-const LOG_LINE: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
-	'not-set-up': branded('not signed in: run constellation auth'),
-	'sign-in-again': branded('sign-in failed: run constellation auth'),
-	'no-project': branded('not set up for this project: run constellation init'),
-	'not-registered': branded('project not registered: check projectId in constellation.json'),
-	'not-indexed': branded('project not indexed: run constellation index'),
+const LOG_STEP: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
+	'not-set-up': 'run constellation auth',
+	'sign-in-again': 'run constellation auth',
+	'no-project': 'run constellation init',
+	'not-registered': 'check projectId in constellation.json',
+	'not-indexed': 'run constellation index',
 };
 
 /** The states an error put up, which a later success takes down. */
@@ -216,7 +216,7 @@ function apply(next: OnboardingState | undefined, notify: Notify, line?: string)
 	redraw(notify);
 	if (next === undefined || next === 'working' || logged || notify.log === undefined) return;
 	logged = true;
-	notify.log(LOG_LINE[next]).catch(() => undefined);
+	notify.log(branded(`${HEADLINE[next]} · ${LOG_STEP[next]}`)).catch(() => undefined);
 }
 
 /**
@@ -592,7 +592,7 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 		if (ping?.success === true) {
 			buffer = '';
 			apply(undefined, ports);
-			ports.toast(branded('Indexed this project'));
+			ports.toast('Indexed this project');
 			return;
 		}
 		const code = ping?.error?.code;
@@ -637,11 +637,11 @@ const TONE: Readonly<Record<OnboardingState, Tone>> = {
 };
 
 const HEADLINE: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
-	'not-set-up': "Constellation isn't signed in",
-	'sign-in-again': 'Constellation sign-in failed',
+	'not-set-up': 'Not signed in',
+	'sign-in-again': 'Sign-in failed',
 	'no-project': 'Not set up for this project',
-	'not-registered': "This project isn't registered with Constellation",
-	'not-indexed': "This project isn't indexed yet",
+	'not-registered': "This project isn't registered",
+	'not-indexed': "This project hasn't been indexed yet",
 };
 
 /** What the band draws and what its buttons do. */
@@ -672,9 +672,9 @@ export type BandView = {
 export function band(el: ElementTable, view: BandView): RenderElement {
 	const tone = forTheme(TONE[view.state], view.tint);
 	const headline =
-		view.state === 'working' ? (view.task === 'index' ? 'Indexing this project' : 'Signing in to Constellation') : HEADLINE[view.state];
+		view.state === 'working' ? (view.task === 'index' ? 'Indexing this project' : 'Signing in') : HEADLINE[view.state];
 	const rows: RenderElement[] = [
-		el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', tone), el.Text({ bold: true, children: headline })] }),
+		el.Text({ wrap: 'truncate', children: [brandMark(el, view.tint), ' · ', badge(el, '', tone), ' ', el.Text({ bold: true, children: headline })] }),
 	];
 	if (view.state === 'no-project') {
 		rows.push(el.Text({ children: 'Run constellation init in a terminal, with the project ID from the web app:' }), el.Link({ href: WEB_APP }));

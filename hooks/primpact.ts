@@ -169,7 +169,7 @@ export function registerPrImpact(on: On, options: PluginOptions): void {
 			const section = await impactSection($, pr, root, next.signal);
 			if (section === undefined) return next(e);
 			refused.add(key);
-			return { deny: `${section}\n\n${INSTRUCTION}` };
+			return { deny: `${branded('PR impact')}\n${section}\n\n${INSTRUCTION}` };
 		} catch {
 			// A git command that cannot start or times out.
 			return next(e);

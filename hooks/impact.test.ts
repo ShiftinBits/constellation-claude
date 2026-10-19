@@ -1,8 +1,9 @@
 import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCallArgs, ToolCheckResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { forgetAgentImpact, headline, registerImpactGate } from './impact';
+import { forgetAgentImpact, headline, impactLine, registerImpactGate } from './impact';
 import { type FileRisk, noteCodeIntel, RETRY_MS } from './risk';
 import { registerSession } from './session';
+import { BRAND } from './theme';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -181,22 +182,28 @@ const HIGH: FileRisk = {
 	asOfCommit: '0123456',
 };
 
-const HEADLINE = '✦ >_CONSTELLATION://CODE_INTEL · src/core.ts: 25 dependents · HIGH risk (as of 0123456)';
+/** What a toast shows: no brand, since Claude Code titles the toast with the plugin's name. */
+const LINE = 'HIGH risk · 25 dependents · src/core.ts · as of 0123456';
+const HEADLINE = `${BRAND} · ${LINE}`;
 const QUESTION = `${HEADLINE}\nTop dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts\nEdit it anyway?`;
 const OPTIONS = ['Proceed', "Proceed, and don't ask again for this file", 'Cancel'];
 const DENY: ToolCheckResult = {
 	decision: 'deny',
-	reason: 'The user declined this edit to src/core.ts (25 dependents, HIGH risk). Ask before trying a different approach.',
+	reason: `${BRAND} · The user declined this edit to src/core.ts (${LINE}). Ask before trying a different approach.`,
 };
 
 describe('headline', () => {
-	test('names the file, its dependents, the risk word and the commit', () => {
+	test('names the risk word, the dependents, the file and the commit', () => {
 		expect(headline(HIGH)).toBe(HEADLINE);
 	});
 
 	test('leaves the commit out when it is unknown', () => {
 		const { asOfCommit: _commit, ...risk } = HIGH;
-		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe('✦ >_CONSTELLATION://CODE_INTEL · src/core.ts: 60 dependents · CRITICAL risk');
+		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe(`${BRAND} · CRITICAL risk · 60 dependents · src/core.ts`);
+	});
+
+	test('impactLine is the headline without the brand, for a toast', () => {
+		expect(impactLine(HIGH)).toBe(LINE);
 	});
 });
 
@@ -239,7 +246,7 @@ describe('impact gate dialog', () => {
 	test('an edit core already sends to the permission prompt gets one toast and no dialog', async () => {
 		const m = load({ impactGate: 'dialog' });
 		expect(await m.check('ask')).toEqual({ decision: 'ask' });
-		expect(m.calls.toasts).toEqual([{ text: HEADLINE, options: { timeoutMs: 10000 } }]);
+		expect(m.calls.toasts).toEqual([{ text: LINE, options: { timeoutMs: 10000 } }]);
 		expect(m.calls.asks).toEqual([]);
 	});
 
@@ -324,7 +331,7 @@ describe('impact gate dialog', () => {
 		const m = load({ impactGate: 'dialog' }, { surfaces: [] });
 		expect(await m.check()).toEqual({ decision: 'allow' });
 		expect(m.calls.asks).toEqual([]);
-		expect(m.calls.logs).toEqual([`${HEADLINE} (could not ask, edit allowed)`]);
+		expect(m.calls.logs).toEqual([`${HEADLINE} · could not ask, edit allowed`]);
 	});
 
 	test('a dismissed dialog (Esc) denies as Cancel does, whatever the rejection says', async () => {
@@ -418,12 +425,12 @@ describe('impact gate in auto mode', () => {
 });
 
 describe('impact gate native', () => {
-	const ASK: ToolCheckResult = { decision: 'ask', reason: '25 dependents, HIGH risk' };
+	const ASK: ToolCheckResult = { decision: 'ask', reason: HEADLINE };
 
 	test('an allowed edit to a high-risk file is downgraded to the permission prompt with one toast', async () => {
 		const m = load({ impactGate: 'native' });
 		expect(await m.check()).toEqual(ASK);
-		expect(m.calls.toasts).toEqual([{ text: HEADLINE, options: { timeoutMs: 10000 } }]);
+		expect(m.calls.toasts).toEqual([{ text: LINE, options: { timeoutMs: 10000 } }]);
 		expect(m.calls.asks).toEqual([]);
 	});
 

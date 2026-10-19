@@ -1,6 +1,6 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code';
 import { agentKey } from './budget';
-import { absolute, isConfigured, projectRoot, stringArg, withinDeadline } from './lib';
+import { absolute, isConfigured, plural, projectRoot, stringArg, withinDeadline } from './lib';
 import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence, hasEvidence, resetRiskCache, type RiskLevel } from './risk';
 import { branded, risk as tone } from './theme';
 
@@ -45,10 +45,18 @@ const remembered = new Set<string>();
 /** Per agent, the files require-analysis mode has already refused once, by absolute path. */
 const assessed = new Map<string, Set<string>>();
 
-/** One line naming the file, how many files depend on it and its risk word, with the indexed commit when known. */
+/**
+ * The risk word first, so a narrow toast that cuts the end keeps it, then how
+ * many files depend on the file, the file, and the indexed commit when known.
+ */
+export function impactLine(risk: FileRisk): string {
+	const commit = risk.asOfCommit === undefined ? '' : ` · as of ${risk.asOfCommit}`;
+	return `${tone(risk.level).word} risk · ${plural(risk.dependents, 'dependent')} · ${risk.path}${commit}`;
+}
+
+/** `impactLine` after the brand, for a log or dialog. A toast is already titled with the plugin's name. */
 export function headline(risk: FileRisk): string {
-	const line = branded(`${risk.path}: ${risk.dependents} dependents · ${tone(risk.level).word} risk`);
-	return risk.asOfCommit === undefined ? line : `${line} (as of ${risk.asOfCommit})`;
+	return branded(impactLine(risk));
 }
 
 /** The dialog's question: the headline, the top dependents when there are any, and the question itself. */
@@ -62,7 +70,7 @@ function question(risk: FileRisk): string {
 /** The refusal the model reads when the user declines or dismisses the dialog, with what they typed under "Other". */
 function declined(risk: FileRisk, said?: string): string {
 	const words = said === undefined ? '' : ` The user said: "${said}"`;
-	return `The user declined this edit to ${risk.path} (${risk.dependents} dependents, ${tone(risk.level).word} risk). Ask before trying a different approach.${words}`;
+	return branded(`The user declined this edit to ${risk.path} (${impactLine(risk)}). Ask before trying a different approach.${words}`);
 }
 
 /** The refusal the model reads before its first edit to a file it has not looked into. */
@@ -154,14 +162,14 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 
 		const line = headline(risk);
 		if (!asks) {
-			$.ui.toast(line, { timeoutMs: TOAST_MS });
+			$.ui.toast(impactLine(risk), { timeoutMs: TOAST_MS });
 			// Dialog mode leaves a prompted edit at its prompt; native mode sends an auto-approved one there.
 			if (mode !== 'native') return next(e);
-			return { decision: 'ask', reason: `${risk.dependents} dependents, ${tone(risk.level).word} risk` };
+			return { decision: 'ask', reason: line };
 		}
 		// A -p or SDK run has no one to ask: no one would see the dialog, so fail open.
 		if ((await $.session.surfaces()).length === 0) {
-			$.ui.log(`${line} (could not ask, edit allowed)`);
+			$.ui.log(`${line} · could not ask, edit allowed`);
 			return next(e);
 		}
 		let answer = CANCEL;

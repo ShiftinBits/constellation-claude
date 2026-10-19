@@ -367,7 +367,7 @@ describe('nudge budget', () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
 		expect(invalidations).toBe(1);
-		expect(await m.band()).toContain('Constellation sign-in failed');
+		expect(await m.band()).toContain('Sign-in failed');
 	});
 
 	test("with no key set, the agent's AUTH_ERROR says not signed in", async () => {
@@ -378,7 +378,7 @@ describe('nudge budget', () => {
 		} finally {
 			sessionKey = KEY;
 		}
-		expect(await m.band()).toContain("Constellation isn't signed in");
+		expect(await m.band()).toContain("Not signed in");
 	});
 
 	test('a SessionStart clear takes the onboarding band down', async () => {
@@ -511,7 +511,7 @@ describe('freshness band above the prompt', () => {
 		const m = await behind();
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
 		const tree = await m.draw();
-		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Sign-in failed');
 		expect(shown(tree)).not.toContain('index 3 commits behind');
 	});
 

@@ -138,7 +138,7 @@ describe('forTheme', () => {
 	});
 
 	test('brand-light swaps gold and green for the warning and success theme colors', () => {
-		expect(forTheme(status('stale'), 'brand-light')).toMatchObject({ color: 'warning', word: 'stale', glyph: '◐' });
+		expect(forTheme(status('stale'), 'brand-light')).toMatchObject({ color: 'warning', word: 'stale', glyph: '⚠' });
 		expect(forTheme(status('healthy'), 'brand-light')).toMatchObject({ color: 'success', word: 'ok', glyph: '✓' });
 	});
 
