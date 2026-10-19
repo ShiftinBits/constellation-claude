@@ -64,6 +64,12 @@
 			"description": "Show a line above the prompt when the Constellation index is behind your checkout, was taken at another commit, or could not be reached. Off, the plugin also stops the git checks behind it.",
 			"default": true
 		},
+		"compactToolRows": {
+			"type": "boolean",
+			"title": "Compact code_intel rows",
+			"description": "Draw each code_intel call and result in the transcript as one compact Constellation row. Off, Claude Code draws its own rows.",
+			"default": true
+		},
 		"showAdoption": {
 			"type": "boolean",
 			"title": "Adoption count on the spinner",

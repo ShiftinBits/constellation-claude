@@ -411,6 +411,17 @@ describe('passthrough', () => {
 		}
 	});
 
+	test('with compactToolRows off, code_intel calls and results keep Claude Code row', { options: { compactToolRows: false } }, async ($, on) => {
+		world(on);
+		for (const surface of SURFACES) {
+			const use = await mountUse($, surface, `raw-${surface}`, { code: CALL_CODE, cwd: '/x/app' });
+			expect(await use.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
+			expect(await use.find({ type: 'Text', text: BRAND })).toBeUndefined();
+			const result = await mountResult($, surface, `raw-${surface}`, reply(IMPACT));
+			expect(await result.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
+		}
+	});
+
 	test("another server's tool that ends in code_intel passes through", async ($, on) => {
 		world(on);
 		expect(await line(await mountUse($, 'terminal', 'acme', { code: CALL_CODE }, 'mcp__acme__get_code_intel'))).toBe('fallthrough');
@@ -496,7 +507,7 @@ function direct({ el = TABLE, list = async () => [], now = () => 0 }: { el?: obj
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
-	registerToolRows(capture as unknown as On);
+	registerToolRows(capture as unknown as On, {});
 	registerSession(capture as unknown as On);
 	const $ = { ui: { resolve: () => el, invalidate: () => {} }, config: { list }, clock: { now: async () => now() } };
 	const raise = async (event: string, e: object, bottom: () => Promise<unknown>): Promise<unknown> => {

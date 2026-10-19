@@ -1,4 +1,4 @@
-import type { ElementTable, On, RenderElement, RenderNode } from 'claude-code';
+import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 'claude-code';
 import { isTestFile } from './blast';
 import { explain } from './explain';
 import { type CodeIntelEnvelope, isRecord, num, parseToolText, plural, projectName } from './lib';
@@ -189,9 +189,12 @@ export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Sch
  * about what came back. With the `verbose` setting on, Claude Code's own row follows
  * under it. Every other tool and surface, an interrupted call, and a result
  * with no envelope to read (one over the MCP output limit, say) or a failure
- * without an error code keeps Claude Code's own row.
+ * without an error code keeps Claude Code's own row. With the `compactToolRows`
+ * option off (an unset value counts as on) nothing is registered, so every row
+ * is Claude Code's own.
  */
-export function registerToolRows(on: On): void {
+export function registerToolRows(on: On, options: PluginOptions): void {
+	if (options.compactToolRows === false) return;
 	on('config.set', { key: ['theme', 'verbose'] }, async ($, e, next) => {
 		const set = await next(e);
 		settings = undefined;

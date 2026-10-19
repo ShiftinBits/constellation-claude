@@ -24,7 +24,7 @@ export const register: Register = (on, options) => {
 	registerImpactGate(on, options);
 	registerTurnSummary(on, options);
 	registerPrImpact(on, options);
-	registerToolRows(on);
+	registerToolRows(on, options);
 	registerOnboarding(on);
 	registerFreshness(on, options);
 };
