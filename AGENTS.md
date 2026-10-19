@@ -294,7 +294,7 @@ tsc -p .                # needs the engine-written tsconfig: load the plugin onc
                         # (e.g. claude -p --plugin-dir . "ok")
 ```
 
-`.github/workflows/test.yml` runs the same checks, in the order build (load the plugin, then `tsc`), test, strict validate (both manifests), on every pull request to `main`, every push to `main`, and on demand (Actions tab, Run workflow, or `gh workflow run test.yml --ref <branch>`), on the latest Claude Code release (`CLAUDE_CODE_VERSION: latest`, the version users run, so a change in the mods runtime, test kit or types fails CI first; the run logs `claude --version`). In CI the engine types come from `claude -p "/constellation status" --plugin-dir .`: a mod command needs no model call or sign-in, and loading the plugin writes `.claude-plugin/types/` and the root `tsconfig.json`. The workflow also fails on a color literal outside `hooks/theme.ts`. Still run the checks locally before pushing. Validate the commands manually:
+`.github/workflows/test.yml` runs the mod tests and strict validate (both manifests), on every pull request to `main`, every push to `main`, and on demand (Actions tab, Run workflow, or `gh workflow run test.yml --ref <branch>`), on the latest Claude Code release (`CLAUDE_CODE_VERSION: latest`, the version users run, so a change in the mods runtime, test kit or types fails CI first; the run logs `claude --version`). `tsc` runs locally only: Claude Code no longer writes the engine types when it loads the plugin in CI, and the old build step called the hosted code_intel server. The workflow also fails on a color literal outside `hooks/theme.ts`. Still run the checks locally before pushing. Validate the commands manually:
 
 ```
 /constellation:status

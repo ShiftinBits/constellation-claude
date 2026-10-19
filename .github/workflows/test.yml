@@ -26,7 +26,6 @@ jobs:
       # its test kit or its types shows up here first. The plugin needs
       # 2.1.287 or later.
       CLAUDE_CODE_VERSION: "latest"
-      TYPESCRIPT_VERSION: "6.0.3"
       DISABLE_AUTOUPDATER: "1"
     steps:
       - name: Checkout
@@ -41,23 +40,6 @@ jobs:
         run: |
           npm install --global "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
           claude --version
-
-      # Build. The plugin has no compile step: loading it with --plugin-dir
-      # writes the engine's type declarations (.claude-plugin/types/) and the
-      # root tsconfig.json, both git-ignored, that tsc needs. /constellation is
-      # a mod command, so it runs with no model call and no sign-in, and it
-      # checks that the hooks module loads. Print mode refuses the command's own
-      # code_intel call unless the tool is allowed.
-      - name: "Build: load the plugin and run /constellation"
-        run: |
-          out="$(claude -p "/constellation status" --plugin-dir . --allowedTools mcp__constellation__code_intel)"
-          echo "$out"
-          grep -qF ">_CONSTELLATION://CODE_INTEL · Status" <<<"$out"
-          test -f .claude-plugin/types/claude-code/index.d.ts
-          test -f tsconfig.json
-
-      - name: "Build: type-check"
-        run: npx --yes --package "typescript@${TYPESCRIPT_VERSION}" tsc -p .
 
       - name: "Test: run the mod tests"
         run: claude plugin test .
