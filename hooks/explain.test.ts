@@ -15,12 +15,17 @@ const NO_PROJECT = {
 };
 
 describe('explain', () => {
+	test('a step is always shown with the const shorthand, whichever name the guidance uses', () => {
+		const ex = explain({ code: 'STALE_INDEX', message: 'Old', guidance: ['Run: constellation index --full', 'Or run `const auth`'] });
+		expect(ex.steps).toEqual(['const index --full', 'const auth']);
+	});
+
 	test('a folder with no project reads as a headline, the commands to run, the docs and the code', () => {
 		expect(explain(NO_PROJECT)).toEqual({
 			title: "This folder isn't a Constellation project",
 			detail: 'No constellation.json at the root of this repository.',
 			notes: [],
-			steps: ['constellation init', 'constellation auth', 'constellation index'],
+			steps: ['const init', 'const auth', 'const index'],
 			docs: 'https://docs.constellationdev.io',
 			code: 'CWD_NOT_INDEXED',
 			projects: [],
@@ -34,9 +39,9 @@ describe('explain', () => {
 			'  No constellation.json at the root of this repository.',
 			'',
 			'  Next steps',
-			'  1. constellation init',
-			'  2. constellation auth',
-			'  3. constellation index',
+			'  1. const init',
+			'  2. const auth',
+			'  3. const index',
 			'',
 			'  Docs   https://docs.constellationdev.io',
 			'  Code   CWD_NOT_INDEXED',
@@ -52,7 +57,7 @@ describe('explain', () => {
 		});
 		expect(ex.title).toBe("Your access key wasn't accepted");
 		expect(ex.detail).toBe('Authentication failed - invalid or missing access key');
-		expect(ex.steps).toEqual(['constellation auth']);
+		expect(ex.steps).toEqual(['const auth']);
 		expect(ex.notes).toEqual(['CONSTELLATION_ACCESS_KEY env var verification: set, starts with ak:', 'Check that your access key has not expired']);
 	});
 
@@ -66,7 +71,7 @@ describe('explain', () => {
 				'If no constellation.json exists, run: constellation init && constellation auth && constellation index',
 			],
 		});
-		expect(ex.steps).toEqual(['constellation init', 'constellation auth', 'constellation index']);
+		expect(ex.steps).toEqual(['const init', 'const auth', 'const index']);
 		expect(ex.notes).toEqual(['Verify the project has a constellation.json file at the git root']);
 	});
 

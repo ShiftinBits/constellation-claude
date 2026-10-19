@@ -154,7 +154,7 @@ export function usageRows(usages: unknown): [string, string][] {
 /** The totals, then up to 15 `file:line usageType` rows, from a `traceSymbolUsage` result. */
 export function usageLines(usages: unknown): string[] {
 	const total = usageTotal(usages);
-	return [...(total === undefined ? [] : [total]), ...usageRows(usages).map(([where, type]) => (type === '' ? where : `${where} ${type}`))];
+	return [...(total === undefined ? [] : [total]), ...usageRows(usages).map(([where, type]) => (type === '' ? where : `${where} · ${type}`))];
 }
 
 /** The risk, the counts and the top dependents of an `impactAnalysis` result. */
@@ -186,7 +186,7 @@ function node(entry: Record<string, unknown>): CallLine | undefined {
 	if (name === undefined) return undefined;
 	const file = str(entry['filePath']);
 	const line = num(entry['line']);
-	const place = file === undefined ? '' : `  ${line === undefined ? file : `${file}:${line}`}`;
+	const place = file === undefined ? '' : ` · ${line === undefined ? file : `${file}:${line}`}`;
 	return { text: `${name}${place}`, depth: Math.max(0, Math.trunc(num(entry['depth']) ?? 1)) };
 }
 

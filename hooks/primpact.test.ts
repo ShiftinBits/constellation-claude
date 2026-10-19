@@ -4,6 +4,7 @@ import { type Blast, probe } from './blast';
 import { ghPrCreate } from './classify';
 import { buildImpactSection, PR_DEADLINE_MS, registerPrImpact, resetPrImpact } from './primpact';
 import { registerSession } from './session';
+import { BRAND } from './theme';
 
 const KEY = 'ak:test-key';
 const PROJECT = '/work/app';
@@ -292,7 +293,7 @@ describe('PR impact in require mode', () => {
 		const { r, ran } = await bash(PLAIN);
 		expect(ran).toBe(false);
 		const deny = denyOf(r);
-		expect(deny).toStartWith('## Impact\n');
+		expect(deny).toStartWith(`${BRAND} · PR impact\n## Impact\n`);
 		expect(deny).toContain('- **Changed files:** 2');
 		expect(deny).toContain('- **Downstream dependents:** 2 (1 test file)');
 		expect(deny).toContain('`makeA`, `A`');
@@ -540,7 +541,7 @@ describe('PR impact in inform mode', () => {
 		// The branch is only for require mode's once-per-branch rule.
 		expect(calls.runs.map((run) => run.argv)).not.toContain(REV_PARSE);
 		expect(calls.logs).toHaveLength(1);
-		expect(calls.logs[0]).toStartWith('## Impact\n');
+		expect(calls.logs[0]).toStartWith('✦ >_CONSTELLATION://CODE_INTEL · PR impact\n## Impact\n');
 		expect(calls.logs[0]).toContain('- **Changed files:** 2');
 	});
 

@@ -1,7 +1,6 @@
 import type {
 	McpToolResult,
 	On,
-	PluginOptions,
 	ProcessRunInit,
 	ProcessSpawnChunk,
 	ProcessSpawnRequest,
@@ -140,7 +139,7 @@ const FALLTHROUGH = { type: 'fallthrough', props: {} };
  * The band's render hook as `registerOnboarding` registers it, raised through
  * a stand-in `on` with a fake `$`: the store, theme row and element table.
  */
-function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
+function loadBand(store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
 	let handler: RenderHandler | undefined;
 	let matcher: unknown;
 	const capture = (event: string, ...rest: unknown[]) => {
@@ -148,7 +147,7 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 		matcher = rest[0];
 		handler = rest[rest.length - 1] as RenderHandler;
 	};
-	registerOnboarding(capture as unknown as On, options);
+	registerOnboarding(capture as unknown as On);
 	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[], storeReads: 0, configReads: 0 };
 	const flags = { storeDown: false, now: 0 };
 	const $ = {
@@ -373,8 +372,8 @@ describe('readStoredKeyAtStart', () => {
 		const { ports, seen } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '\n' }) });
 		expect(await readStoredKeyAtStart(REPO, ports)).toBeUndefined();
 		expect(seen.invalidations).toBe(1);
-		expect(seen.logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(seen.logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run const auth']);
+		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('outside a git repository nothing runs', async () => {
@@ -400,7 +399,7 @@ describe('readStoredKeyAtStart', () => {
 			},
 		});
 		expect(await readStoredKeyAtStart(REPO, ports)).toBeUndefined();
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 });
 
@@ -463,7 +462,7 @@ describe('checkConnection', () => {
 		await checkConnection(REPO, ports);
 		expect(timers).toHaveLength(0);
 		expect(seen.reloads).toBe(0);
-		expect(shown(await band.draw())).toContain('Signing in to Constellation');
+		expect(shown(await band.draw())).toContain('Signing in');
 		endTask();
 	});
 
@@ -548,15 +547,15 @@ describe('connect', () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		const { ports, seen, timers, fire } = fakePorts();
-		await connect(KEY, ports, '✦ Constellation connected');
+		await connect(KEY, ports, 'Connected');
 		expect(seen.envSet.map(isKey)).toEqual([true]);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['Connected']);
 		expect(seen.reloads).toBe(0);
 		expect(timers).toHaveLength(1);
 		await fire();
 		expect(seen.reloads).toBe(1);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['Connected']);
 	});
 });
 
@@ -573,16 +572,16 @@ describe('observeCodeIntel', () => {
 
 	test('AUTH_ERROR puts up sign in again', async () => {
 		const { text, invalidations } = await observed(errored('AUTH_ERROR'));
-		expect(text).toContain('Constellation sign-in failed');
+		expect(text).toContain('Sign-in failed');
 		expect(invalidations).toBe(1);
 	});
 
 	test('PROJECT_NOT_INDEXED puts up not indexed', async () => {
-		expect((await observed(errored('PROJECT_NOT_INDEXED'))).text).toContain("This project isn't indexed yet");
+		expect((await observed(errored('PROJECT_NOT_INDEXED'))).text).toContain("This project hasn't been indexed yet");
 	});
 
 	test('PROJECT_NOT_REGISTERED puts up not registered', async () => {
-		expect((await observed(errored('PROJECT_NOT_REGISTERED'))).text).toContain("This project isn't registered with Constellation");
+		expect((await observed(errored('PROJECT_NOT_REGISTERED'))).text).toContain("This project isn't registered");
 	});
 
 	test('CWD_NOT_INDEXED with no candidates puts up no project', async () => {
@@ -616,7 +615,7 @@ describe('observeCodeIntel', () => {
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
 		observeCodeIntel(OK, false, () => undefined);
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(shown(await band.draw())).toContain("Not signed in");
 
 		const again = loadBand();
 		startTask('index', { invalidate: () => undefined });
@@ -630,16 +629,16 @@ describe('observeCodeIntel', () => {
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
 		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('with no key set, not signed in outlasts a reset and an AUTH_ERROR after it', async () => {
 		const band = loadBand();
 		await readStoredKeyAtStart(REPO, fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) }).ports);
 		resetOnboarding();
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(shown(await band.draw())).toContain("Not signed in");
 		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
-		expect(shown(await band.draw())).toContain("Constellation isn't signed in");
+		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('a reset keeps no project and takes down the states a conversation put up', async () => {
@@ -660,15 +659,15 @@ describe('observeCodeIntel', () => {
 			invalidations += 1;
 		});
 		expect(invalidations).toBe(0);
-		expect(shown(await band.draw())).toContain('Signing in to Constellation');
+		expect(shown(await band.draw())).toContain('Signing in');
 		endTask();
 		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
-		expect(shown(await band.draw())).toContain("This project isn't indexed yet");
+		expect(shown(await band.draw())).toContain("This project hasn't been indexed yet");
 	});
 
 	test("called directly, since the kit skips a plugin's own calls in its tool.call hooks, it maps whatever it is given", async () => {
 		const { text } = await observed(errored('AUTH_ERROR'));
-		expect(text).toContain('Constellation sign-in failed');
+		expect(text).toContain('Sign-in failed');
 	});
 
 	test('logs one line per session where nothing draws, and again after a reset', async () => {
@@ -682,8 +681,8 @@ describe('observeCodeIntel', () => {
 		resetOnboarding();
 		observeCodeIntel(errored('CWD_NOT_INDEXED'), true, () => undefined, log);
 		expect(logs).toEqual([
-			'>_CONSTELLATION:// sign-in failed: run constellation auth',
-			'>_CONSTELLATION:// not set up for this project: run constellation init',
+			'✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run const auth',
+			'✦ >_CONSTELLATION://CODE_INTEL · Not set up for this project · run const init',
 		]);
 	});
 });
@@ -716,17 +715,17 @@ describe('band', () => {
 
 	test('not set up: gold badge, headline, Dismiss then Sign in', () => {
 		const tree = draw('not-set-up');
-		expect(shown(tree)).toContain('✦ setup');
-		expect(shown(tree)).toContain("Constellation isn't signed in");
-		expect(nodes(tree).find((n) => n.props['children'] === '✦ setup')?.props['color']).toBe(palette.solar);
+		expect(shown(tree)).toContain('⚠ setup');
+		expect(shown(tree)).toContain("Not signed in");
+		expect(nodes(tree).find((n) => n.props['children'] === '⚠ setup')?.props['color']).toBe(palette.solar);
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
 		expect(buttons(tree).map((b) => b.props['label'])).toEqual(['Dismiss', 'Sign in']);
 	});
 
 	test('sign in again: red badge and Sign in', () => {
 		const tree = draw('sign-in-again');
-		expect(shown(tree)).toContain('Constellation sign-in failed');
-		expect(nodes(tree).find((n) => n.props['children'] === '✦ failed')?.props['color']).toBe(palette.stellar);
+		expect(shown(tree)).toContain('Sign-in failed');
+		expect(nodes(tree).find((n) => n.props['children'] === '✗ failed')?.props['color']).toBe(palette.stellar);
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
 	});
 
@@ -734,7 +733,7 @@ describe('band', () => {
 		const tree = draw('no-project');
 		const text = shown(tree);
 		expect(text).toContain('Not set up for this project');
-		expect(text).toContain('constellation init');
+		expect(text).toContain('const init');
 		expect(nodes(tree).find((n) => n.type === 'Link')?.props['href']).toBe('https://app.constellationdev.io');
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
@@ -742,16 +741,16 @@ describe('band', () => {
 	test('not registered: the projectId check and the web app link, Dismiss alone', () => {
 		const tree = draw('not-registered');
 		const text = shown(tree);
-		expect(text).toContain("This project isn't registered with Constellation");
+		expect(text).toContain("This project isn't registered");
 		expect(text).toContain('Check projectId in constellation.json');
 		expect(nodes(tree).find((n) => n.type === 'Link')?.props['href']).toBe('https://app.constellationdev.io');
-		expect(nodes(tree).find((n) => n.props['children'] === '✦ failed')?.props['color']).toBe(palette.stellar);
+		expect(nodes(tree).find((n) => n.props['children'] === '✗ failed')?.props['color']).toBe(palette.stellar);
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
 
 	test('not indexed: Dismiss then Index this project', () => {
 		const tree = draw('not-indexed');
-		expect(shown(tree)).toContain("This project isn't indexed yet");
+		expect(shown(tree)).toContain("This project hasn't been indexed yet");
 		expect(buttons(tree).map((b) => b.props['label'])).toEqual(['Dismiss', 'Index this project']);
 	});
 
@@ -762,12 +761,6 @@ describe('band', () => {
 		expect(text).toContain('Indexing this project');
 		expect(text).toContain('Uploading 55%');
 		expect(keys(tree)).toEqual([]);
-	});
-
-	test('the none scheme drops every color and keeps the words', () => {
-		const tree = draw('sign-in-again', { tint: 'none' });
-		expect(nodes(tree).every((n) => n.props['color'] === undefined)).toBe(true);
-		expect(shown(tree)).toContain('✦ failed');
 	});
 
 	test('buttons carry no color', () => {
@@ -796,22 +789,22 @@ describe('the band above the prompt', () => {
 				async () => {
 					await readStoredKeyAtStart(REPO, fakePorts({ run: async () => ({ exitCode: 1, stdout: '' }) }).ports);
 				},
-				"Constellation isn't signed in",
+				"Not signed in",
 				['onboarding-dismiss', 'onboarding-sign-in'],
 			],
-			[() => observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined), 'Constellation sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
+			[() => observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined), 'Sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
 			[() => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined), 'Not set up for this project', ['onboarding-dismiss']],
 			[
 				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
-				"This project isn't registered with Constellation",
+				"This project isn't registered",
 				['onboarding-dismiss'],
 			],
-			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined), "This project isn't indexed yet", ['onboarding-dismiss', 'onboarding-index']],
+			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined), "This project hasn't been indexed yet", ['onboarding-dismiss', 'onboarding-index']],
 			[
 				() => {
 					startTask('auth', { invalidate: () => undefined });
 				},
-				'Signing in to Constellation',
+				'Signing in',
 				[],
 			],
 		];
@@ -825,12 +818,6 @@ describe('the band above the prompt', () => {
 		}
 	});
 
-	test('the theme row and the colors option pick the scheme', async () => {
-		const light = loadBand({ colors: 'none' });
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
-		expect(nodes(await light.draw()).every((n) => n.props['color'] === undefined)).toBe(true);
-	});
-
 	test('Dismiss hides the band for the repository until a different state comes', async () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
@@ -839,7 +826,7 @@ describe('the band above the prompt', () => {
 		expect(band.seen.invalidations).toBe(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
 		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
-		expect(shown(await band.draw())).toContain("This project isn't indexed yet");
+		expect(shown(await band.draw())).toContain("This project hasn't been indexed yet");
 	});
 
 	test('draws read the dismissal once and the theme at most once a second', async () => {
@@ -858,7 +845,7 @@ describe('the band above the prompt', () => {
 		const band = loadBand();
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		band.flags.storeDown = true;
-		expect(shown(await band.draw())).toContain('Constellation sign-in failed');
+		expect(shown(await band.draw())).toContain('Sign-in failed');
 		band.flags.storeDown = false;
 		await band.draw();
 		expect(band.seen.storeReads).toBe(2);
@@ -905,7 +892,7 @@ describe('the band as a loaded plugin', () => {
 
 		for (const surface of ['terminal', 'desktop'] as const) {
 			const ui = await $.ui.mount({ plugin: 'constellation', surface, component: 'AbovePrompt', props: BAND_PROPS });
-			expect(await ui.find({ type: 'Text', text: 'Constellation sign-in failed' })).toBeDefined();
+			expect(await ui.find({ type: 'Text', text: 'Sign-in failed' })).toBeDefined();
 			expect(await ui.find({ type: 'Button', key: 'onboarding-sign-in' })).toBeDefined();
 			await ui.unmount();
 		}
@@ -930,7 +917,7 @@ describe('the band as a loaded plugin', () => {
 		answer.next = errored('AUTH_ERROR');
 		await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u3' });
 		const other = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
-		expect(await other.find({ type: 'Text', text: 'Constellation sign-in failed' })).toBeDefined();
+		expect(await other.find({ type: 'Text', text: 'Sign-in failed' })).toBeDefined();
 		await other.unmount();
 
 		expect([...logs, ...toasts, drawn].some((line) => line.includes(KEY))).toBe(false);
@@ -944,7 +931,7 @@ describe('the band as a loaded plugin', () => {
 			answer.next = errored('PROJECT_NOT_INDEXED');
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['>_CONSTELLATION:// sign-in failed: run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run const auth']);
 		});
 
 		test(`on ${surfaces.join() || 'no surface'} a session with no key logs nothing at start, then one line for the agent's AUTH_ERROR`, async ($, on) => {
@@ -955,7 +942,7 @@ describe('the band as a loaded plugin', () => {
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 			await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' });
 			await settle();
-			expect(logs).toEqual(['>_CONSTELLATION:// not signed in: run constellation auth']);
+			expect(logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run const auth']);
 		});
 	}
 
@@ -968,7 +955,7 @@ describe('the band as a loaded plugin', () => {
 		await settle();
 		expect(logs).toEqual([]);
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
-		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: "This project hasn't been indexed yet" })).toBeDefined();
 		await ui.unmount();
 	});
 
@@ -978,13 +965,13 @@ describe('the band as a loaded plugin', () => {
 		await settle();
 		expect(logs).toEqual([]);
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
-		expect(await ui.find({ type: 'Text', text: "Constellation isn't signed in" })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: "Not signed in" })).toBeDefined();
 		await ui.unmount();
 	});
 });
 
 const CLI = '/usr/local/bin/constellation';
-const INIT_HINT = '✦ Constellation connected. Run constellation init in this repo to set it up';
+const INIT_HINT = 'Connected. Run const init in this repo to set it up';
 const MANUAL = 'https://app.constellationdev.io/auth/cli?callback_port=5555&state=abc';
 
 /** Lets every chain of resolved promises a press started run to its end. */
@@ -1075,7 +1062,7 @@ function buttonWorld(run: Run, c: Child = {}) {
 	return { world, spawns };
 }
 
-const stellarBadge = (tree: unknown) => nodes(tree).find((n) => n.props['children'] === '✦ failed')?.props['color'];
+const stellarBadge = (tree: unknown) => nodes(tree).find((n) => n.props['children'] === '✗ failed')?.props['color'];
 
 describe('cliPath', () => {
 	test("a plain sh looks on the host's PATH first, with a timeout, and a CLI found there runs with the host's environment", async () => {
@@ -1126,7 +1113,7 @@ describe('cliPath', () => {
 describe('the Sign in button', () => {
 	test('spawns constellation auth with the inherited key emptied and no color', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Opening browser for authentication...\n')] });
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
@@ -1142,7 +1129,7 @@ describe('the Sign in button', () => {
 		await startSignIn(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Sign-in failed');
 		expect(shown(tree)).toContain('Waiting for authentication...');
 		expect(stellarBadge(tree)).toBe(palette.stellar);
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
@@ -1159,8 +1146,8 @@ describe('the Sign in button', () => {
 		expect(readBacks()).toBe(1);
 		expect(seen.envSet).toEqual([]);
 		const text = shown(await band.draw());
-		expect(text).toContain('Constellation sign-in failed');
-		expect(text).toContain('Run `constellation auth` in a terminal');
+		expect(text).toContain('Sign-in failed');
+		expect(text).toContain('Run const auth in a terminal');
 	});
 
 	test('a new stored key sets the env, takes the band down and reloads only through after(0)', async () => {
@@ -1174,10 +1161,10 @@ describe('the Sign in button', () => {
 		expect(timers).toHaveLength(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
 		// The toast goes out before the reload, which unloads the module.
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['Connected']);
 		await fire();
 		expect(seen.reloads).toBe(1);
-		expect(seen.toasts).toEqual(['✦ Constellation connected']);
+		expect(seen.toasts).toEqual(['Connected']);
 	});
 
 	test('a new key with no project toasts the init hint before the reload, and only that', async () => {
@@ -1205,7 +1192,7 @@ describe('the Sign in button', () => {
 		await startSignIn(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain('Signing in to Constellation');
+		expect(shown(tree)).toContain('Signing in');
 		expect(keys(tree)).toEqual([]);
 		const link = nodes(tree).find((n) => n.type === 'Link');
 		expect(link?.props).toEqual({ href: MANUAL, label: MANUAL });
@@ -1231,7 +1218,7 @@ describe('the Sign in button', () => {
 
 	test("a CLI only the login shell finds signs in with the profile's PATH, never through the login shell", async () => {
 		const { world, spawns } = buttonWorld(host({ loginOnly: true }).run);
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
@@ -1298,7 +1285,7 @@ describe('the Sign in button', () => {
 		await settle();
 		expect(spawns).toEqual([]);
 		const tree = await band.draw();
-		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Sign-in failed');
 		expect(shown(tree)).toContain('npm i -g @constellationdev/cli');
 		expect(nodes(tree).find((n) => n.type === 'Link')?.props['href']).toBe('https://docs.constellationdev.io/cli/#installation');
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
@@ -1313,7 +1300,7 @@ describe('the Sign in button', () => {
 describe('the Index button', () => {
 	test('spawns constellation index --wait in the project root, with no --dirty', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Indexing...\n')] });
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-index');
 		await settle();
@@ -1329,7 +1316,7 @@ describe('the Index button', () => {
 		await settle();
 		expect(seen.pings).toEqual(['return await api.ping()']);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		expect(seen.toasts).toEqual(['✦ Constellation indexed this project']);
+		expect(seen.toasts).toEqual(['Indexed this project']);
 	});
 
 	test('an exit 0 with PROJECT_NOT_INDEXED stays not indexed, with the last line', async () => {
@@ -1343,7 +1330,7 @@ describe('the Index button', () => {
 		await startIndex(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain("This project isn't indexed yet");
+		expect(shown(tree)).toContain("This project hasn't been indexed yet");
 		expect(shown(tree)).toContain('Waiting for indexing');
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-index']);
 		expect(seen.toasts).toEqual([]);
@@ -1360,7 +1347,7 @@ describe('the Index button', () => {
 		await startIndex(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain("This project isn't registered with Constellation");
+		expect(shown(tree)).toContain("This project isn't registered");
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
 
@@ -1371,7 +1358,7 @@ describe('the Index button', () => {
 		await startIndex(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain('Constellation sign-in failed');
+		expect(shown(tree)).toContain('Sign-in failed');
 		expect(shown(tree)).toContain('Unauthorized');
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
 		expect(seen.toasts).toEqual([]);
@@ -1384,7 +1371,7 @@ describe('the Index button', () => {
 		await startIndex(ports);
 		await settle();
 		const tree = await band.draw();
-		expect(shown(tree)).toContain("This project isn't indexed yet");
+		expect(shown(tree)).toContain("This project hasn't been indexed yet");
 		expect(shown(tree)).toContain('Indexing...');
 		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-index']);
 		expect(seen.toasts).toEqual([]);
@@ -1432,8 +1419,8 @@ describe('the Index button', () => {
 		await settle();
 		expect(spawns).toEqual([]);
 		const text = shown(await band.draw());
-		expect(text).toContain("This project isn't indexed yet");
-		expect(text).toContain('Run `constellation index` in a terminal, in the project directory');
+		expect(text).toContain("This project hasn't been indexed yet");
+		expect(text).toContain('Run const index in a terminal, in the project directory');
 	});
 
 	test('a missing CLI shows the install hint and spawns nothing', async () => {
@@ -1452,11 +1439,11 @@ describe('the Index button', () => {
 describe('with no /bin/sh (Windows)', () => {
 	test('the band names the command to run in a terminal and offers only Dismiss, so nothing can spawn', async () => {
 		for (const [code, step] of [
-			['AUTH_ERROR', 'Run `constellation auth` in a terminal'],
-			['PROJECT_NOT_INDEXED', 'Run `constellation index` in a terminal, in the project directory'],
+			['AUTH_ERROR', 'Run const auth in a terminal'],
+			['PROJECT_NOT_INDEXED', 'Run const index in a terminal, in the project directory'],
 		] as const) {
 			const { world, spawns } = buttonWorld(host().run);
-			const band = loadBand({}, new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
+			const band = loadBand(new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
 			observeCodeIntel(errored(code), true, () => undefined);
 			const tree = await band.draw();
 			expect(shown(tree)).toContain(step);
@@ -1467,13 +1454,13 @@ describe('with no /bin/sh (Windows)', () => {
 		}
 	});
 
-	test('a not set up band on Windows says to run constellation auth', async () => {
-		const band = loadBand({}, new Map(), { fs: { exists: async () => false } });
+	test('a not set up band on Windows says to run const auth', async () => {
+		const band = loadBand(new Map(), { fs: { exists: async () => false } });
 		const ports = fakePorts({ run: async () => ({ exitCode: 1, stdout: '' }) }).ports;
 		await readStoredKeyAtStart(REPO, { ...ports, exists: async (p) => p === `${REPO}/.git` });
 		const tree = await band.draw();
-		expect(shown(tree)).toContain("Constellation isn't signed in");
-		expect(shown(tree)).toContain('Run `constellation auth` in a terminal');
+		expect(shown(tree)).toContain("Not signed in");
+		expect(shown(tree)).toContain('Run const auth in a terminal');
 		expect(keys(tree)).toEqual(['onboarding-dismiss']);
 	});
 });
@@ -1485,7 +1472,7 @@ describe('states with no button', () => {
 			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 		]) {
 			const { world, spawns } = buttonWorld(host().run);
-			const band = loadBand({}, new Map(), world);
+			const band = loadBand(new Map(), world);
 			await put();
 			const tree = await band.draw();
 			expect(keys(tree)).toEqual(['onboarding-dismiss']);
@@ -1520,7 +1507,7 @@ describe('Sign in as a loaded plugin', () => {
 		});
 		on('env.set', (_$, e) => {
 			setKey = e.value;
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('command.run', (_$, e) => {
 			commands.push(e.command);
@@ -1538,7 +1525,7 @@ describe('Sign in as a loaded plugin', () => {
 		await $.session.start({ cwd: REPO, surface: 'terminal', isInteractive: true });
 		const props = { hasSurvey: false, isWorking: false, maxRows: 12, bodyColumns: 80, scroll: { offset: 0, bodyRows: 11 }, view: {} };
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props });
-		expect(await ui.find({ type: 'Text', text: "Constellation isn't signed in" })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: "Not signed in" })).toBeDefined();
 		// The press settles with the child's loop; the reload waits on the clock.
 		await ui.press({ key: 'onboarding-sign-in' });
 		await ui.unmount();

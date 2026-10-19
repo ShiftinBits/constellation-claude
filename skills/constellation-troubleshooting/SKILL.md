@@ -13,7 +13,7 @@ Quick diagnostic procedures for Constellation plugin issues.
 Issue Reported
      |
      v
-Can mcp__constellation__code_intel be called?
+Can the code_intel tool be called?
      |                    |
     YES                   NO
      |                    |
@@ -29,6 +29,8 @@ Check error.code:
 - API_UNREACHABLE --> Connectivity section
 ```
 
+When you report an error to the user, start with `✦ >_CONSTELLATION://CODE_INTEL · <topic>` and put the error on one line as `✗ CODE · headline · next step`, for example `✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · const index`. Write every CLI command with its `const` shorthand (`const auth`, `const index`), even where the error guidance spells out `constellation`.
+
 In the terminal and the desktop app, the Constellation onboarding band above the prompt offers **Sign in** and **Index this project** buttons (on Windows it names the command to run in a terminal instead). The manual steps below still apply.
 
 ## MCP Server Issues
@@ -39,11 +41,11 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 
 **Quick Fixes:**
 
-1. **Restart Claude Code** - MCP connections initialize at startup
+1. **Restart Claude Code**: MCP connections initialize at startup
 
 2. **Verify MCP configuration:**
 
-   Note, the tool is built into the constellation plugin, but should accurately reflect the following:
+   Note, the tool is built into the Constellation plugin, but should accurately reflect the following:
 
    ```json
    {
@@ -69,7 +71,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 1. **Configure credentials:**
 
    ```bash
-   npx @constellationdev/cli auth
+   const auth
    ```
 
 2. **Check if access key is properly set:**
@@ -88,13 +90,13 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 
    ```bash
    cd /path/to/your/project
-   constellation index --full
+   const index
    ```
 
 2. **Force reindex if stale:**
 
    ```bash
-   constellation index --full --force
+   const index --full --force
    ```
 
 ## Connectivity Issues (API_UNREACHABLE)
@@ -109,7 +111,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 
 ## Query Issues (SYMBOL_NOT_FOUND, FILE_NOT_FOUND)
 
-These are typically **not errors** - the item simply wasn't found in the index.
+These are typically **not errors**: the item simply wasn't found in the index.
 
 **Troubleshooting:**
 

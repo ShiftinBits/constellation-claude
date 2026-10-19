@@ -14,7 +14,20 @@ const result = await api.getArchitectureOverview({ includeMetrics: true, include
 return result;
 ```
 
-**Present the following:**
+**Present the following**, starting with the brand line (values on one row joined with ` · `):
+
+```
+✦ >_CONSTELLATION://CODE_INTEL · architecture
+<primaryLanguage> · <frameworks> · <totalFiles> files · <symbols.total> symbols
+Languages
+  • <language> · <fileCount> files · <percentage>%
+Symbols
+  • <kind> · <count>
+Hotspots
+  • <path> · <incoming> in · <outgoing> out
+Packages
+  • <package>
+```
 
 1. **Project Summary**
    - Primary language (result.data.metadata.primaryLanguage) and detected frameworks (result.data.metadata.frameworks)
@@ -46,3 +59,5 @@ return result;
    - Concentration of connections in a few hub files
 
 Keep the output concise and scannable. Focus on giving a quick mental model of the codebase structure.
+
+**If error**, report it under the brand line as `✗ <error.code> · <headline> · <next step>`: the headline is error.message without its `[CODE]` prefix, the next step the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`), with any other guidance indented below.

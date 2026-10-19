@@ -1,7 +1,7 @@
 import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
-import { forTheme, status } from './theme';
+import { badge, brandMark, branded, forTheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /** Runs a command, as `$.process.run`. */
@@ -49,7 +49,8 @@ let logged = false;
 /** The latest recheck; an older one that finishes after a newer started drops its result. */
 let seq = 0;
 let timer: Timer | undefined;
-let colors: unknown;
+/** The `showFreshness` option. Off, no project is tracked, so no git runs and no line shows. */
+let enabled = true;
 
 /** How long ago `iso` was: "just now", "5m ago", "2h ago" or "3d ago". Undefined when `iso` is not a date. */
 function age(iso: string, now: number): string | undefined {
@@ -95,34 +96,38 @@ function stateParts(view: Exclude<FreshnessView, { kind: 'error' }>, now: number
 export function freshnessText(view: FreshnessView, now: number): string {
 	if (view.kind === 'error') {
 		const ex = explain(view.failure);
-		return ['✦ ' + view.failure.code, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP);
+		return branded([`✗ ${view.failure.code}`, ex.title, ...(ex.steps[0] === undefined ? [] : [ex.steps[0]])].join(SEP));
 	}
 	const { head, since } = stateParts(view, now);
-	return `✦ ${[head, ...(since === undefined ? [] : [since])].join(SEP)}`;
+	return branded([head, ...(since === undefined ? [] : [since])].join(SEP));
 }
 
 /**
- * The indicator as one row: the mark and state words painted (gold for behind
- * and mismatch, red for an error), the index age dim. An
- * error's headline is primary text and its next step dim. `el` is the table
- * from `$.ui.resolve(e)`.
+ * The indicator as one row: the brand mark in blue, then the state words in
+ * primary text and the index age dim. An error is its code as a red `✗` badge
+ * and its next step dim, or its headline when there is no step: the row is
+ * cut at the terminal's width, and the step is the part to act on. `el` is the
+ * table from `$.ui.resolve(e)`.
  */
 export function freshnessBand(el: ElementTable, view: FreshnessView, tint: Scheme, now: number): RenderElement {
-	const tone = forTheme(status(view.kind === 'error' ? 'error' : 'stale'), tint);
-	const painted = (text: string) => el.Text({ ...(tone.color === undefined ? {} : { color: tone.color }), children: text });
 	const dim = (text: string) => el.Text({ dimColor: true, children: text });
 	if (view.kind === 'error') {
 		const ex = explain(view.failure);
 		const step = ex.steps[0];
 		return el.Text({
 			wrap: 'truncate',
-			children: [painted(`✦ ${view.failure.code}`), el.Text({ children: `${SEP}${ex.title}` }), ...(step === undefined ? [] : [dim(`${SEP}${step}`)])],
+			children: [
+				brandMark(el, tint),
+				SEP,
+				badge(el, '', forTheme({ ...status('error'), word: view.failure.code }, tint)),
+				step === undefined ? `${SEP}${ex.title}` : dim(`${SEP}${step}`),
+			],
 		});
 	}
 	const { head, since } = stateParts(view, now);
 	return el.Text({
 		wrap: 'truncate',
-		children: [painted(`✦ ${head}`), ...(since === undefined ? [] : [dim(`${SEP}${since}`)])],
+		children: [brandMark(el, tint), `${SEP}${head}`, ...(since === undefined ? [] : [dim(`${SEP}${since}`)])],
 	});
 }
 
@@ -221,9 +226,17 @@ export async function observeEnvelope(
 	await compare(before, run, invalidate, log);
 }
 
-/** Tracks the project at `at`. A different root drops what was known about the last one; true when it changed. */
+/** Whether the `showFreshness` option is on. */
+export function showsFreshness(): boolean {
+	return enabled;
+}
+
+/**
+ * Tracks the project at `at`. A different root drops what was known about the
+ * last one; true when it changed. With `showFreshness` off nothing is tracked.
+ */
 export function track(at: string): boolean {
-	if (at === root) return false;
+	if (!enabled || at === root) return false;
 	root = at;
 	index = undefined;
 	local = undefined;
@@ -243,15 +256,11 @@ export function freshnessLine(now: number): { view: FreshnessView; text: string 
 	return view === undefined ? undefined : { view, text: freshnessText(view, now) };
 }
 
-/** The `colors` option, for painting the band. */
-export function freshnessColors(): unknown {
-	return colors;
-}
-
 /**
- * Starts the indicator over and keeps the colors option. A Bash call that ran
- * a git commit, pull, checkout, merge or rebase compares the checkout again;
- * the call's result goes back untouched and does not wait for git.
+ * Starts the indicator over and keeps the `showFreshness` option (an unset
+ * value counts as on). A Bash call that ran a git commit, pull, checkout,
+ * merge or rebase compares the checkout again; the call's result goes back
+ * untouched and does not wait for git. With the option off no hook is registered.
  */
 export function registerFreshness(on: On, options: PluginOptions): void {
 	timer?.cancel();
@@ -262,7 +271,8 @@ export function registerFreshness(on: On, options: PluginOptions): void {
 	root = undefined;
 	logged = false;
 	seq = 0;
-	colors = options.colors;
+	enabled = options.showFreshness !== false;
+	if (!enabled) return;
 
 	on('tool.call', { tool: /^Bash$/ }, async ($, e, next) => {
 		const r = await next(e);

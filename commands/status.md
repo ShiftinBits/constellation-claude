@@ -12,25 +12,33 @@ const result = await api.ping();
 return result;
 ```
 
+Start the reply with the line `✦ >_CONSTELLATION://CODE_INTEL · status`. Statuses are a glyph and a lowercase word (`✓ ok`, `⏱ <word>` in progress, `⚠ <word>` a warning, `✗ <word>`, `·` for not checked), and fields on one line are joined with ` · `.
+
 **If successful** (result.pong === true), report:
-- Status: Connected
-- Authentication valid, project access confirmed
-- Note: Use `/constellation:diagnose` or `api.getCapabilities()` to check indexing status
 
-**If error** (result.success is false), report based on error code:
+```
+✦ >_CONSTELLATION://CODE_INTEL · status
+Connection   ✓ ok
+Auth         ✓ ok
+ℹ Run /constellation:diagnose to check the project's index.
+```
 
-| Error Code | Response |
-|------------|----------|
-| `AUTH_ERROR` | "Status: Auth Failed - Run `constellation auth` to configure credentials" |
-| `PROJECT_NOT_REGISTERED` | "Status: Project Not Found - Verify project ID or check organization access" |
-| `PROJECT_INACTIVE` | "Status: Project Inactive - Project has been deactivated" |
-| `API_UNREACHABLE` | "Status: API Offline - Check network connectivity and API URL in constellation.json" |
-| Other codes | Show error code, message, and guidance from result.error |
-| Missing error object | Note "Unexpected response structure" and show raw result |
+**If error** (result.success is false), report the error as `✗ CODE · headline · next step` under the brand line:
+
+| Error Code | Line |
+|------------|------|
+| `AUTH_ERROR` | `✗ AUTH_ERROR · Your access key wasn't accepted · const auth` |
+| `PROJECT_NOT_REGISTERED` | `✗ PROJECT_NOT_REGISTERED · This project isn't registered with Constellation · check the project ID in constellation.json and your organization access` |
+| `PROJECT_INACTIVE` | `✗ PROJECT_INACTIVE · This project has been deactivated · check the project at app.constellationdev.io` |
+| `API_UNREACHABLE` | `✗ API_UNREACHABLE · Constellation's API can't be reached · check your network and the apiUrl in constellation.json` |
+| Other codes | `✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`)>`, with any other guidance indented below |
+| Missing error object | `✗ INVALID_RESPONSE · Unexpected response structure · run /constellation:diagnose`, then the raw result |
 
 **If the tool call fails entirely**, report:
-- Status: MCP Unreachable
-- The Constellation MCP server is not running or not configured
-- Suggest: Restart Claude Code or run `/constellation:diagnose` for details
+
+```
+✦ >_CONSTELLATION://CODE_INTEL · status
+✗ MCP_UNAVAILABLE · The Constellation MCP server isn't connected · restart Claude Code or run /constellation:diagnose
+```
 
 Keep the response brief and actionable.

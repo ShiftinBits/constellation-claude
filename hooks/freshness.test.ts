@@ -1,7 +1,8 @@
 import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
-import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
+import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, showsFreshness, startTicks, track } from './freshness';
 import { GIT, GIT_ENV, GIT_TIMEOUT_MS } from './lib';
+import { BRAND, palette } from './theme';
 
 const ROOT = '/work/app';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
@@ -26,8 +27,7 @@ function fakeRun(answers: { head?: Answer; count?: Answer }) {
 }
 
 const onBranch = (name: string, sha = COMMIT): Answer => ({ exitCode: 0, stdout: `${sha}\nrefs/heads/${name}\n` });
-const options = (colors?: unknown) => ({ colors }) as unknown as PluginOptions;
-const fresh = () => registerFreshness((() => undefined) as unknown as On, options());
+const fresh = (options: Record<string, unknown> = {}) => registerFreshness((() => undefined) as unknown as On, options as PluginOptions);
 
 describe('freshnessView and freshnessText', () => {
 	const index = { asOfCommit: OLD, lastIndexedAt: TWO_HOURS_AGO };
@@ -45,26 +45,26 @@ describe('freshnessView and freshnessText', () => {
 
 	test('says how many commits the index is behind', () => {
 		const view = freshnessView(index, local(), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 4 commits behind · indexed 2h ago');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind · indexed 2h ago');
 	});
 
 	test('uses the singular for one commit', () => {
 		const view = freshnessView(index, local({ behind: 1 }), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 1 commit behind · indexed 2h ago');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 1 commit behind · indexed 2h ago');
 	});
 
 	test('a zero or unknown count is a mismatch with the short commit', () => {
 		for (const behind of [0, undefined]) {
 			const view = freshnessView(index, local({ behind }), undefined);
-			expect(view && freshnessText(view, NOW)).toBe('✦ index at fedcba9 · indexed 2h ago');
+			expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index at fedcba9 · indexed 2h ago');
 		}
 	});
 
 	test('leaves the age out when absent or unparseable', () => {
 		const view = freshnessView({ asOfCommit: OLD, lastIndexedAt: 'soon' }, local(), undefined);
-		expect(view && freshnessText(view, NOW)).toBe('✦ index 4 commits behind');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind');
 		const none = freshnessView({ asOfCommit: OLD }, local(), undefined);
-		expect(none && freshnessText(none, NOW)).toBe('✦ index 4 commits behind');
+		expect(none && freshnessText(none, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 4 commits behind');
 	});
 
 	test('ages read just now, minutes, hours and days', () => {
@@ -79,7 +79,7 @@ describe('freshnessView and freshnessText', () => {
 
 	test('an error with no index reads code, headline and next step', () => {
 		const view = freshnessView(undefined, undefined, { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] });
-		expect(view && freshnessText(view, NOW)).toBe('✦ WEIRD · The graph melted · constellation index');
+		expect(view && freshnessText(view, NOW)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ✗ WEIRD · The graph melted · const index');
 	});
 });
 
@@ -124,6 +124,27 @@ describe('compareLocal', () => {
 	});
 });
 
+describe('showFreshness', () => {
+	test('off, it registers no hook, tracks no project, runs no git and shows no line', async () => {
+		const events: string[] = [];
+		registerFreshness(((event: string) => void events.push(event)) as unknown as On, { showFreshness: false } as PluginOptions);
+		expect(events).toEqual([]);
+		expect(showsFreshness()).toBe(false);
+		expect(track(ROOT)).toBe(false);
+		const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
+		await observeEnvelope({ success: true, asOfCommit: OLD }, ROOT, git.run, () => undefined);
+		await recheck(git.run, () => undefined);
+		expect(git.calls).toEqual([]);
+		expect(freshnessLine(Date.now())).toBeUndefined();
+	});
+
+	test('unset, it counts as on', () => {
+		fresh();
+		expect(showsFreshness()).toBe(true);
+		expect(track(ROOT)).toBe(true);
+	});
+});
+
 describe('observeEnvelope and recheck', () => {
 	const ok = (asOfCommit?: string, lastIndexedAt: string | undefined = TWO_HOURS_AGO) => ({
 		success: true,
@@ -140,13 +161,13 @@ describe('observeEnvelope and recheck', () => {
 		const invalidate = () => void (draws += 1);
 		const { run } = behindBy4();
 		await observeEnvelope(ok(OLD), ROOT, run, invalidate);
-		expect(lineText()).toMatch(/^✦ index 4 commits behind · indexed /);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · index 4 commits behind · indexed /);
 		expect(draws).toBe(1);
 		await observeEnvelope(ok(OLD), ROOT, run, invalidate);
 		expect(draws).toBe(1);
 		const newer = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '2\n' } });
 		await observeEnvelope(ok(OLD.replace(/^f/, 'e')), ROOT, newer.run, invalidate);
-		expect(lineText()).toMatch(/^✦ index 2 commits behind/);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · index 2 commits behind/);
 		expect(draws).toBe(2);
 	});
 
@@ -179,7 +200,7 @@ describe('observeEnvelope and recheck', () => {
 		}
 		let draws = 0;
 		await observeEnvelope({ success: false, error: { code: 'WEIRD', message: 'It broke' } }, ROOT, run, () => void (draws += 1));
-		expect(lineText()).toMatch(/^✦ WEIRD · It broke/);
+		expect(lineText()).toMatch(/^✦ >_CONSTELLATION:\/\/CODE_INTEL · ✗ WEIRD · It broke/);
 		expect(draws).toBe(1);
 		await observeEnvelope({ success: true }, ROOT, run, () => void (draws += 1));
 		expect(lineText()).toBeUndefined();
@@ -281,36 +302,47 @@ describe('freshnessBand', () => {
 	const el = {
 		Text: (props: Record<string, unknown>) => ({ type: 'Text', props }),
 	} as unknown as Parameters<typeof freshnessBand>[0];
+	/** The row's children: an element as its props, a bare string as `{ children }`. */
 	const pieces = (tint: Parameters<typeof freshnessBand>[2], view: Parameters<typeof freshnessBand>[1]) => {
 		const row = freshnessBand(el, view, tint, NOW);
-		return (Reflect.get(Reflect.get(row, 'props'), 'children') as { props: Record<string, unknown> }[]).map((c) => c.props);
+		return (Reflect.get(Reflect.get(row, 'props'), 'children') as unknown[]).map((c) =>
+			typeof c === 'string' ? { children: c } : (c as { props: Record<string, unknown> }).props,
+		);
 	};
 
-	test('paints the mark and state words and dims the age', () => {
-		const [head, since] = pieces('brand', { kind: 'behind', behind: 4, lastIndexedAt: TWO_HOURS_AGO });
-		expect(head).toMatchObject({ children: '✦ index 4 commits behind', color: expect.any(String) });
+	test('opens with the brand mark in nebula blue, the state words plain and the age dim', () => {
+		const [mark, head, since] = pieces('brand', { kind: 'behind', behind: 4, lastIndexedAt: TWO_HOURS_AGO });
+		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
+		expect(head).toEqual({ children: ' · index 4 commits behind' });
 		expect(since).toEqual({ dimColor: true, children: ' · indexed 2h ago' });
 	});
 
+	test('the theme scheme draws the mark in the theme blue', () => {
+		const [mark] = pieces('theme', { kind: 'behind', behind: 4 });
+		expect(mark?.['color']).toBe('suggestion');
+	});
+
 	test('a mismatch names the indexed commit', () => {
-		const [head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD });
-		expect(head?.['children']).toBe('✦ index at fedcba9');
+		const [, head] = pieces('brand', { kind: 'mismatch', asOfCommit: OLD });
+		expect(head?.['children']).toBe(' · index at fedcba9');
 	});
 
-	test('an error paints the code in another color, keeps the headline plain and dims the next step', () => {
-		const behind = pieces('brand', { kind: 'behind', behind: 1 })[0];
-		const [code, headline, step] = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
-		expect(code?.['children']).toBe('✦ WEIRD');
-		expect(code?.['color']).not.toBe(behind?.['color']);
-		expect(headline).not.toHaveProperty('color');
-		expect(headline).not.toHaveProperty('dimColor');
-		expect(step).toMatchObject({ dimColor: true });
+	test('an error draws the code as a red ✗ badge and the next step dim', () => {
+		const row = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted', guidance: ['Run `constellation index`'] } });
+		const [mark, sep, code, step] = row;
+		expect(row).toHaveLength(4);
+		expect(mark).toEqual({ color: palette.nebula, children: BRAND });
+		expect(sep).toEqual({ children: ' · ' });
+		expect(code).toEqual({ children: [{ type: 'Text', props: { color: palette.stellar, children: '✗ WEIRD' } }] });
+		expect(step).toEqual({ dimColor: true, children: ' · const index' });
 	});
 
-	test('the none scheme draws no color', () => {
-		const [head] = pieces('none', { kind: 'behind', behind: 2 });
-		expect(head).not.toHaveProperty('color');
+	test('an error with no next step keeps the headline plain', () => {
+		const row = pieces('brand', { kind: 'error', failure: { code: 'WEIRD', message: '[WEIRD] The graph melted' } });
+		expect(row).toHaveLength(4);
+		expect(row[3]).toEqual({ children: ' · The graph melted' });
 	});
+
 });
 
 describe('startTicks', () => {
@@ -350,7 +382,7 @@ function bashHook(key: string | undefined = 'ak:test-key') {
 		if (event !== 'tool.call') return;
 		matcher = rest[0];
 		handler = rest[rest.length - 1] as BashHandler;
-	}) as unknown as On, options());
+	}) as unknown as On, {} as PluginOptions);
 	track(ROOT);
 	const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
 	let draws = 0;

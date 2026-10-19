@@ -352,7 +352,7 @@ describe('summarize', () => {
 
 	test('diagnose reads an unindexed project as stale', () => {
 		const lines = summarize('diagnose', ok({ ping: PING, caps: { isIndexed: false } })).lines;
-		expect(lines).toContain('Index: stale (not indexed)');
+		expect(lines).toContain('Index: not indexed');
 	});
 
 	test('deps lists file rows and dims modules', () => {
@@ -374,12 +374,12 @@ describe('summarize', () => {
 
 	test('unused groups symbols by file with their kind', () => {
 		const s = summarize('unused', ok(UNUSED));
-		expect(s.lines).toEqual(['2 unused symbols', 'src/util.ts', '  helper (function)', '  Legacy (class)']);
+		expect(s.lines).toEqual(['2 unused exports', 'src/util.ts', '  helper · function', '  Legacy · class']);
 		expect(s.items.filter((i) => i.badge?.kind === 'kind')).toHaveLength(2);
 	});
 
 	test('unused with nothing says so', () => {
-		expect(summarize('unused', ok({ orphanedSymbols: [], orphanedFiles: [] })).lines).toEqual(['No unused symbols found']);
+		expect(summarize('unused', ok({ orphanedSymbols: [], orphanedFiles: [] })).lines).toEqual(['No unused exports found']);
 	});
 
 	test('a result of the wrong shape never throws', () => {
@@ -397,8 +397,8 @@ describe('summarize', () => {
 
 	test('an error is the code, the message and the guidance', () => {
 		const s = summarize('status', { success: false, error: { code: 'AUTH_ERROR', message: 'Bad key', guidance: ['Run constellation auth'] } });
-		expect(s.lines).toEqual(["✗ Your access key wasn't accepted", '  Bad key', '', '  Next steps', '  1. constellation auth', '', '  Code   AUTH_ERROR']);
-		expect(s.explanation).toMatchObject({ title: "Your access key wasn't accepted", steps: ['constellation auth'], code: 'AUTH_ERROR' });
+		expect(s.lines).toEqual(["✗ Your access key wasn't accepted", '  Bad key', '', '  Next steps', '  1. const auth', '', '  Code   AUTH_ERROR']);
+		expect(s.explanation).toMatchObject({ title: "Your access key wasn't accepted", steps: ['const auth'], code: 'AUTH_ERROR' });
 		expect(s.error?.code).toBe('AUTH_ERROR');
 	});
 });
@@ -408,8 +408,8 @@ describe('command.run without a pane', () => {
 		test(`answers with text on ${surfaces.join() || 'no surface'} and opens nothing`, async ($, on) => {
 			const { events, turns } = world(on, { surfaces });
 			const r = await run($, 'unused');
-			expect(r.text).toContain('2 unused symbols');
-			expect(r.text).toContain('helper (function)');
+			expect(r.text).toContain('2 unused exports');
+			expect(r.text).toContain('helper · function');
 			expect(r.text).toContain('as of 0123456');
 			expect(events).toEqual([]);
 			expect(turns()).toBe(0);
@@ -419,7 +419,7 @@ describe('command.run without a pane', () => {
 	test('status text names the connection', async ($, on) => {
 		world(on, { surfaces: ['vscode'] });
 		const r = await run($);
-		expect(r.text?.split('\n')[0]).toBe('>_CONSTELLATION:// status');
+		expect(r.text?.split('\n')[0]).toBe('✦ >_CONSTELLATION://CODE_INTEL · Status');
 		expect(r.text).toContain('Connection: ok');
 		expect(r.text).toContain('Project: app');
 	});
@@ -427,15 +427,15 @@ describe('command.run without a pane', () => {
 	test('an error answers with its code and guidance', async ($, on) => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($);
-		expect(r.text?.split('\n').slice(0, 2)).toEqual(['>_CONSTELLATION:// status', "✗ Your access key wasn't accepted"]);
-		expect(r.text).toContain('  1. constellation auth');
+		expect(r.text?.split('\n').slice(0, 2)).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Status', "✗ Your access key wasn't accepted"]);
+		expect(r.text).toContain('  1. const auth');
 		expect(r.text).toContain('  Code   AUTH_ERROR');
 	});
 
 	test('explore needs a symbol', async ($, on) => {
 		const { codes } = world(on, { surfaces: ['vscode'] });
 		const r = await run($, 'explore');
-		expect(r.text).toBe('Usage: /constellation explore <symbol>');
+		expect(r.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · Usage: /constellation explore <query>');
 		expect(codes).toEqual([]);
 	});
 
@@ -445,22 +445,22 @@ describe('command.run without a pane', () => {
 		const r = await run($, 'explore Graph');
 		expect(codes).toEqual([searchCode('Graph')]);
 		const lines = (r.text ?? '').split('\n');
-		expect(lines[0]).toBe('>_CONSTELLATION:// explore');
-		expect(lines.filter((l) => l.startsWith('- function'))).toHaveLength(5);
-		expect(lines[1]).toBe('- function Graph src/f7.ts:8');
+		expect(lines[0]).toBe('✦ >_CONSTELLATION://CODE_INTEL · Explore');
+		expect(lines.filter((l) => l.includes(' · function · '))).toHaveLength(5);
+		expect(lines[1]).toBe('- Graph · function · src/f7.ts:8');
 		expect(r.text).toContain('as of 0123456');
 	});
 
 	test('an explore error answers with its guidance', async ($, on) => {
 		world(on, { surfaces: ['vscode'], answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const r = await run($, 'explore Graph');
-		expect(r.text).toContain('  1. constellation auth');
+		expect(r.text).toContain('  1. const auth');
 	});
 
 	test('deps needs a file', async ($, on) => {
 		const { codes } = world(on, { surfaces: ['vscode'] });
 		const r = await run($, 'deps');
-		expect(r.text).toBe('Usage: /constellation deps <file>');
+		expect(r.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · Usage: /constellation deps <file>');
 		expect(codes).toEqual([]);
 	});
 
@@ -717,7 +717,7 @@ describe('the pane', () => {
 		test('an empty answer draws the empty state', async ($, on) => {
 			world(on, { answer: () => success({ orphanedSymbols: [], orphanedFiles: [], summary: { totalOrphanedSymbols: 0 } }) });
 			const ui = await openUnused($, 'terminal');
-			expect((await exact(ui, '✦ No unused exports found'))?.props['color']).toBe(palette.cosmic);
+			expect((await exact(ui, 'No unused exports found'))?.props).toEqual({ dimColor: true });
 			expect(await ui.find({ key: 'select-all' })).toBeUndefined();
 		});
 
@@ -765,7 +765,7 @@ describe('the pane', () => {
 			const { codes } = world(on, { surfaces: ['vscode'] });
 			const r = await run($, 'unused class');
 			expect(codes).toEqual([orphanCode({ filterByKind: ['class'] })]);
-			expect(r.text).toContain('helper (function)');
+			expect(r.text).toContain('helper · function');
 		});
 	});
 
@@ -777,7 +777,7 @@ describe('the pane', () => {
 		expect(await ui.find({ type: 'Text', text: '✗ error' })).toBeDefined();
 		expect((await exact(ui, "This project hasn't been indexed yet"))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'Not indexed'))?.props['dimColor']).toBe(true);
-		expect((await exact(ui, 'constellation index'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'const index'))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'PROJECT_NOT_INDEXED'))?.props['dimColor']).toBe(true);
 		expect(await ui.find({ type: 'Button', key: 'dep:x' })).toBeUndefined();
 	});
@@ -790,11 +790,11 @@ describe('the pane', () => {
 		world(on, { answer: () => gate });
 		await run($);
 		const ui = await mountPane($, 'terminal');
-		expect(await ui.find({ type: 'Text', text: /◐ pending/ })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /⏱ pending/ })).toBeDefined();
 		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeUndefined();
 		release(success(PING));
 		await settle();
-		expect(await ui.find({ type: 'Text', text: /◐ pending/ })).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: /⏱ pending/ })).toBeUndefined();
 		expect(await ui.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
@@ -1183,24 +1183,6 @@ describe('the pane', () => {
 		expect(await markColor(ui)).toBe('suggestion');
 	});
 
-	test('the colors option set to theme draws with the theme colors on a dark theme', { options: { colors: 'theme' } }, async ($, on) => {
-		world(on, { theme: 'dark' });
-		await run($);
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await okColor(ui)).toBe('success');
-	});
-
-	test('the colors option set to none draws no color and keeps the words', { options: { colors: 'none' } }, async ($, on) => {
-		world(on, { theme: 'dark' });
-		await run($);
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await okColor(ui)).toBeUndefined();
-		expect(await markColor(ui)).toBeUndefined();
-		expect(await ui.find({ type: 'Text', text: '✓ ok' })).toBeDefined();
-	});
-
 	test('a dark theme keeps the green', async ($, on) => {
 		world(on, { theme: 'dark' });
 		await run($);
@@ -1299,9 +1281,9 @@ describe('the symbol explorer', () => {
 			expect(codes.at(-1)).toContain('api.getCallGraph(');
 			await ui.press({ key: 'section-calls' });
 			await settle();
-			expect(await exact(ui, '  outer  src/outer.ts:2')).toBeDefined();
+			expect(await exact(ui, '  outer · src/outer.ts:2')).toBeDefined();
 			expect(await exact(ui, 'Graph')).toBeDefined();
-			expect(await exact(ui, '  inner  src/inner.ts:9')).toBeDefined();
+			expect(await exact(ui, '  inner · src/inner.ts:9')).toBeDefined();
 		});
 
 		test(`each section press draws its section on ${surface}`, async ($, on) => {
@@ -1316,7 +1298,7 @@ describe('the symbol explorer', () => {
 				expect(await exact(ui, 'src/use.ts:4')).toBeDefined();
 				expect(await exact(ui, 'call')).toBeDefined();
 			}
-			else expect(await reads(ui, /^src\/use\.ts:4 call$/)).toBe(true);
+			else expect(await reads(ui, /^src\/use\.ts:4 · call$/)).toBe(true);
 			expect(await reads(ui, /path aliases or export \* barrels/)).toBe(true);
 			expect(await ui.find({ type: 'Button', key: 'section-usages' })).toMatchObject({ props: selectedProps(surface, 'Usages') });
 
@@ -1423,7 +1405,7 @@ describe('the symbol explorer', () => {
 		world(on, { answer: () => failure('AUTH_ERROR', 'Bad key', ['Run constellation auth']) });
 		const ui = await openExplore($, 'terminal');
 		expect(await reads(ui, /Your access key wasn't accepted/)).toBe(true);
-		expect(await exact(ui, 'constellation auth')).toBeDefined();
+		expect(await exact(ui, 'const auth')).toBeDefined();
 	});
 
 	test('an error on the drill draws the guidance in the detail view', async ($, on) => {
@@ -1468,14 +1450,15 @@ describe('the stats tab', () => {
 				// No monospace grid on Desktop: a table under a head of words, the session's split as rows of its own.
 				// A row's text is its cells run together, in column order.
 				const cells = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
-				expect(await ui.find({ type: 'Text', text: 'code_intel calls' })).toBeDefined();
+				for (const head of ['code_intel calls', 'Symbol-like', 'Literal']) expect(await exact(ui, head)).toBeDefined();
 				expect(await cells('This session')).toBe(['This session', '0 (0 ms)', '2', '1', '0%'].join(''));
 				expect(await cells('↳ main')).toBe(['↳ main', '0 (0 ms)', '1', '1', '0%'].join(''));
 				expect(await cells('↳ subagents')).toBe(['↳ subagents', '0 (0 ms)', '1', '0', '0%'].join(''));
 				expect(await cells('Today')).toBe(['Today', '4 (1.5 s)', '3', '2', '57%'].join(''));
 				expect(await cells('Last 30 days')).toBe(['Last 30 days', '8 (4.0 s)', '7', '4', '53%'].join(''));
-				expect((await exact(ui, '4 (1.5 s)'))?.props['color']).toBe(palette.cosmic);
-				expect((await exact(ui, '3'))?.props['color']).toBe(palette.solar);
+				// Color marks status and risk only, never a count.
+				expect((await exact(ui, '4 (1.5 s)'))?.props).toEqual({});
+				expect((await exact(ui, '3'))?.props).toEqual({});
 			} else {
 				const row = async (label: string) => (await ui.find({ key: `stats:${label}` }))?.text;
 				expect(await row('This session')).toContain('0 code_intel calls (0 ms)');
@@ -1500,25 +1483,16 @@ describe('the stats tab', () => {
 		});
 	}
 
-	test('each figure carries its word, and color only under a color scheme', async ($, on) => {
+	test('each figure carries its word, and the counts carry no color', async ($, on) => {
 		world(on, { saved: HISTORY });
 		await run($, 'stats');
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect((await exact(ui, '4 code_intel calls (1.5 s)'))?.props['color']).toBe(palette.cosmic);
-		expect((await exact(ui, '1 symbol-like search'))?.props['color']).toBe(palette.solar);
+		expect((await exact(ui, '4 code_intel calls (1.5 s)'))?.props).toEqual({});
+		expect((await exact(ui, '1 symbol-like search'))?.props).toEqual({});
 		expect((await exact(ui, '1 literal search'))?.props['dimColor']).toBe(true);
 		expect((await exact(ui, '80%'))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'n/a'))?.props['bold']).toBe(true);
-	});
-
-	test('the colors option set to none keeps the words and draws no color', { options: { colors: 'none' } }, async ($, on) => {
-		world(on, { saved: HISTORY });
-		await run($, 'stats');
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
-		expect((await ui.findAll({ type: 'Text' })).filter((t) => t.props['color'] !== undefined)).toEqual([]);
 	});
 
 	test('refresh reads the store again and still sends no query', async ($, on) => {
@@ -1572,7 +1546,7 @@ describe('the stats tab', () => {
 		await searchThrice($, on);
 		const r = await run($, 'stats');
 		expect(r.text?.split('\n')).toEqual([
-			'>_CONSTELLATION:// stats',
+			'✦ >_CONSTELLATION://CODE_INTEL · Stats',
 			`- This session: ${SESSION_ROW}`,
 			'- Today: 4 code_intel calls (1.5 s) · 3 symbol-like searches · 2 literal searches · 57% structural lookups',
 			'- Last 30 days: 8 code_intel calls (4.0 s) · 7 symbol-like searches · 4 literal searches · 53% structural lookups',
@@ -1586,7 +1560,7 @@ describe('the stats tab', () => {
 		world(on, { surfaces: ['vscode'], throws: 'store.keys' });
 		const r = await run($, 'stats');
 		expect(r.text?.split('\n')).toEqual([
-			'>_CONSTELLATION:// stats',
+			'✦ >_CONSTELLATION://CODE_INTEL · Stats',
 			'- This session: 0 code_intel calls (0 ms) · 0 symbol-like searches · 0 literal searches · n/a structural lookups (main: 0 code_intel calls, 0 symbol-like searches · subagents: 0 code_intel calls, 0 symbol-like searches)',
 			'- The stored history could not be read.',
 		]);
@@ -1607,7 +1581,7 @@ describe('the stats tab', () => {
 		expect(lines).toBeUndefined();
 		releaseSets();
 		await reply;
-		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITH_SESSION, TODAY_WITH_SESSION.replace('Today', 'Last 30 days')]);
+		expect(lines).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Stats', `- This session: ${SESSION_ROW}`, TODAY_WITH_SESSION, TODAY_WITH_SESSION.replace('Today', 'Last 30 days')]);
 	});
 
 	test('a save that never lands holds the read for a second and no longer', COUNTING, async ($, on) => {
@@ -1622,7 +1596,7 @@ describe('the stats tab', () => {
 		expect(lines).toBeUndefined();
 		await clock.advance(1);
 		await reply;
-		expect(lines).toEqual(['>_CONSTELLATION:// stats', `- This session: ${SESSION_ROW}`, TODAY_WITHOUT, TODAY_WITHOUT.replace('Today', 'Last 30 days')]);
+		expect(lines).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Stats', `- This session: ${SESSION_ROW}`, TODAY_WITHOUT, TODAY_WITHOUT.replace('Today', 'Last 30 days')]);
 	});
 
 	test('a readable store with nothing in it draws today and the last 30 days as zeros', async ($, on) => {
@@ -1732,7 +1706,7 @@ describe('registration', () => {
 		on('env.set', (_, e) => {
 			order.push(`env.set:${e.name}`);
 			setValue = e.value;
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('session.start', (_, e) => {
 			order.push('session.start');
@@ -1782,7 +1756,7 @@ describe('registration', () => {
 		});
 		on('env.set', (_, e) => {
 			set.push(e.value);
-			return { value: undefined };
+			return { value: {} };
 		});
 		on('session.start', (_, e) => ({ cwd: e.cwd }));
 		on('session.surfaces', () => ({ value: ['terminal'] }));
@@ -1809,7 +1783,7 @@ describe('registration', () => {
 		await clock.advance(0);
 		expect(codes).toEqual(['return await api.ping()']);
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS });
-		expect(await ui.find({ type: 'Text', text: "This project isn't indexed yet" })).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: "This project hasn't been indexed yet" })).toBeDefined();
 		expect(await ui.find({ type: 'Button', key: 'onboarding-index' })).toBeDefined();
 		await clock.advance(TICK);
 		expect(codes).toEqual(['return await api.ping()']);
@@ -1842,6 +1816,24 @@ describe('registration', () => {
 		await clock.advance(TICK);
 		expect(revParses()).toBe(first + 1);
 		expect(codes).toEqual(['return await api.ping()']);
+	});
+
+	test('with showFreshness off and the key already set, nothing is pinged and git never runs', { options: { showFreshness: false } }, async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { key: STORED_KEY, ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		await clock.advance(TICK);
+		expect(codes).toEqual([]);
+		expect(revParses()).toBe(0);
+	});
+
+	test("with showFreshness off, a stored key's connection check still runs, with no git after it", { options: { showFreshness: false } }, async ($, on) => {
+		const { clock, codes, revParses } = storedKeyWorld(on, { ping: success(PING) });
+		await $.session.start({ cwd: '/work/app', surface: 'terminal', isInteractive: true });
+		await clock.advance(0);
+		await clock.advance(TICK);
+		expect(codes).toEqual(['return await api.ping()']);
+		expect(revParses()).toBe(0);
 	});
 
 	test('with the key already set, an AUTH_ERROR ping does not reload the plugins', async ($, on) => {

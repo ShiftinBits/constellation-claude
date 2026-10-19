@@ -39,8 +39,10 @@ const DETAILS: Readonly<Record<string, string>> = {
 	CWD_NOT_INDEXED: 'No constellation.json at the root of this repository.',
 };
 
-/** Constellation CLI commands written without backticks, as in "Run: constellation auth". */
-const CLI = /\bconstellation\s+(?:init|auth|index|status|config)(?:\s+--?[\w=-]+)*/g;
+/** Constellation CLI commands written without backticks, as in "Run: constellation auth" or "const index". */
+const CLI = /\b(?:constellation|const)\s+(?:init|auth|index|status|config)(?:\s+--?[\w=-]+)*/g;
+/** The CLI's full name at the start of a command; the plugin always shows its `const` shorthand. */
+const CLI_NAME = /^constellation(?=\s)/;
 const QUOTED = /`([^`]+)`/g;
 const URL = /https?:\/\/[^\s'")]+/;
 /** Guidance written for an agent (call code_intel again, pass a cwd), not for a person. */
@@ -62,7 +64,10 @@ function commandsIn(line: string): string[] {
 	const found = [...line.matchAll(QUOTED)].map((m) => (m[1] ?? '').trim()).filter((c) => /\s/.test(c));
 	const bare = line.replace(QUOTED, ' ');
 	for (const m of bare.matchAll(CLI)) found.push(m[0].trim());
-	return found.flatMap((c) => c.split(/\s*&&\s*/)).filter((c) => c !== '');
+	return found
+		.flatMap((c) => c.split(/\s*&&\s*/))
+		.filter((c) => c !== '')
+		.map((c) => c.replace(CLI_NAME, 'const'));
 }
 
 /**

@@ -3,14 +3,16 @@ import { background, noteSearch, save, showsAdoption } from './adoption';
 import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
+import { branded } from './theme';
 
 /** Added to the model's context when a session or a subagent starts. */
 export const SESSION_TEXT =
 	'You have access to the code_intel source code intelligence tool, this should be your preferred tool for searching or navigating the code base (finding definitions or references, impact analysis, architecture details, etc.). Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.';
 
 /** Added to the model's context with a search tool call's result. */
-export const REMINDER_TEXT =
-	'Use the code_intel tool before other tools for searching or navigating the codebase. Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.';
+export const REMINDER_TEXT = branded(
+	'Use the code_intel tool before other tools for searching or navigating the codebase. Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.',
+);
 
 type WithContext = { additionalContext?: string[] };
 

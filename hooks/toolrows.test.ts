@@ -1,7 +1,7 @@
 import type { On, RenderPropsOf } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine, Mounted } from 'claude-code/testing';
-import { palette } from './theme';
+import { BRAND, palette } from './theme';
 import { registerSession } from './session';
 import { projectName } from './lib';
 import { methodsOf, outputText, registerToolRows, resetToolRows } from './toolrows';
@@ -9,6 +9,8 @@ import { methodsOf, outputText, registerToolRows, resetToolRows } from './toolro
 const TOOL = 'mcp__plugin_constellation_constellation__code_intel';
 const COMMIT = '0123456789abcdef0123456789abcdef01234567';
 const SURFACES = ['terminal', 'desktop'] as const;
+/** What a result row opens with when its call row was not drawn by the plugin. */
+const MARK = `${BRAND} · `;
 
 const CALL_CODE = 'const [i, d] = await Promise.all([api.impactAnalysis({ symbolId: "s1" }), api.getDependents({ filePath: "src/app.ts" })]); return { i, d }';
 
@@ -178,8 +180,8 @@ describe('call row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountUse($, surface, `use-${surface}`, { code: CALL_CODE, cwd: '/x/constellation-core' });
-			expect(await line(ui)).toBe('✦ code_intel · impactAnalysis, getDependents · constellation-core');
-			expect((await exact(ui, '✦ code_intel'))?.props['color']).toBe(palette.nebula);
+			expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL · impactAnalysis, getDependents · constellation-core');
+			expect((await exact(ui, '✦ >_CONSTELLATION://CODE_INTEL'))?.props['color']).toBe(palette.nebula);
 			expect((await exact(ui, 'constellation-core'))?.props['dimColor']).toBe(true);
 			expect(await ui.find({ type: 'Text', text: 'fallthrough' })).toBeUndefined();
 		}
@@ -189,7 +191,7 @@ describe('call row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountUse($, surface, `bare-${surface}`, { code: 'return 1' });
-			expect(await line(ui)).toBe('✦ code_intel');
+			expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL');
 		}
 	});
 
@@ -197,7 +199,7 @@ describe('call row', () => {
 		world(on);
 		const props = { ...useProps('running', { code: 'return await api.ping()', cwd: '/x/app' }), isRunning: true };
 		const ui = await $.ui.mount({ plugin: 'constellation', surface: 'terminal', component: 'ToolUse', requestId: 'running', props });
-		expect(await line(ui)).toBe('✦ code_intel · ping · app · running');
+		expect(await line(ui)).toBe('✦ >_CONSTELLATION://CODE_INTEL · ping · app · running');
 		expect((await exact(ui, 'running'))?.props['dimColor']).toBe(true);
 	});
 
@@ -235,7 +237,7 @@ describe('result row', () => {
 			world(on);
 			for (const surface of SURFACES) {
 				const ui = await mountResult($, surface, `${name}-${surface}`, reply(result));
-				expect(await line(ui)).toBe(`${expected} · 140 ms · as of 0123456`);
+				expect(await line(ui)).toBe(`${MARK}${expected} · 140 ms · as of 0123456`);
 				expect((await exact(ui, '140 ms · as of 0123456'))?.props['dimColor']).toBe(true);
 			}
 		});
@@ -252,41 +254,40 @@ describe('result row', () => {
 		world(on);
 		const result = { ...IMPACT, summary: { ...IMPACT.summary, testFileCount: 0 } };
 		const ui = await mountResult($, 'terminal', 'impact-no-tests', reply(result));
-		expect(await line(ui)).toBe('✗ HIGH · 8 dependents · 140 ms · as of 0123456');
+		expect(await line(ui)).toBe(`${MARK}✗ HIGH · 8 dependents · 140 ms · as of 0123456`);
 	});
 
 	test('a dependents page counts the server total and leaves out a partial test count', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'paged', reply({ ...DEPENDENTS, pagination: { total: 84, offset: 0, limit: 3, hasMore: true } }));
-		expect(await line(ui)).toBe('84 dependent files · 140 ms · as of 0123456');
+		expect(await line(ui)).toBe(`${MARK}84 dependent files · 140 ms · as of 0123456`);
 	});
 
 	test('a dependencies result with no package leaves the package count out', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'files-only', reply({ file: 'src/app.ts', directDependencies: [{ type: 'file', filePath: 'src/lib.ts' }] }));
-		expect(await line(ui)).toBe('1 dependency file · 140 ms · as of 0123456');
+		expect(await line(ui)).toBe(`${MARK}1 dependency file · 140 ms · as of 0123456`);
 	});
 
 	test('an empty result names the reason the server gave', async ($, on) => {
 		world(on);
 		const text = JSON.stringify({ success: true, result: { symbols: [] }, resultContext: { reason: 'branch_not_indexed' }, time: 9 });
 		const ui = await mountResult($, 'terminal', 'reason', text);
-		expect(await line(ui)).toBe('0 symbols · branch not indexed · 9 ms');
+		expect(await line(ui)).toBe(`${MARK}0 symbols · branch not indexed · 9 ms`);
 		expect((await exact(ui, 'branch not indexed'))?.props['dimColor']).toBe(true);
 	});
 
 	test('a dependents result with no test file leaves the test count out', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'no-tests', reply({ file: 'src/app.ts', directDependents: [{ filePath: 'src/main.ts' }] }));
-		expect(await line(ui)).toBe('1 dependent file · 140 ms · as of 0123456');
+		expect(await line(ui)).toBe(`${MARK}1 dependent file · 140 ms · as of 0123456`);
 	});
 
-	test('a search shows only the first three names, each in its kind color', async ($, on) => {
+	test('a search shows only the first three names, as plain text', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'names', reply(SEARCH));
-		expect((await exact(ui, 'GraphService'))?.props['color']).toBe(palette.galactic);
-		expect((await exact(ui, 'GraphNode'))?.props['color']).toBe(palette.galactic);
-		expect((await exact(ui, 'graphOf'))?.props['color']).toBe(palette.nebula);
+		expect(Reflect.get(await ui.drawn(), 'children')).toContain('GraphService, GraphNode, graphOf');
+		expect(await exact(ui, 'GraphService')).toBeUndefined();
 		expect(await line(ui)).not.toContain('graphCount');
 	});
 
@@ -304,10 +305,10 @@ describe('result row', () => {
 	test('any other return is counted, with no descent', async ($, on) => {
 		world(on);
 		for (const surface of SURFACES) {
-			expect(await line(await mountResult($, surface, `keys-${surface}`, reply({ a: 1, b: 2 })))).toBe('result: 2 keys · 140 ms · as of 0123456');
-			expect(await line(await mountResult($, surface, `items-${surface}`, reply([1, 2, 3])))).toBe('result: 3 items · 140 ms · as of 0123456');
-			expect(await line(await mountResult($, surface, `scalar-${surface}`, reply('done')))).toBe('result: string · 140 ms · as of 0123456');
-			expect(await line(await mountResult($, surface, `none-${surface}`, JSON.stringify({ success: true })))).toBe('result: undefined');
+			expect(await line(await mountResult($, surface, `keys-${surface}`, reply({ a: 1, b: 2 })))).toBe(`${MARK}result: 2 keys · 140 ms · as of 0123456`);
+			expect(await line(await mountResult($, surface, `items-${surface}`, reply([1, 2, 3])))).toBe(`${MARK}result: 3 items · 140 ms · as of 0123456`);
+			expect(await line(await mountResult($, surface, `scalar-${surface}`, reply('done')))).toBe(`${MARK}result: string · 140 ms · as of 0123456`);
+			expect(await line(await mountResult($, surface, `none-${surface}`, JSON.stringify({ success: true })))).toBe(`${MARK}result: undefined`);
 		}
 	});
 
@@ -315,9 +316,9 @@ describe('result row', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const wrapped = { content: [{ type: 'text', text: reply({ a: 1, b: 2 }) }] };
-			expect(await line(await mountResult($, surface, `wrapped-${surface}`, wrapped))).toBe('result: 2 keys · 140 ms · as of 0123456');
+			expect(await line(await mountResult($, surface, `wrapped-${surface}`, wrapped))).toBe(`${MARK}result: 2 keys · 140 ms · as of 0123456`);
 			const blocks = [{ type: 'text', text: reply([1]) }];
-			expect(await line(await mountResult($, surface, `blocks-${surface}`, blocks))).toBe('result: 1 item · 140 ms · as of 0123456');
+			expect(await line(await mountResult($, surface, `blocks-${surface}`, blocks))).toBe(`${MARK}result: 1 item · 140 ms · as of 0123456`);
 		}
 	});
 
@@ -341,38 +342,53 @@ describe('result row', () => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'redraw', reply(DEPENDENCIES));
 		await ui.redraw(resultProps('redraw', reply(PING)));
-		expect(await line(ui)).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(await line(ui)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
+	});
+
+	test('a result under its drawn call row has no brand mark, and a lone result opens with it', async ($, on) => {
+		world(on);
+		for (const surface of SURFACES) {
+			// A call row with no cwd is remembered too.
+			await mountUse($, surface, `under-${surface}`, { code: 'return await api.ping()' });
+			const under = await mountResult($, surface, `under-${surface}`, reply(PING));
+			expect(await line(under)).toBe('✓ connected · 140 ms · as of 0123456');
+			expect(await exact(under, BRAND)).toBeUndefined();
+			const lone = await mountResult($, surface, `lone-${surface}`, reply(PING));
+			expect(await line(lone)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
+			expect((await exact(lone, BRAND))?.props['color']).toBe(palette.nebula);
+		}
 	});
 });
 
 describe('error row', () => {
-	test("shows the code in the error color, the headline and the person's step, not the agent's", async ($, on) => {
+	test("shows the code in the error color, the headline and the person's step dim, not the agent's", async ($, on) => {
 		world(on);
 		for (const surface of SURFACES) {
 			const ui = await mountResult($, surface, `auth-${surface}`, errored(AUTH), true);
-			expect(await line(ui)).toBe("✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth");
+			expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · const auth`);
 			expect(await line(ui)).not.toContain('code_intel');
 			expect((await exact(ui, '✗ AUTH_ERROR'))?.props['color']).toBe(palette.stellar);
+			expect((await exact(ui, 'const auth'))?.props['dimColor']).toBe(true);
 		}
 	});
 
 	test('the error a workspace root gets reads its headline for a person', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'not-indexed', errored(NOT_INDEXED), true);
-		expect(await line(ui)).toBe("✗ CWD_NOT_INDEXED · This folder isn't a Constellation project");
+		expect(await line(ui)).toBe(`${MARK}✗ CWD_NOT_INDEXED · This folder isn't a Constellation project`);
 	});
 
 	test('an error with no headline of its own shows the server message, not generic guidance', async ($, on) => {
 		world(on);
 		const error = { code: 'EXECUTION_ERROR', message: 'api.nope is not a function', guidance: ['Verify all api.* calls use await (they are async)'] };
 		const ui = await mountResult($, 'terminal', 'execution', errored(error), true);
-		expect(await line(ui)).toBe('✗ EXECUTION_ERROR · api.nope is not a function');
+		expect(await line(ui)).toBe(`${MARK}✗ EXECUTION_ERROR · api.nope is not a function`);
 	});
 
 	test('an error envelope not marked as errored is an error row too', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'unmarked', JSON.stringify({ success: false, error: AUTH, time: 12 }));
-		expect(await line(ui)).toBe("✗ AUTH_ERROR · Your access key wasn't accepted · constellation auth · 12 ms");
+		expect(await line(ui)).toBe(`${MARK}✗ AUTH_ERROR · Your access key wasn't accepted · const auth · 12 ms`);
 	});
 
 	test('an errored call whose output is not an envelope keeps Claude Code row', async ($, on) => {
@@ -389,9 +405,20 @@ describe('passthrough', () => {
 		world(on);
 		for (const surface of SURFACES) {
 			const use = await mountUse($, surface, `bash-${surface}`, { command: 'ls' }, 'Bash');
-			expect(await use.drawn()).toEqual({ type: 'Text', children: ['fallthrough'] });
+			expect(await use.drawn()).toMatchObject({ type: 'Text', children: ['fallthrough'] });
 			const result = await mountResult($, surface, `bash-${surface}`, { stdout: 'a', stderr: '', interrupted: false }, false, 'Bash');
-			expect(await result.drawn()).toEqual({ type: 'Text', children: ['fallthrough'] });
+			expect(await result.drawn()).toMatchObject({ type: 'Text', children: ['fallthrough'] });
+		}
+	});
+
+	test('with compactToolRows off, code_intel calls and results keep Claude Code row', { options: { compactToolRows: false } }, async ($, on) => {
+		world(on);
+		for (const surface of SURFACES) {
+			const use = await mountUse($, surface, `raw-${surface}`, { code: CALL_CODE, cwd: '/x/app' });
+			expect(await use.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
+			expect(await use.find({ type: 'Text', text: BRAND })).toBeUndefined();
+			const result = await mountResult($, surface, `raw-${surface}`, reply(IMPACT));
+			expect(await result.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
 		}
 	});
 
@@ -415,7 +442,7 @@ describe('verbose', () => {
 			const ui = await mountResult($, surface, `verbose-${surface}`, reply(PING));
 			const tree = await ui.drawn();
 			expect(tree.type).toBe('Box');
-			expect(flat(tree)).toBe('✓ connected · 140 ms · as of 0123456fallthrough');
+			expect(flat(tree)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456fallthrough`);
 			expect(await ui.find({ type: 'Text', text: 'fallthrough' })).toBeDefined();
 		}
 	});
@@ -428,19 +455,6 @@ describe('verbose', () => {
 });
 
 describe('colors', () => {
-	test("'none' draws no color but keeps the words and glyphs", { options: { colors: 'none' } }, async ($, on) => {
-		world(on);
-		for (const surface of SURFACES) {
-			const use = await mountUse($, surface, `plain-${surface}`, { code: CALL_CODE, cwd: '/x/app' });
-			expect(await line(use)).toBe('✦ code_intel · impactAnalysis, getDependents · app');
-			const result = await mountResult($, surface, `plain-${surface}`, reply(IMPACT));
-			expect(await line(result)).toBe('✗ HIGH · 8 dependents · 1 test file · 140 ms · as of 0123456');
-			for (const ui of [use, result]) {
-				for (const t of await ui.findAll({ type: 'Text' })) expect(t.props['color']).toBeUndefined();
-			}
-		}
-	});
-
 	test('a light theme swaps the green for the theme color', async ($, on) => {
 		world(on, { theme: 'light' });
 		const ui = await mountResult($, 'terminal', 'light', reply(PING));
@@ -522,7 +536,7 @@ describe('cache', () => {
 	test('a result row names the project its call row stored', async () => {
 		resetToolRows();
 		const rows = direct();
-		expect(await rows.use('stored', '/x/app')).toBe('✦ code_intel · ping · app');
+		expect(await rows.use('stored', '/x/app')).toBe('✦ >_CONSTELLATION://CODE_INTEL · ping · app');
 		expect(await rows.result('stored')).toBe('✓ connected · app · 140 ms · as of 0123456');
 	});
 
@@ -531,7 +545,7 @@ describe('cache', () => {
 		const rows = direct();
 		await rows.use('reset', '/x/app');
 		resetToolRows();
-		expect(await rows.result('reset')).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(await rows.result('reset')).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 	});
 
 	for (const source of ['clear', 'resume', 'fork']) {
@@ -540,7 +554,7 @@ describe('cache', () => {
 			const rows = direct();
 			await rows.use(`session-${source}`, '/x/app');
 			await rows.sessionStart(source);
-			expect(await rows.result(`session-${source}`)).toBe('✓ connected · 140 ms · as of 0123456');
+			expect(await rows.result(`session-${source}`)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 		});
 	}
 
@@ -559,13 +573,13 @@ describe('cache', () => {
 		const rows = direct();
 		await rows.use('oldest', '/x/app');
 		for (let i = 0; i < 200; i++) await rows.use(`row-${i}`, '/x/other');
-		expect(await rows.result('oldest')).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(await rows.result('oldest')).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 		expect(await rows.result('row-199')).toBe('✓ connected · other · 140 ms · as of 0123456');
 	});
 
 	test('a result with no call row renders through the plugin', async ($, on) => {
 		world(on);
-		expect(await line(await mountResult($, 'terminal', 'never-called', reply(PING)))).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(await line(await mountResult($, 'terminal', 'never-called', reply(PING)))).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 	});
 });
 
@@ -632,7 +646,7 @@ describe('fail-safe', () => {
 		});
 		const tree = await rows.drawn('no-config');
 		expect((tree as Element).type).toBe('Text');
-		expect(flat(tree)).toBe('✓ connected · 140 ms · as of 0123456');
+		expect(flat(tree)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 		expect(within(tree, '✓ connected')?.props['color']).toBe(palette.cosmic);
 	});
 });

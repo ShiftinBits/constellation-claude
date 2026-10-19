@@ -18,90 +18,78 @@ return {
 };
 ```
 
-**Interpret the response and report:**
+**Interpret the response and report.** Start with the line `✦ >_CONSTELLATION://CODE_INTEL · diagnose`, then one row per field. Statuses are a glyph and a lowercase word (`✓ ok`, `⏱ <word>` in progress, `⚠ <word>` a warning, `✗ <word>`, `· not checked`); values on one row are joined with ` · `. An error is one line, `✗ CODE · headline · next step`, under the rows.
 
 ### If the tool call FAILS ENTIRELY (timeout, connection error, MCP not found):
 
 ```
-Constellation Health Check
-===========================
-MCP Server:  UNREACHABLE
-API Auth:    -
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✗ unreachable
+API          · not checked
+Auth         · not checked
+Index        · not checked
 
-Issue: The Constellation MCP server is not running or not configured.
-
-Quick Fixes:
-1. Restart Claude Code to reinitialize MCP connections
-2. Verify npm can run: npx @constellationdev/mcp@1.2.11 --version
-3. Check .mcp.json configuration in the plugin directory
+✗ MCP_UNAVAILABLE · The Constellation MCP server isn't connected · restart Claude Code
+  Check that npm can run it: npx @constellationdev/mcp@1.2.11 --version
+  Check the .mcp.json configuration in the plugin directory
 ```
 
 ### If `result.success` is true:
 
 ```
-Constellation Health Check
-===========================
-MCP Server:  OK
-API Auth:    OK
-Project:     <primaryLanguage> project
-Index:       <files> files, <symbols> symbols
-
-All systems operational.
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✓ ok
+API          ✓ ok
+Auth         ✓ ok
+Index        ✓ ok · <files> files · <symbols> symbols · <primaryLanguage>
 ```
 
 ### If `result.success` is false, check `result.error.code`:
 
 **AUTH_ERROR:**
 ```
-Constellation Health Check
-===========================
-MCP Server:  OK
-API Auth:    FAILED
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✓ ok
+API          ✓ ok
+Auth         ✗ error
+Index        · not checked
 
-Issue: Authentication failed - API key missing or invalid.
-
-Quick Fix: Run `constellation auth` to configure credentials.
+✗ AUTH_ERROR · Your access key wasn't accepted · const auth
 ```
 
 **PROJECT_NOT_INDEXED:**
 ```
-Constellation Health Check
-===========================
-MCP Server:  OK
-API Auth:    OK
-Project:     Not indexed
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✓ ok
+API          ✓ ok
+Auth         ✓ ok
+Index        ⚠ not indexed
 
-Issue: This project hasn't been indexed yet.
-
-Quick Fix: Run `constellation index --full` in your project directory.
+✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · const index
 ```
 
 **API_UNREACHABLE:**
 ```
-Constellation Health Check
-===========================
-MCP Server:  OK
-API Auth:    UNREACHABLE
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✓ ok
+API          ✗ unreachable
+Auth         · not checked
+Index        · not checked
 
-Issue: Cannot reach the Constellation API server.
-
-Quick Fixes:
-1. Check network connectivity
-2. Verify API URL in constellation.json
-3. For self-hosted: ensure API is running at configured URL
+✗ API_UNREACHABLE · Constellation's API can't be reached · check your network and the apiUrl in constellation.json
+  Self-hosted: make sure the API is running at the configured URL
 ```
 
 **Other errors:**
 ```
-Constellation Health Check
-===========================
-MCP Server:  OK
-API Auth:    ERROR
+✦ >_CONSTELLATION://CODE_INTEL · diagnose
+MCP server   ✓ ok
+API          ✓ ok
+Auth         · not checked
+Index        · not checked
 
-Code: <error.code>
-Message: <error.message>
-
-Guidance: <error.guidance if available>
+✗ <error.code> · <error.message without its [CODE] prefix> · <the first command in error.guidance (written with the CLI's `const` shorthand, as in `const auth`)>
+  <any other error.guidance lines, one per line>
 ```
 
 Keep the response brief and actionable.

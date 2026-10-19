@@ -2,10 +2,7 @@ import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 
 import { isTestFile } from './blast';
 import { explain } from './explain';
 import { type CodeIntelEnvelope, isRecord, num, parseToolText, plural, projectName } from './lib';
-import { badge, forTheme, kind, palette, risk, type Scheme, scheme, status, type Tone } from './theme';
-
-/** The mark that opens a code_intel call row. */
-const mark: Tone = { color: palette.nebula, word: 'code_intel', glyph: '✦' };
+import { badge, brandMark, forTheme, risk, type Scheme, scheme, status } from './theme';
 
 const SEP = ' · ';
 
@@ -16,10 +13,11 @@ const MAX_ROWS = 200;
 const MAX_NAMES = 3;
 
 /**
- * The project each call row named, by requestId (the tool_use_id), for its
- * result row: a result row has no input to read the `cwd` from.
+ * Every call row drawn, by requestId (the tool_use_id), with the project it
+ * named: a result row has no input to read the `cwd` from, and one whose call
+ * row was not drawn here carries the brand mark itself.
  */
-const projects = new Map<string, string>();
+const projects = new Map<string, string | undefined>();
 
 /** How long a settings read serves redraws: a resize redraws every row at once. */
 const SETTINGS_MS = 1000;
@@ -37,7 +35,7 @@ export function resetToolRows(): void {
 	settings = undefined;
 }
 
-function remember(id: string, project: string): void {
+function remember(id: string, project: string | undefined): void {
 	projects.set(id, project);
 	if (projects.size > MAX_ROWS) {
 		const oldest = projects.keys().next().value;
@@ -71,15 +69,6 @@ export function outputText(output: unknown): string | undefined {
 	return undefined;
 }
 
-function tinted(el: ElementTable, tone: Tone, text: string): RenderElement {
-	return el.Text({
-		...(tone.color === undefined ? {} : { color: tone.color }),
-		...(tone.dimColor ? { dimColor: true } : {}),
-		...(tone.bold ? { bold: true } : {}),
-		children: text,
-	});
-}
-
 /** `count` in bold and `word`, plural unless the count is one. */
 function counted(el: ElementTable, count: number, word: string): RenderElement {
 	const digits = String(count);
@@ -97,7 +86,7 @@ function joined(parts: RenderNode[]): RenderNode[] {
 
 /** The children of a call row: the mark, the methods called, the project, and `running` until it ends. */
 function callRow(el: ElementTable, methods: string[], project: string | undefined, running: boolean, to: Scheme): RenderNode[] {
-	const parts: RenderNode[] = [badge(el, '', forTheme(mark, to))];
+	const parts: RenderNode[] = [brandMark(el, to)];
 	if (methods.length > 0) parts.push(methods.join(', '));
 	if (project) parts.push(dim(el, project));
 	if (running) parts.push(dim(el, 'running'));
@@ -147,8 +136,8 @@ function shape(el: ElementTable, result: unknown, to: Scheme, project: string | 
 			const names = symbols
 				.slice(0, MAX_NAMES)
 				.filter((s): s is Record<string, unknown> => isRecord(s) && typeof s.name === 'string')
-				.map((s) => tinted(el, forTheme(kind(typeof s.kind === 'string' ? s.kind : ''), to), String(s.name)));
-			if (names.length > 0) parts.push(el.Text({ children: names.flatMap((n, i) => (i === 0 ? [n] : [', ', n])) }));
+				.map((s) => String(s.name));
+			if (names.length > 0) parts.push(names.join(', '));
 			return parts;
 		}
 		if (Array.isArray(result.orphanedSymbols)) {
@@ -182,7 +171,7 @@ export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Sch
 	if (!envelope.success && error !== undefined) {
 		const ex = explain(error);
 		parts.push(badge(el, '', forTheme({ ...status('error'), word: error.code }, to)), ex.title);
-		if (ex.steps[0] !== undefined) parts.push(ex.steps[0]);
+		if (ex.steps[0] !== undefined) parts.push(dim(el, ex.steps[0]));
 	} else {
 		parts.push(...shape(el, envelope.result, to, project));
 		if (envelope.reason !== undefined) parts.push(dim(el, envelope.reason.replace(/_/g, ' ')));
@@ -196,13 +185,16 @@ export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Sch
 
 /**
  * The code_intel call and result rows in the transcript: the call row reads
- * `✦ code_intel · <methods> · <project>` and the result row one line about what
- * came back. With the `verbose` setting on, Claude Code's own row follows
+ * `BRAND · <methods> · <project>` and the result row, drawn under it, one line
+ * about what came back. With the `verbose` setting on, Claude Code's own row follows
  * under it. Every other tool and surface, an interrupted call, and a result
  * with no envelope to read (one over the MCP output limit, say) or a failure
- * without an error code keeps Claude Code's own row.
+ * without an error code keeps Claude Code's own row. With the `compactToolRows`
+ * option off (an unset value counts as on) nothing is registered, so every row
+ * is Claude Code's own.
  */
 export function registerToolRows(on: On, options: PluginOptions): void {
+	if (options.compactToolRows === false) return;
 	on('config.set', { key: ['theme', 'verbose'] }, async ($, e, next) => {
 		const set = await next(e);
 		settings = undefined;
@@ -232,19 +224,23 @@ export function registerToolRows(on: On, options: PluginOptions): void {
 				}
 			}
 			verbose = settings?.verbose ?? false;
-			const to = scheme(options.colors, settings?.theme);
+			const to = scheme(settings?.theme);
 			if (e.component === 'ToolUse') {
 				const input = e.props.input;
 				if (isRecord(input) && typeof input.code === 'string') {
 					const project = projectName(input.cwd);
-					if (project !== undefined) remember(e.requestId, project);
-					row = el.Text({ children: callRow(el, methodsOf(input.code), project, e.props.isRunning, to) });
+					remember(e.requestId, project);
+					row = el.Text({ wrap: 'truncate', children: callRow(el, methodsOf(input.code), project, e.props.isRunning, to) });
 				}
 			} else {
 				// An errored call's output is the text the model read.
 				const envelope = parseToolText(outputText(e.props.output), e.props.isErrored);
 				const drawable = envelope.error === undefined ? envelope.success && !e.props.isErrored : envelope.error.code !== 'INVALID_RESPONSE';
-				if (drawable) row = el.Text({ children: summarize(el, envelope, to, projects.get(e.requestId)) });
+				if (drawable) {
+					const parts = summarize(el, envelope, to, projects.get(e.requestId));
+					// A result under a call row drawn here needs no second brand mark.
+					row = el.Text({ wrap: 'truncate', children: projects.has(e.requestId) ? parts : [brandMark(el, to), SEP, ...parts] });
+				}
 			}
 		} catch {
 			row = undefined;

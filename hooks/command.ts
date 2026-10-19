@@ -1,4 +1,4 @@
-import type { ButtonProps, ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
+import type { ButtonProps, ElementTable, EngineInterface, On, RenderElement } from 'claude-code';
 import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
 import type { Buckets, Stats } from './adoption';
 import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot, withinDeadline } from './lib';
@@ -9,10 +9,10 @@ import type { Hit } from './explore';
 import { byFile, orphanCode, orphanPage, removalPrompt } from './unused';
 import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
-import { observeEnvelope, recheck, startTicks, track } from './freshness';
+import { observeEnvelope, recheck, showsFreshness, startTicks, track } from './freshness';
 import { checkConnection, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
-import { BANNER_WIDTH, PROMPT, badge, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
+import { BANNER_WIDTH, badge, branded, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
@@ -139,7 +139,7 @@ function lineOf(item: Item): string {
 		return `${item.label}: ${value}`;
 	}
 	if (item.badge?.kind === 'status') return `${item.text}: ${status(item.badge.value).word}`;
-	if (item.badge?.kind === 'kind') return `  ${item.text} (${kind(item.badge.value).word})`;
+	if (item.badge?.kind === 'kind') return `  ${item.text} · ${kind(item.badge.value).word}`;
 	return item.text;
 }
 
@@ -161,6 +161,14 @@ function failure(error: CodeIntelError): Summary {
 				]
 			: [];
 	return { lines: explainLines(explanation), items, error, explanation };
+}
+
+/** The first MAX_TEXT_LINES lines, then how many were left out, counting the rows a `+N more` line already stood for. */
+function textLines(lines: string[]): string[] {
+	if (lines.length <= MAX_TEXT_LINES) return lines;
+	const more = /^\+(\d+) more$/.exec(lines[lines.length - 1] ?? '');
+	const hidden = lines.length - MAX_TEXT_LINES + (more === null ? 0 : Number(more[1]) - 1);
+	return [...lines.slice(0, MAX_TEXT_LINES), `+${hidden} more`];
 }
 
 function capped(items: Item[]): Item[] {
@@ -187,8 +195,8 @@ function diagnoseItems(result: unknown): Item[] {
 	const items = connection(ping);
 	items.push({
 		label: 'Index',
-		badge: { kind: 'status', value: indexed === true ? 'indexed' : indexed === false ? 'stale' : 'unknown' },
-		text: indexed === false ? 'not indexed' : '',
+		badge: { kind: 'status', value: indexed === true ? 'indexed' : indexed === false ? 'not indexed' : 'unknown' },
+		text: '',
 	});
 	const languages = caps['languages'] ?? caps['supportedLanguages'];
 	if (Array.isArray(languages) && languages.length > 0) {
@@ -225,7 +233,7 @@ function depsItems(result: unknown, direction: Direction, path: string | undefin
 function unusedItems(result: unknown): Item[] {
 	if (!isRecord(result)) return [{ text: 'No data returned', dim: true }];
 	const symbols = records(result['orphanedSymbols']);
-	if (symbols.length === 0) return [{ text: 'No unused symbols found', dim: true }];
+	if (symbols.length === 0) return [{ text: 'No unused exports found', dim: true }];
 	const byFile = new Map<string, Record<string, unknown>[]>();
 	for (const symbol of symbols) {
 		const file = text(symbol['filePath']) ?? 'unknown file';
@@ -233,7 +241,7 @@ function unusedItems(result: unknown): Item[] {
 	}
 	const summary = isRecord(result['summary']) ? result['summary'] : {};
 	const total = count(summary['totalOrphanedSymbols']) ?? symbols.length;
-	const items: Item[] = [{ text: `${grouped(total)} unused symbols`, heading: true }];
+	const items: Item[] = [{ text: `${grouped(total)} unused exports`, heading: true }];
 	for (const [file, group] of byFile) {
 		items.push({ text: file, dim: true });
 		for (const symbol of group) {
@@ -247,7 +255,7 @@ function unusedItems(result: unknown): Item[] {
 function exploreItems(result: unknown, query: string | undefined): Item[] {
 	const found = rankExact(query ?? '', hits(result)).slice(0, EXPLORE_TEXT_HITS);
 	if (found.length === 0) return [{ text: 'No symbols match', dim: true }];
-	return found.map((h): Item => ({ text: `${kind(h.kind).word} ${h.name} ${where(h)}` }));
+	return found.map((h): Item => ({ text: `${h.name} · ${kind(h.kind).word} · ${where(h)}` }));
 }
 
 /**
@@ -299,7 +307,7 @@ function metadata(envelope: CodeIntelEnvelope | undefined): string | undefined {
  * when it was indexed, its languages and its file count.
  */
 export function projectDetail(envelope: CodeIntelEnvelope | undefined): string {
-	if (envelope === undefined) return '…';
+	if (envelope === undefined) return 'checking';
 	if (!envelope.success) return envelope.error?.code === 'PROJECT_NOT_INDEXED' ? 'not indexed' : (envelope.error?.code ?? 'unavailable');
 	const caps = isRecord(envelope.result) ? envelope.result : {};
 	if (caps['isIndexed'] === false) return 'not indexed';
@@ -592,7 +600,7 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 	$.ui.invalidate('ui.render');
 }
 
-export function registerCommand(on: On, options: PluginOptions): void {
+export function registerCommand(on: On): void {
 	on('session.start', async ($, e, next) => {
 		const ports: OnboardingPorts = {
 			run: (argv, init) => $.process.run(argv, init),
@@ -633,7 +641,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		} catch {
 			root = null;
 		}
-		if (root !== null) {
+		// With showFreshness off, a stored key's connection check still runs; nothing else does.
+		if (root !== null && (found !== undefined || showsFreshness())) {
 			const at = root;
 			const again = () => recheck(ports.run, ports.invalidate, ports.log);
 			track(at);
@@ -655,7 +664,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			}
 			try {
 				// Every five minutes git alone compares the checkout again; code_intel is never called on the timer.
-				startTicks(() => $.clock.every(5 * 60_000, () => void again().catch(() => undefined)));
+				if (showsFreshness()) startTicks(() => $.clock.every(5 * 60_000, () => void again().catch(() => undefined)));
 			} catch {
 				// No timer: git commands the agent runs and code_intel answers still update the indicator.
 			}
@@ -678,7 +687,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		const draws = canDraw(await $.session.surfaces());
 		if (tab === 'stats' && !draws) {
 			const { session, stored } = await readStats($);
-			return { text: [`${PROMPT} ${tab}`, ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
+			return { text: [branded(TAB_LABEL[tab]), ...statsLines(session, stored).map((l) => `- ${l}`)].join('\n') };
 		}
 		const cwd = await $.session.cwd();
 		if (chosen?.from !== cwd) {
@@ -693,8 +702,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		unusedKind = kind;
 		exploreQuery = query ?? '';
 		if (!draws && tab !== 'stats') {
-			if (tab === 'deps' && path === undefined) return { text: 'Usage: /constellation deps <file>' };
-			if (tab === 'explore' && query === undefined) return { text: 'Usage: /constellation explore <symbol>' };
+			if (tab === 'deps' && path === undefined) return { text: branded('Usage: /constellation deps <file>') };
+			if (tab === 'explore' && query === undefined) return { text: branded('Usage: /constellation explore <query>') };
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 				codeFor(tab, 'dependencies', path ?? ''),
@@ -702,9 +711,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 			);
 			const summary = summarize(tab, envelope, { path, project: projectName(dir), query });
 			const meta = metadata(envelope);
-			if (summary.explanation !== undefined) return { text: [`${PROMPT} ${tab}`, ...summary.lines].join('\n') };
-			const body = [...summary.lines.slice(0, MAX_TEXT_LINES), ...(meta === undefined ? [] : [meta])];
-			return { text: [`${PROMPT} ${tab}`, ...body.map((l) => `- ${l.trim()}`)].join('\n') };
+			if (summary.explanation !== undefined) return { text: [branded(TAB_LABEL[tab]), ...summary.lines].join('\n') };
+			const body = [...textLines(summary.lines), ...(meta === undefined ? [] : [meta])];
+			return { text: [branded(TAB_LABEL[tab]), ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
 		reset();
 		unusedKind = kind;
@@ -714,9 +723,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		sessionCwd = dir;
 		launchCwd = cwd;
 		try {
-			tint = scheme(options.colors, (await $.config.list()).find((r) => r.key === 'theme')?.value);
+			tint = scheme((await $.config.list()).find((r) => r.key === 'theme')?.value);
 		} catch {
-			tint = scheme(options.colors, undefined);
+			tint = scheme(undefined);
 		}
 		await $.ui.open({ id: PANE, title: 'Constellation', focus: true, closeOnEscape: true });
 		$.ui.invalidate('ui.render');
@@ -872,10 +881,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		};
 		if (firstPage !== undefined) {
 			if (loaded.length === 0) {
-				const color = paint(palette.cosmic, tint);
-				body.push(el.Text({ ...(color === undefined ? {} : { color }), children: '✦ No unused exports found' }));
+				body.push(el.Text({ dimColor: true, children: 'No unused exports found' }));
 			} else {
-				const nebula = paint(palette.nebula, tint);
 				body.push(
 					el.Box({
 						flexDirection: 'column',
@@ -884,7 +891,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 								flexDirection: 'row',
 								columnGap: 2,
 								children: [
-									el.Text({ ...(nebula === undefined ? {} : { color: nebula }), children: `${picked.size} selected` }),
+									el.Text({ bold: true, children: `${picked.size} selected` }),
 									el.Text({ dimColor: true, children: `of ${grouped(firstPage.total ?? loaded.length)} unused exports` }),
 									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
 								],
@@ -953,12 +960,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
 			}
 		} else if (selected === 'stats') {
-			const cosmic = paint(palette.cosmic, tint);
-			const solar = paint(palette.solar, tint);
 			// Every row from one snapshot; while it is being read, the session's counts as they stand.
 			const snapshot = typeof history === 'object' ? history : undefined;
 			if (!grid) {
-				const colored = (color: string | undefined, text: string): RenderElement => el.Text({ ...(color === undefined ? {} : { color }), children: text });
 				body.push(
 					boxTable(
 						['24%', '19%', '19%', '19%', '19%'],
@@ -966,13 +970,13 @@ export function registerCommand(on: On, options: PluginOptions): void {
 							key: `stats:${label}`,
 							cells: [
 								el.Text({ dimColor: true, children: label }),
-								colored(cosmic, f.calls),
-								colored(solar, f.symbol),
+								el.Text({ children: f.calls }),
+								el.Text({ children: f.symbol }),
 								el.Text({ dimColor: true, children: f.literal }),
 								el.Text({ bold: true, children: f.share }),
 							],
 						})),
-						['', 'code_intel calls', 'symbol-like', 'literal', SHARE_LABEL],
+						['', 'code_intel calls', 'Symbol-like', 'Literal', SHARE_LABEL],
 					),
 				);
 			} else {
@@ -992,8 +996,8 @@ export function registerCommand(on: On, options: PluginOptions): void {
 											columnGap: 2,
 											flexWrap: 'wrap',
 											children: [
-												el.Text({ ...(cosmic === undefined ? {} : { color: cosmic }), children: f.calls }),
-												el.Text({ ...(solar === undefined ? {} : { color: solar }), children: f.symbol }),
+												el.Text({ children: f.calls }),
+												el.Text({ children: f.symbol }),
 												el.Text({ dimColor: true, children: f.literal }),
 												el.Box({
 													flexDirection: 'row',
@@ -1081,7 +1085,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 											fixed([
 												el.Button({
 													key: 'copy-location',
-													label: 'copy location',
+													label: 'Copy location',
 													plain: true,
 													dimColor: true,
 													onPress: async (press) => {
@@ -1142,7 +1146,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 														...(view.transitive === undefined ? [] : [['Transitive', String(view.transitive)] as [string, string]]),
 														...(view.tests === undefined && view.production === undefined
 															? []
-															: [['Tests', `${view.tests ?? 0} test · ${view.production ?? 0} production`] as [string, string]]),
+															: [['Files', `${view.tests ?? 0} test · ${view.production ?? 0} production`] as [string, string]]),
 													];
 													return [
 														...(view.riskLevel === undefined ? [] : [badge(el, '', forTheme(risk(view.riskLevel), tint))]),
@@ -1301,7 +1305,7 @@ export function registerCommand(on: On, options: PluginOptions): void {
 									...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
 									...((project !== undefined || meta !== undefined) && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),
 									...(canSwitch
-										? [el.Button({ key: 'switch-project', label: 'switch project', hotkey: 'p', plain: true, onPress: switchProject })]
+										? [el.Button({ key: 'switch-project', label: 'Switch project', hotkey: 'p', plain: true, onPress: switchProject })]
 										: []),
 								],
 							}),

@@ -40,12 +40,6 @@
 			"description": "Add one code_intel line (the symbol's kind, location and usage count) to the result of a symbol search with Grep or grep/rg in the shell, once per symbol.",
 			"default": true
 		},
-		"colors": {
-			"type": "string",
-			"title": "Colors",
-			"description": "How the /constellation pane and code_intel tool rows are colored: brand uses the Constellation palette (switching to Claude Code's theme colors on light, ANSI and color-blind themes), theme uses only Claude Code's theme colors, none draws no color (words and symbols still show each status).",
-			"default": "brand"
-		},
 		"impactGate": {
 			"type": "string",
 			"title": "Impact gate",
@@ -62,6 +56,18 @@
 			"type": "boolean",
 			"title": "Turn impact summary",
 			"description": "After a turn that changed files, show one line under the answer with how many files changed and how many files depend on them (from the last indexed commit).",
+			"default": true
+		},
+		"showFreshness": {
+			"type": "boolean",
+			"title": "Index freshness line",
+			"description": "Show a line above the prompt when the Constellation index is behind your checkout, was taken at another commit, or could not be reached. Off, the plugin also stops the git checks behind it.",
+			"default": true
+		},
+		"compactToolRows": {
+			"type": "boolean",
+			"title": "Compact code_intel rows",
+			"description": "Draw each code_intel call and result in the transcript as one compact Constellation row. Off, Claude Code draws its own rows.",
 			"default": true
 		},
 		"showAdoption": {

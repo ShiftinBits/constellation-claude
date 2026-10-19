@@ -17,7 +17,7 @@ Run an impact analysis when **any** of the following apply:
 - Planning a multi-file refactor and need a safe order
 - User asks "what uses X?", "what would break?", "is X safe to remove?"
 
-If the change is purely additive (new file, new function, no signature changes to existing exports), impact analysis is usually unnecessary — skip it.
+If the change is purely additive (new file, new function, no signature changes to existing exports), impact analysis is usually unnecessary; skip it.
 
 ## How to Run
 
@@ -65,21 +65,34 @@ The `impactAnalysis` response includes a `data.breakingChangeRisk.riskLevel` fie
 
 **Risk thresholds (rule of thumb):**
 
-- **Low**: < 5 files affected, internal-only, tests among the dependents → proceed normally
-- **Medium**: 5–15 files affected, or some public surface → review dependents before changing
-- **High**: > 15 files affected, exported API, or no impacted test files → stage the change, add tests first
-- **Critical**: Core infrastructure, security-adjacent, or hub modules → pause, propose a migration plan
+- `✓ LOW`: fewer than 5 files affected, internal-only, tests among the dependents. Proceed normally
+- `⚠ MEDIUM`: 5 to 15 files affected, or some public surface. Review dependents before changing
+- `✗ HIGH`: more than 15 files affected, exported API, or no impacted test files. Stage the change, add tests first
+- `✗ CRITICAL`: core infrastructure, security-adjacent, or hub modules. Pause, propose a migration plan
 
 ## Reporting Format
 
-When presenting results to the user, structure as:
+When presenting results to the user, start with the brand line and join values on one row with ` · `:
 
-1. **Symbol** — name, kind, location
-2. **Risk** — level + one-sentence rationale
-3. **Scope** — `N files, M symbols affected; public API: yes/no`
-4. **Top dependents** — first 5–10 from `directDependents`
-5. **Test exposure** — impacted test files vs production files from `data.summary`
-6. **Recommendation** — concrete next step (proceed / review listed files / stage in N steps / add tests first)
+```
+✦ >_CONSTELLATION://CODE_INTEL · impact
+<name> · <kind> · <filePath>:<line>
+Risk         ⚠ MEDIUM · <one-sentence rationale>
+Scope        <N> files · <M> direct dependents · <exported | not exported>
+Tests        <testFileCount> test files · <productionFileCount> production files
+Dependents
+  • <name> · <kind> · <filePath>:<line>
+Next         <proceed | review the listed files | stage in N steps | add tests first>
+```
+
+1. **Symbol**: name, kind, location
+2. **Risk**: the level as a glyph and an uppercase word (`✓ LOW`, `⚠ MEDIUM`, `✗ HIGH`, `✗ CRITICAL`) and a one-sentence rationale
+3. **Scope**: `data.summary.impactedFileCount` files, `data.summary.directDependentCount` direct dependents, and whether the symbol is exported
+4. **Dependents**: the first 5 to 10 from `directDependents`
+5. **Tests**: impacted test files vs production files from `data.summary`
+6. **Next**: one concrete next step
+
+A failed call is reported as `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · const auth`.
 
 For high or critical risk, lead with the warning and offer to suggest a safer change order.
 
@@ -98,6 +111,6 @@ A partial Grep-based assessment is always better than skipping the analysis.
 ## Related
 
 - The plugin's `impactGate` option (off by default) checks a file's impact automatically before Claude edits it; set it with `/config`
-- `/constellation:impact <symbol> [file]` — one-shot slash command equivalent
-- `/constellation:deps <file>` — dependency-only view
-- `/constellation:unused` — proactive dead-code scan
+- `/constellation:impact <symbol> [file-path]`: one-shot slash command equivalent
+- `/constellation:deps <file-path>`: dependency-only view
+- `/constellation:unused`: proactive dead-code scan
