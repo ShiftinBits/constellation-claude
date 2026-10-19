@@ -1,4 +1,4 @@
-import type { ButtonProps, ElementTable, EngineInterface, On, PluginOptions, RenderElement } from 'claude-code';
+import type { ButtonProps, ElementTable, EngineInterface, On, RenderElement } from 'claude-code';
 import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
 import type { Buckets, Stats } from './adoption';
 import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot, withinDeadline } from './lib';
@@ -600,9 +600,7 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 	$.ui.invalidate('ui.render');
 }
 
-export function registerCommand(on: On, options: PluginOptions): void {
-	// A pane redrawn after a reload, before the command runs again, still honors the colors option.
-	tint = scheme(options.colors, undefined);
+export function registerCommand(on: On): void {
 	on('session.start', async ($, e, next) => {
 		const ports: OnboardingPorts = {
 			run: (argv, init) => $.process.run(argv, init),
@@ -724,9 +722,9 @@ export function registerCommand(on: On, options: PluginOptions): void {
 		sessionCwd = dir;
 		launchCwd = cwd;
 		try {
-			tint = scheme(options.colors, (await $.config.list()).find((r) => r.key === 'theme')?.value);
+			tint = scheme((await $.config.list()).find((r) => r.key === 'theme')?.value);
 		} catch {
-			tint = scheme(options.colors, undefined);
+			tint = scheme(undefined);
 		}
 		await $.ui.open({ id: PANE, title: 'Constellation', focus: true, closeOnEscape: true });
 		$.ui.invalidate('ui.render');

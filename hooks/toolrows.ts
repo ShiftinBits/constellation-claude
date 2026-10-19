@@ -1,4 +1,4 @@
-import type { ElementTable, On, PluginOptions, RenderElement, RenderNode } from 'claude-code';
+import type { ElementTable, On, RenderElement, RenderNode } from 'claude-code';
 import { isTestFile } from './blast';
 import { explain } from './explain';
 import { type CodeIntelEnvelope, isRecord, num, parseToolText, plural, projectName } from './lib';
@@ -191,7 +191,7 @@ export function summarize(el: ElementTable, envelope: CodeIntelEnvelope, to: Sch
  * with no envelope to read (one over the MCP output limit, say) or a failure
  * without an error code keeps Claude Code's own row.
  */
-export function registerToolRows(on: On, options: PluginOptions): void {
+export function registerToolRows(on: On): void {
 	on('config.set', { key: ['theme', 'verbose'] }, async ($, e, next) => {
 		const set = await next(e);
 		settings = undefined;
@@ -221,7 +221,7 @@ export function registerToolRows(on: On, options: PluginOptions): void {
 				}
 			}
 			verbose = settings?.verbose ?? false;
-			const to = scheme(options.colors, settings?.theme);
+			const to = scheme(settings?.theme);
 			if (e.component === 'ToolUse') {
 				const input = e.props.input;
 				if (isRecord(input) && typeof input.code === 'string') {

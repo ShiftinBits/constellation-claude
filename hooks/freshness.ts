@@ -1,4 +1,4 @@
-import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
+import type { ElementTable, On, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
 import { badge, brandMark, branded, forTheme, status } from './theme';
@@ -49,7 +49,6 @@ let logged = false;
 /** The latest recheck; an older one that finishes after a newer started drops its result. */
 let seq = 0;
 let timer: Timer | undefined;
-let colors: unknown;
 
 /** How long ago `iso` was: "just now", "5m ago", "2h ago" or "3d ago". Undefined when `iso` is not a date. */
 function age(iso: string, now: number): string | undefined {
@@ -247,17 +246,12 @@ export function freshnessLine(now: number): { view: FreshnessView; text: string 
 	return view === undefined ? undefined : { view, text: freshnessText(view, now) };
 }
 
-/** The `colors` option, for painting the band. */
-export function freshnessColors(): unknown {
-	return colors;
-}
-
 /**
- * Starts the indicator over and keeps the colors option. A Bash call that ran
+ * Starts the indicator over. A Bash call that ran
  * a git commit, pull, checkout, merge or rebase compares the checkout again;
  * the call's result goes back untouched and does not wait for git.
  */
-export function registerFreshness(on: On, options: PluginOptions): void {
+export function registerFreshness(on: On): void {
 	timer?.cancel();
 	timer = undefined;
 	index = undefined;
@@ -266,7 +260,6 @@ export function registerFreshness(on: On, options: PluginOptions): void {
 	root = undefined;
 	logged = false;
 	seq = 0;
-	colors = options.colors;
 
 	on('tool.call', { tool: /^Bash$/ }, async ($, e, next) => {
 		const r = await next(e);

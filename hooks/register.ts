@@ -20,11 +20,11 @@ export const register: Register = (on, options) => {
 	registerDescribe(on);
 	registerAugment(on, options);
 	registerSession(on);
-	registerCommand(on, options);
+	registerCommand(on);
 	registerImpactGate(on, options);
 	registerTurnSummary(on, options);
 	registerPrImpact(on, options);
-	registerToolRows(on, options);
-	registerOnboarding(on, options);
-	registerFreshness(on, options);
+	registerToolRows(on);
+	registerOnboarding(on);
+	registerFreshness(on);
 };

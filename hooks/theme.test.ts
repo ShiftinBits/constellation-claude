@@ -114,20 +114,15 @@ describe('kind', () => {
 });
 
 describe('scheme', () => {
-	test('brand follows a dark theme, swaps on a light one, and hands ANSI and color-blind themes their own colors', () => {
-		expect(scheme('brand', 'dark')).toBe('brand');
-		expect(scheme('brand', 'auto')).toBe('brand');
-		expect(scheme(undefined, undefined)).toBe('brand');
-		expect(scheme('brand', 'light')).toBe('brand-light');
-		expect(scheme('brand', 'dark-ansi')).toBe('theme');
-		expect(scheme('brand', 'light-ansi')).toBe('theme');
-		expect(scheme('brand', 'dark-daltonized')).toBe('theme');
-		expect(scheme('brand', 'light-daltonized')).toBe('theme');
-	});
-
-	test('the theme and none options win over the theme', () => {
-		expect(scheme('theme', 'dark')).toBe('theme');
-		expect(scheme('none', 'light')).toBe('none');
+	test('the palette on a dark theme, the light swap on a light one, and their own colors for ANSI and color-blind themes', () => {
+		expect(scheme('dark')).toBe('brand');
+		expect(scheme('auto')).toBe('brand');
+		expect(scheme(undefined)).toBe('brand');
+		expect(scheme('light')).toBe('brand-light');
+		expect(scheme('dark-ansi')).toBe('theme');
+		expect(scheme('light-ansi')).toBe('theme');
+		expect(scheme('dark-daltonized')).toBe('theme');
+		expect(scheme('light-daltonized')).toBe('theme');
 	});
 });
 
@@ -156,16 +151,9 @@ describe('forTheme', () => {
 		expect(forTheme(risk('critical'), 'theme')).toMatchObject({ color: 'error', bold: true, word: 'CRITICAL' });
 	});
 
-	test('none drops the color and keeps the word, glyph and weight', () => {
-		const themed = forTheme(risk('critical'), 'none');
-		expect(themed.color).toBeUndefined();
-		expect(themed).toMatchObject({ bold: true, word: 'CRITICAL', glyph: '✗' });
-	});
-
 	test('paint maps a bare palette color the same way', () => {
 		expect(paint(palette.nebula, 'brand')).toBe(palette.nebula);
 		expect(paint(palette.nebula, 'theme')).toBe('suggestion');
-		expect(paint(palette.nebula, 'none')).toBeUndefined();
 	});
 });
 
@@ -220,10 +208,9 @@ describe('banner', () => {
 		expect(gradientAt(1, 'brand')).toBe(palette.galactic);
 	});
 
-	test('a light theme keeps to the darker stops, and theme and none follow the scheme', () => {
+	test('a light theme keeps to the darker stops, and theme follows the scheme', () => {
 		expect(gradientAt(0.5, 'brand-light')).toBe(palette.nebula);
 		expect(gradientAt(0.5, 'theme')).toBe('suggestion');
-		expect(gradientAt(0.5, 'none')).toBeUndefined();
 	});
 
 	test('the full banner is six lines of its width, with no tag box', async ($, on) => {
@@ -279,13 +266,11 @@ describe('banner', () => {
 		expect(source.length).toBeLessThanOrEqual(131072);
 	});
 
-	for (const to of ['theme', 'none'] as const) {
-		test(`without a grid the header stays one line under the ${to} scheme, which has no colors for an SVG`, async ($, on) => {
-			const ui = await draw($, on, 'desktop', (el) => header(el, 200, false, to));
-			expect(await ui.find({ type: 'Svg' })).toBeUndefined();
-			expect(await ui.find({ type: 'Text', text: '>_CONSTELLATION://' })).toBeDefined();
-		});
-	}
+	test('without a grid the header stays one line under the theme scheme, which has no colors for an SVG', async ($, on) => {
+		const ui = await draw($, on, 'desktop', (el) => header(el, 200, false, 'theme'));
+		expect(await ui.find({ type: 'Svg' })).toBeUndefined();
+		expect(await ui.find({ type: 'Text', text: '>_CONSTELLATION://' })).toBeDefined();
+	});
 
 	test('the boxed header runs the whole gradient across its own width', async ($, on) => {
 		const ui = await draw($, on, 'terminal', (el) => header(el, BOX_WIDTH, true, 'brand'));
@@ -323,11 +308,5 @@ describe('onboarding tones', () => {
 			expect(tone).not.toHaveProperty('backgroundColor');
 		});
 
-		test(`${name} drops its color under the none scheme and keeps its word and glyph`, () => {
-			const tone = forTheme(onboarding[name], 'none');
-			expect(tone.color).toBeUndefined();
-			expect(tone.word).toBe(onboarding[name].word);
-			expect(tone.glyph).toBe(onboarding[name].glyph);
-		});
 	}
 });

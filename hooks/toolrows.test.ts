@@ -444,19 +444,6 @@ describe('verbose', () => {
 });
 
 describe('colors', () => {
-	test("'none' draws no color but keeps the words and glyphs", { options: { colors: 'none' } }, async ($, on) => {
-		world(on);
-		for (const surface of SURFACES) {
-			const use = await mountUse($, surface, `plain-${surface}`, { code: CALL_CODE, cwd: '/x/app' });
-			expect(await line(use)).toBe('✦ >_CONSTELLATION://CODE_INTEL · impactAnalysis, getDependents · app');
-			const result = await mountResult($, surface, `plain-${surface}`, reply(IMPACT));
-			expect(await line(result)).toBe('✗ HIGH · 8 dependents · 1 test file · 140 ms · as of 0123456');
-			for (const ui of [use, result]) {
-				for (const t of await ui.findAll({ type: 'Text' })) expect(t.props['color']).toBeUndefined();
-			}
-		}
-	});
-
 	test('a light theme swaps the green for the theme color', async ($, on) => {
 		world(on, { theme: 'light' });
 		const ui = await mountResult($, 'terminal', 'light', reply(PING));
@@ -509,7 +496,7 @@ function direct({ el = TABLE, list = async () => [], now = () => 0 }: { el?: obj
 		const matcher = rest.length > 1 ? (rest[0] as Record<string, unknown>) : {};
 		registered.push({ event, matcher, handler });
 	};
-	registerToolRows(capture as unknown as On, {});
+	registerToolRows(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	const $ = { ui: { resolve: () => el, invalidate: () => {} }, config: { list }, clock: { now: async () => now() } };
 	const raise = async (event: string, e: object, bottom: () => Promise<unknown>): Promise<unknown> => {

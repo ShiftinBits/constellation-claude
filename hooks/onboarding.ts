@@ -2,7 +2,6 @@ import type {
 	ElementTable,
 	EngineInterface,
 	On,
-	PluginOptions,
 	ProcessRunInit,
 	ProcessRunResult,
 	ProcessSpawnChunk,
@@ -714,7 +713,7 @@ export function band(el: ElementTable, view: BandView): RenderElement {
  * The color scheme now, with the clock it was read at. The theme row is read at
  * most once a second (`THEME_MS`), so a running CLI's redraws read it once.
  */
-async function readTint($: EngineInterface, colors: unknown): Promise<{ now: number; tint: Scheme }> {
+async function readTint($: EngineInterface): Promise<{ now: number; tint: Scheme }> {
 	const now = await $.clock.now();
 	if (theme === undefined || now - theme.readAt > THEME_MS) {
 		try {
@@ -723,7 +722,7 @@ async function readTint($: EngineInterface, colors: unknown): Promise<{ now: num
 			// The default colors, until a read succeeds.
 		}
 	}
-	return { now, tint: scheme(colors, theme?.value) };
+	return { now, tint: scheme(theme?.value) };
 }
 
 /** True when a lower mod drew nothing: core's own drawing, or a container with no children. */
@@ -740,7 +739,7 @@ function isEmpty(element: RenderElement): boolean {
  * new, different error shows the band again. The dismissal is read once and
  * the theme at most once a second, so a running CLI's redraws read neither.
  */
-export function registerOnboarding(on: On, options: PluginOptions): void {
+export function registerOnboarding(on: On): void {
 	generation += 1;
 	state = undefined;
 	running = undefined;
@@ -760,7 +759,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 			// A fresh index reads nothing; the line draws only while no onboarding state exists.
 			const row = freshnessLine(Date.now());
 			if (row === undefined) return next(e);
-			const { now, tint } = await readTint($, options.colors);
+			const { now, tint } = await readTint($);
 			const below = await next(e);
 			const el = $.ui.resolve(e);
 			const line = freshnessBand(el, row.view, tint, now);
@@ -775,7 +774,7 @@ export function registerOnboarding(on: On, options: PluginOptions): void {
 			}
 		}
 		if (dismissal?.key === key && dismissal.value === shown) return next(e);
-		const { tint } = await readTint($, options.colors);
+		const { tint } = await readTint($);
 		const noShell = !(await hasShell((p) => $.fs.exists(p)));
 		// While a run goes, its latest line; then the line it ended on.
 		const line = running === undefined ? detail : lastLine(buffer);

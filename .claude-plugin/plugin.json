@@ -40,12 +40,6 @@
 			"description": "Add one code_intel line (the symbol's kind, location and usage count) to the result of a symbol search with Grep or grep/rg in the shell, once per symbol.",
 			"default": true
 		},
-		"colors": {
-			"type": "string",
-			"title": "Colors",
-			"description": "How the /constellation pane, code_intel tool rows and the lines above the prompt are colored: brand uses the Constellation palette (gold and green become Claude Code's warning and success colors on light themes; ANSI and color-blind themes get Claude Code's theme colors), theme uses only Claude Code's theme colors, none draws no color (words and symbols still show each status).",
-			"default": "brand"
-		},
 		"impactGate": {
 			"type": "string",
 			"title": "Impact gate",

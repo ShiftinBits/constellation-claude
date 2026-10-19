@@ -1,7 +1,6 @@
 import type {
 	McpToolResult,
 	On,
-	PluginOptions,
 	ProcessRunInit,
 	ProcessSpawnChunk,
 	ProcessSpawnRequest,
@@ -140,7 +139,7 @@ const FALLTHROUGH = { type: 'fallthrough', props: {} };
  * The band's render hook as `registerOnboarding` registers it, raised through
  * a stand-in `on` with a fake `$`: the store, theme row and element table.
  */
-function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
+function loadBand(store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
 	let handler: RenderHandler | undefined;
 	let matcher: unknown;
 	const capture = (event: string, ...rest: unknown[]) => {
@@ -148,7 +147,7 @@ function loadBand(options: PluginOptions = {}, store = new Map<string, unknown>(
 		matcher = rest[0];
 		handler = rest[rest.length - 1] as RenderHandler;
 	};
-	registerOnboarding(capture as unknown as On, options);
+	registerOnboarding(capture as unknown as On);
 	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[], storeReads: 0, configReads: 0 };
 	const flags = { storeDown: false, now: 0 };
 	const $ = {
@@ -764,12 +763,6 @@ describe('band', () => {
 		expect(keys(tree)).toEqual([]);
 	});
 
-	test('the none scheme drops every color and keeps the words', () => {
-		const tree = draw('sign-in-again', { tint: 'none' });
-		expect(nodes(tree).every((n) => n.props['color'] === undefined)).toBe(true);
-		expect(shown(tree)).toContain('✗ failed');
-	});
-
 	test('buttons carry no color', () => {
 		for (const state of ['not-set-up', 'sign-in-again', 'no-project', 'not-registered', 'not-indexed', 'working'] as const) {
 			expect(buttons(draw(state)).every((b) => b.props['color'] === undefined)).toBe(true);
@@ -823,12 +816,6 @@ describe('the band above the prompt', () => {
 			expect(keys(tree)).toEqual(actions);
 			endTask();
 		}
-	});
-
-	test('the theme row and the colors option pick the scheme', async () => {
-		const light = loadBand({ colors: 'none' });
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
-		expect(nodes(await light.draw()).every((n) => n.props['color'] === undefined)).toBe(true);
 	});
 
 	test('Dismiss hides the band for the repository until a different state comes', async () => {
@@ -1126,7 +1113,7 @@ describe('cliPath', () => {
 describe('the Sign in button', () => {
 	test('spawns constellation auth with the inherited key emptied and no color', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Opening browser for authentication...\n')] });
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
@@ -1231,7 +1218,7 @@ describe('the Sign in button', () => {
 
 	test("a CLI only the login shell finds signs in with the profile's PATH, never through the login shell", async () => {
 		const { world, spawns } = buttonWorld(host({ loginOnly: true }).run);
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
@@ -1313,7 +1300,7 @@ describe('the Sign in button', () => {
 describe('the Index button', () => {
 	test('spawns constellation index --wait in the project root, with no --dirty', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Indexing...\n')] });
-		const band = loadBand({}, new Map(), world);
+		const band = loadBand(new Map(), world);
 		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
 		await band.press(await band.draw(), 'onboarding-index');
 		await settle();
@@ -1456,7 +1443,7 @@ describe('with no /bin/sh (Windows)', () => {
 			['PROJECT_NOT_INDEXED', 'Run constellation index in a terminal, in the project directory'],
 		] as const) {
 			const { world, spawns } = buttonWorld(host().run);
-			const band = loadBand({}, new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
+			const band = loadBand(new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
 			observeCodeIntel(errored(code), true, () => undefined);
 			const tree = await band.draw();
 			expect(shown(tree)).toContain(step);
@@ -1468,7 +1455,7 @@ describe('with no /bin/sh (Windows)', () => {
 	});
 
 	test('a not set up band on Windows says to run constellation auth', async () => {
-		const band = loadBand({}, new Map(), { fs: { exists: async () => false } });
+		const band = loadBand(new Map(), { fs: { exists: async () => false } });
 		const ports = fakePorts({ run: async () => ({ exitCode: 1, stdout: '' }) }).ports;
 		await readStoredKeyAtStart(REPO, { ...ports, exists: async (p) => p === `${REPO}/.git` });
 		const tree = await band.draw();
@@ -1485,7 +1472,7 @@ describe('states with no button', () => {
 			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
 		]) {
 			const { world, spawns } = buttonWorld(host().run);
-			const band = loadBand({}, new Map(), world);
+			const band = loadBand(new Map(), world);
 			await put();
 			const tree = await band.draw();
 			expect(keys(tree)).toEqual(['onboarding-dismiss']);

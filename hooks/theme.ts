@@ -155,17 +155,15 @@ export function kind(symbolKind: string): Tone {
  *   swapped for Claude Code's `warning` and `success` theme colors.
  * - `theme`: only Claude Code's theme colors, so ANSI and color-blind themes
  *   draw their own values (a raw hex color is only approximated there).
- * - `none`: no color; every tone's word and glyph carry its meaning.
  */
-export type Scheme = 'brand' | 'brand-light' | 'theme' | 'none';
+export type Scheme = 'brand' | 'brand-light' | 'theme';
 
 /**
- * The scheme for the `colors` option (`brand`, the default, `theme` or `none`) and Claude Code's `theme` setting (its
- * `/config` row). `brand` follows the theme: an ANSI or color-blind theme gets
- * the theme's own colors, a light one the light swap. `auto` reads as dark.
+ * The scheme for Claude Code's `theme` setting (its `/config` row): an ANSI or
+ * color-blind theme gets the theme's own colors, a light one the light swap,
+ * any other the palette. `auto` reads as dark.
  */
-export function scheme(colors: unknown, theme: unknown): Scheme {
-	if (colors === 'none' || colors === 'theme') return colors;
+export function scheme(theme: unknown): Scheme {
 	const name = typeof theme === 'string' ? theme : '';
 	if (name.endsWith('-ansi') || name.includes('daltonized')) return 'theme';
 	return name.startsWith('light') ? 'brand-light' : 'brand';
@@ -183,10 +181,9 @@ const THEME_KEY: Readonly<Record<string, string>> = {
 	[palette.stellar]: 'error',
 };
 
-/** A palette color as the scheme draws it: itself, a theme key, or no color. */
+/** A palette color as the scheme draws it: itself or a theme key. */
 export function paint(color: string | undefined, to: Scheme): string | undefined {
 	if (color === undefined || to === 'brand') return color;
-	if (to === 'none') return undefined;
 	if (to === 'brand-light' && color !== palette.solar && color !== palette.cosmic) return color;
 	return THEME_KEY[color] ?? color;
 }
@@ -259,10 +256,9 @@ const LIGHT_GRADIENT: readonly (readonly number[])[] = [
 /**
  * The banner color at `t` (0 at the left edge, 1 at the right), in the scheme:
  * a point on the gradient, the theme's blue `suggestion` (the CLI also draws a
- * solid blue where it cannot draw a gradient), or no color.
+ * solid blue where it cannot draw a gradient).
  */
 export function gradientAt(t: number, to: Scheme): string | undefined {
-	if (to === 'none') return undefined;
 	if (to === 'theme') return 'suggestion';
 	const stops = to === 'brand-light' ? LIGHT_GRADIENT : GRADIENT;
 	const pos = Math.min(1, Math.max(0, t)) * (stops.length - 1);

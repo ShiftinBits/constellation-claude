@@ -119,8 +119,8 @@ function load(options: PluginOptions) {
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 	registerSession(capture as unknown as On);
-	registerOnboarding(capture as unknown as On, options);
-	registerFreshness(capture as unknown as On, options);
+	registerOnboarding(capture as unknown as On);
+	registerFreshness(capture as unknown as On);
 	invalidations = 0;
 	gitRuns.length = 0;
 	configReads = 0;

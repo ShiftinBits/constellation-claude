@@ -1,4 +1,4 @@
-import type { On, PluginOptions } from 'claude-code';
+import type { On } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
 import { compareLocal, freshnessBand, freshnessLine, freshnessText, freshnessView, observeEnvelope, recheck, registerFreshness, resetFreshness, startTicks, track } from './freshness';
 import { GIT, GIT_ENV, GIT_TIMEOUT_MS } from './lib';
@@ -27,8 +27,7 @@ function fakeRun(answers: { head?: Answer; count?: Answer }) {
 }
 
 const onBranch = (name: string, sha = COMMIT): Answer => ({ exitCode: 0, stdout: `${sha}\nrefs/heads/${name}\n` });
-const options = (colors?: unknown) => ({ colors }) as unknown as PluginOptions;
-const fresh = () => registerFreshness((() => undefined) as unknown as On, options());
+const fresh = () => registerFreshness((() => undefined) as unknown as On);
 
 describe('freshnessView and freshnessText', () => {
 	const index = { asOfCommit: OLD, lastIndexedAt: TWO_HOURS_AGO };
@@ -323,10 +322,6 @@ describe('freshnessBand', () => {
 		expect(row[3]).toEqual({ children: ' · The graph melted' });
 	});
 
-	test('the none scheme draws no color', () => {
-		const [mark] = pieces('none', { kind: 'behind', behind: 2 });
-		expect(mark).toEqual({ children: BRAND });
-	});
 });
 
 describe('startTicks', () => {
@@ -366,7 +361,7 @@ function bashHook(key: string | undefined = 'ak:test-key') {
 		if (event !== 'tool.call') return;
 		matcher = rest[0];
 		handler = rest[rest.length - 1] as BashHandler;
-	}) as unknown as On, options());
+	}) as unknown as On);
 	track(ROOT);
 	const git = fakeRun({ head: onBranch('main'), count: { exitCode: 0, stdout: '4\n' } });
 	let draws = 0;

@@ -1183,24 +1183,6 @@ describe('the pane', () => {
 		expect(await markColor(ui)).toBe('suggestion');
 	});
 
-	test('the colors option set to theme draws with the theme colors on a dark theme', { options: { colors: 'theme' } }, async ($, on) => {
-		world(on, { theme: 'dark' });
-		await run($);
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await okColor(ui)).toBe('success');
-	});
-
-	test('the colors option set to none draws no color and keeps the words', { options: { colors: 'none' } }, async ($, on) => {
-		world(on, { theme: 'dark' });
-		await run($);
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await okColor(ui)).toBeUndefined();
-		expect(await markColor(ui)).toBeUndefined();
-		expect(await ui.find({ type: 'Text', text: '✓ ok' })).toBeDefined();
-	});
-
 	test('a dark theme keeps the green', async ($, on) => {
 		world(on, { theme: 'dark' });
 		await run($);
@@ -1511,15 +1493,6 @@ describe('the stats tab', () => {
 		expect((await exact(ui, '1 literal search'))?.props['dimColor']).toBe(true);
 		expect((await exact(ui, '80%'))?.props['bold']).toBe(true);
 		expect((await exact(ui, 'n/a'))?.props['bold']).toBe(true);
-	});
-
-	test('the colors option set to none keeps the words and draws no color', { options: { colors: 'none' } }, async ($, on) => {
-		world(on, { saved: HISTORY });
-		await run($, 'stats');
-		const ui = await mountPane($, 'terminal');
-		await settle();
-		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeDefined();
-		expect((await ui.findAll({ type: 'Text' })).filter((t) => t.props['color'] !== undefined)).toEqual([]);
 	});
 
 	test('refresh reads the store again and still sends no query', async ($, on) => {
