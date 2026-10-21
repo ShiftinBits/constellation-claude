@@ -53,7 +53,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
        "constellation": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@constellationdev/mcp@1.2.11"],
+         "args": ["-y", "@constellationdev/mcp@1.3.0"],
          "env": {
            "CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
          }
