@@ -20,13 +20,12 @@ Version floor: Claude Code 2.1.304 (the least version with every event, field an
 
 | Event (matcher) | File | Also does |
 |-----------------|------|-----------|
-| `turn.start` | `budget.ts` | records the main loop's turn id only (a subagent's `turn.start` is skipped) |
 | `tool.call` `/code_intel$/` | `budget.ts` | the single code_intel observer: stamps the budget (every origin), and for `next.origin.plugin === 'engine'` only feeds adoption `noteCodeIntelCall`, onboarding `observeCodeIntel`, freshness `observeEnvelope`, impact `noteCodeIntel` |
-| `classic.SessionStart`, `classic.SubagentStart` | `nudge.ts` | `SESSION_TEXT` |
 | `tool.call` `/^(Grep\|Glob\|Bash)$/` | `nudge.ts` | reminder + adoption `noteSearch` |
-| `tool.describe`, `classic.CwdChanged` | `describe.ts` | CwdChanged also pings/compares freshness for a new project root |
+| `tool.describe` | `describe.ts` | |
+| `turn.start` | `describe.ts` | main loop only (a subagent's `turn.start` is skipped): stamps budget's main turn via `startMainTurn` before any `$` call, then, when `$.session.cwd()` differs from the last main-loop turn's, pings/compares freshness for a new project root and re-describes if the gate opens. The first turn only seeds the directory |
 | `tool.call` `/^(Grep\|Bash)$/` | `augment.ts` | |
-| `classic.SessionStart` `{source: clear\|resume\|fork}` | `session.ts` | calls every `reset*()`; `startup` is a fresh process, `compact` keeps state |
+| `session.end` `{reason: clear\|resume}` | `session.ts` | calls every `reset*()`; `/clear` ends with `clear`, `/resume` and `/branch` with `resume`; the other reasons (`logout`, `prompt_input_exit`, `other`) leave state alone |
 | `turn.complete` | `session.ts` | `forget*` for an ended subagent run; main-loop turn summary line |
 | `session.start` | `command.ts` | registers `/constellation`, onboarding key read-back + `$.env.set`, freshness ping + 5 min git timer |
 | `command.run`, `ui.render` Pane, `ui.close` | `command.ts` | |
@@ -43,8 +42,10 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 ## Design invariants
 
 - **State is module variables**, never `$.state`: a reload starts over (worst case a few extra reminders). Each `registerX` clears its state so every load and test starts fresh. Per-agent state is keyed `agentKey(e)` (`'main'` or `e.agentId`) and dropped when the subagent's run ends. Adoption counts stay on the machine: `$.store` values hold numbers only (no paths, patterns or code).
-- **Prompt cache.** `SESSION_TEXT`, `REMINDER_TEXT` and `GUIDANCE` stay constant (no counts, paths). The engine asks `tool.describe` once per tool per session; once guidance is in it stays, because removing it rewrites the tools block and the whole cache.
-- **Classic handlers** return `{ ...r, additionalContext: [...(r.additionalContext ?? []), TEXT] }`; `tool.call` adds `{ ...r, context: [...] }` (read by the model after the result; keep `r.result` and `r.ref`).
+- **Prompt cache.** `REMINDER_TEXT` and `GUIDANCE` stay constant (no counts, paths). The engine asks `tool.describe` once per tool per session; once guidance is in it stays, because removing it rewrites the tools block and the whole cache.
+- **Added context.** No hook adds session or subagent start text; the code_intel preference lives in `GUIDANCE`. `tool.call` adds `{ ...r, context: [...] }` (read by the model after the result; keep `r.result` and `r.ref`).
+- **Working-directory changes** are noticed at the next main-loop `turn.start`, not when they happen: a Bash `cd` mid-turn moves the freshness indicator and opens the description gate one turn later.
+- **Resets run at `session.end`** of the ending session. A freshness ping already in flight at `/clear` can still land afterwards (the earlier session-start reset had the same race); it is tolerated, not guarded.
 - **Own lookups vs the agent's.** A plugin `$.mcp.call` of code_intel raises `tool.call` with `next.origin.plugin` set to the plugin name (the model's carry `engine`). Plugin lookups stamp the turn (quieting that turn's nudges) but never count as adoption or impact evidence.
 - **Code sent to code_intel is real code.** `lookupSymbol`, `probe`, `orphanQuery`, `searchQuery` are tested functions sent via `fn.toString()`; user strings go in through `JSON.stringify`. Return only the fields the caller reads: a result over Claude Code's MCP output limit reaches `$.mcp.call` as a non-JSON `Error: result (N characters) exceeds maximum allowed tokens...` text with `isError` false (`INVALID_RESPONSE`).
 - **code_intel limits.** 50 `api.*` calls per run, so `blast.ts` reads `getDependents({ limit: 100, includeSymbols })` once per file, at most 50 files. `blast.ts` and `risk.ts` send only project-relative paths, never absolute ones. Use `getDependents`, not `searchSymbols` with `filterByFile` (substring match; core rejects patterns over 200 chars). `searchSymbols` is substring in name order: read a full page and rank exact matches client side (`rankExact`). Core refuses `getCallGraph` for kinds other than `function`, `method`, `generator`, and one refused read fails the whole `Promise.all`.
@@ -69,6 +70,7 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 - `$.ui.ask` rejects on Esc and in `-p`; tell them apart with `$.session.surfaces()`, never the error text. A hook `ask` with no one to answer (`-p`) becomes a refusal. Only core's own `ask` goes to the auto-mode classifier; a hook's `ask` goes to a person. `bypassPermissions` still honors a hook `ask`.
 - `tool.check` deny reaches the model as `Permission to use Edit denied by plugin <name>: <reason>`; `tool.call` `{ deny }` reaches it verbatim in `<tool_use_error>`.
 - `turn.complete` `text` shows as a system informational line and never enters the model's transcript.
+- `session.end` (checked on 2.1.311): `/clear` raises it with `clear` before the next prompt, under the ending session's id; the next `turn.start` runs under a new one. `/branch` and `/resume` raise it with `resume` for the session being left. No `session.start` follows any of them.
 - Not live-verified: `$.prompt.fill`, `$.ui.copy`, spinner redraw, auto-mode dialog in an interactive session.
 
 ## Tests (`claude-code/testing`)
@@ -77,4 +79,5 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 - The test `$` has engine events and `mock.env`, `mock.clock`, `mock.store`, but no `$.mcp`, `$.fs` and no file system. `mock.env(on, { NAME: 'value' })` answers `$.env.get`. Answer the others with `on('mcp.call', ...)`, `on('fs.exists', ...)`, `on('session.cwd', ...)`; pass plain fakes to helpers.
 - Answer the tool with one `on('tool.call', ...)` (twice fails the load); a Bash call also needs `on('classic.PreToolUse', () => ({}))` beneath. `mock.clock(on)` holds `$.clock.sleep` until `clock.advance(ms)`; await `settled()` instead of sleeping on background writes.
 - In the test kit a loaded plugin's own `$.mcp.call` does not pass through its own `tool.call` hooks (it does live): raise those through a stand-in `on` with `next.origin` set.
+- A stand-in harness that raises `turn.start` and reads the main turn (`usedCodeIntelThisTurn`) registers `registerDescribe` beside `registerBudget`, since describe owns that hook. Its `$` answers `session.cwd`.
 - Reminder and augment share `context`, so `augment.test.ts` runs with `nudgeLimit: 0` except the ordering test.

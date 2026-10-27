@@ -36,13 +36,13 @@ Loading the plugin writes git-ignored `.claude-plugin/types/` (engine `.d.ts`) a
 
 | File | Feature |
 |------|---------|
-| `nudge.ts` | Session/subagent awareness text, search reminder |
-| `budget.ts` | Per-agent nudge budget; the single code_intel observer |
+| `nudge.ts` | Search reminder |
+| `budget.ts` | Per-agent nudge budget (main turn set via `startMainTurn`); the single code_intel observer |
 | `classify.ts` | Search classifier (Grep pattern, Glob stem, Bash grep/rg), `ghPrCreate` |
-| `describe.ts` | Search tool description guidance |
+| `describe.ts` | Search tool description guidance; main-loop `turn.start` (main turn id, working-directory change) |
 | `augment.ts` | One code_intel line after a symbol search |
 | `adoption.ts` | Local code_intel vs text-search counter, spinner suffix |
-| `session.ts` | All clear/resume/fork resets and `turn.complete` pruning |
+| `session.ts` | All resets on `session.end` (clear, resume) and `turn.complete` pruning |
 | `risk.ts`, `impact.ts` | Impact gate (leaf `risk.ts` <- `budget.ts` <- `impact.ts`, one way) |
 | `blast.ts`, `turnsummary.ts`, `primpact.ts` | Dependents probe, per-turn summary line, PR impact section |
 | `toolrows.ts` | Compact code_intel transcript rows |
