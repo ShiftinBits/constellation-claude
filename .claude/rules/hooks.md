@@ -20,7 +20,7 @@ Version floor: Claude Code 2.1.287 (function hooks). Older builds ignore `"modul
 
 | Event (matcher) | File | Also does |
 |-----------------|------|-----------|
-| `turn.start` | `budget.ts` | records the main loop's turn id |
+| `turn.start` | `budget.ts` | records the main loop's turn id only (a subagent's `turn.start` is skipped) |
 | `tool.call` `/code_intel$/` | `budget.ts` | the single code_intel observer: stamps the budget (every origin), and for `next.origin.plugin === 'engine'` only feeds adoption `noteCodeIntelCall`, onboarding `observeCodeIntel`, freshness `observeEnvelope`, impact `noteCodeIntel` |
 | `classic.SessionStart`, `classic.SubagentStart` | `nudge.ts` | `SESSION_TEXT` |
 | `tool.call` `/^(Grep\|Glob\|Bash)$/` | `nudge.ts` | reminder + adoption `noteSearch` |

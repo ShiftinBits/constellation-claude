@@ -147,7 +147,7 @@ function load(options: PluginOptions) {
 
 	let calls = 0;
 	return {
-		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
+		turn: (turnId: string, agentId?: string) => raise('turn.start', { text: '', turnId, agentId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
 		/** A code_intel call running `code` for `agentId` in `cwd` (the session's when absent), raised by `origin`, over a bottom that answers `answer`. */
 		program: (agentId: string, code: string, answer: Answer, origin = ENGINE, cwd?: string) =>
@@ -222,6 +222,16 @@ describe('nudge budget', () => {
 		await m.turn('t1');
 		expect(await m.search()).toEqual(REMINDER);
 		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+	});
+
+	test('a subagent turn start does not replace the main conversation turn', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.turn('t1');
+		await m.turn('sub-turn', 'sub');
+		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+		await m.turn('sub-turn-2', 'sub');
 		expect(await m.search()).toBeUndefined();
 	});
 

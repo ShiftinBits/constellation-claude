@@ -79,6 +79,7 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	mainTurn = undefined;
 
 	on('turn.start', async (_$, e, next) => {
+		if (e.agentId !== undefined) return next(e);
 		mainTurn = e.turnId;
 		return next(e);
 	});
