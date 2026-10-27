@@ -1475,7 +1475,7 @@ export function registerCommand(on: On): void {
 		});
 	});
 
-	// The person closed the pane. An unload never runs this: the engine drops the pane before hooks hear of it and
+	// A close other than an unload. An unload never runs this: the engine drops the pane before hooks hear of it and
 	// skips its opener's, and a reload keeps an open pane up, with its state.
 	on('ui.close', { id: PANE }, async ($, e, next) => {
 		const r = await next(e);

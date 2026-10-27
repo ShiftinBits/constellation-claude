@@ -51,7 +51,8 @@ const GIT_MOVES = /\bgit\s[^;&|\n]*\b(?:commit|pull|checkout|merge|rebase)\b/;
 /**
  * Module state, cleared by `registerFreshness`. The index, the local checkout
  * and the root describe the repository, so `resetFreshness` keeps them. What
- * they show lives in `$.state` (the `freshness` key), so a reload keeps the line.
+ * they show lives in `$.state` (the `freshness` key), where the band reads it;
+ * a load's `session.start` clears it, since a load starts these over.
  */
 let index: Index | undefined;
 let local: Local | undefined;
