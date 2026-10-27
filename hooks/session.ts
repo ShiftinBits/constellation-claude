@@ -12,13 +12,14 @@ import { resetToolRows } from './toolrows';
 import { resetTurnSummary, summarizeTurn } from './turnsummary';
 
 /**
- * Session lifecycle for the module's state, in one place: a new conversation
- * (`/clear`, `/resume`, `/branch`) starts every budget and shown line over, and
- * a subagent's state is dropped when its run ends. The main loop's answered
- * turn also gets its impact summary line here.
+ * Session lifecycle for the module's state, in one place: when a conversation
+ * ends and the process goes on with another (`/clear` ends it with `clear`,
+ * `/resume` and `/branch` with `resume`), every budget and shown line starts
+ * over, and a subagent's state is dropped when its run ends. The main loop's
+ * answered turn also gets its impact summary line here.
  */
 export function registerSession(on: On): void {
-	on('classic.SessionStart', { source: ['clear', 'resume', 'fork'] }, async (_$, e, next) => {
+	on('session.end', { reason: ['clear', 'resume'] }, async (_$, e, next) => {
 		resetBudgets();
 		resetAugment();
 		resetRiskCache();

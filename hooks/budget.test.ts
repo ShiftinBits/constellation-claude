@@ -2,9 +2,10 @@ import type { On, PluginOptions } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { registerAdoption, sessionCounts, settled, total } from './adoption';
 import { registerBudget } from './budget';
+import { registerDescribe } from './describe';
 import { freshnessLine, registerFreshness, track } from './freshness';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
-import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { REMINDER_TEXT, registerNudges } from './nudge';
 import { registerOnboarding } from './onboarding';
 import { registerSession } from './session';
 import { BRAND } from './theme';
@@ -104,7 +105,8 @@ const $ = {
 };
 
 /**
- * The budget and nudge handlers as one hooks module registers them, raised
+ * The budget, nudge and describe handlers (the main loop's `turn.start` is
+ * describe's) as one hooks module registers them, raised
  * directly, so each test starts from a budget this module instance can read.
  */
 function load(options: PluginOptions) {
@@ -118,6 +120,7 @@ function load(options: PluginOptions) {
 	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
+	registerDescribe(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On);
 	registerFreshness(capture as unknown as On, options);
@@ -152,7 +155,8 @@ function load(options: PluginOptions) {
 		/** A code_intel call running `code` for `agentId` in `cwd` (the session's when absent), raised by `origin`, over a bottom that answers `answer`. */
 		program: (agentId: string, code: string, answer: Answer, origin = ENGINE, cwd?: string) =>
 			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code, ...(cwd === undefined ? {} : { cwd }) }, async () => answer, origin),
-		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		/** The session ending for `reason`, as `/clear` (`clear`) or `/resume` and `/branch` (`resume`) raise it. */
+		sessionEnd: (reason: string) => raise('session.end', { reason, sessionId: 'session-1', resume: { id: 'session-1' } }),
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
 		/** The raw tree the band returns over a `bottom` that draws `beneath`, with the survey flag as given. */
 		draw: (beneath: object = { type: 'Text', props: { children: 'beneath' } }, hasSurvey = false) =>
@@ -242,23 +246,23 @@ describe('nudge budget', () => {
 		expect(await m.search()).toEqual(REMINDER);
 	});
 
-	for (const source of ['clear', 'resume', 'fork']) {
-		test(`SessionStart from ${source} resets the budget`, async () => {
+	for (const reason of ['clear', 'resume']) {
+		test(`a session ending with ${reason} resets the budget`, async () => {
 			const m = load({ nudgeLimit: 1 });
 			await m.turn('t1');
 			expect(await m.search()).toEqual(REMINDER);
 			expect(await m.search()).toBeUndefined();
-			await m.sessionStart(source);
+			await m.sessionEnd(reason);
 			expect(await m.search()).toEqual(REMINDER);
 		});
 	}
 
-	for (const source of ['startup', 'compact']) {
-		test(`SessionStart from ${source} keeps the budget`, async () => {
+	for (const reason of ['prompt_input_exit', 'other']) {
+		test(`a session ending with ${reason} keeps the budget`, async () => {
 			const m = load({ nudgeLimit: 1 });
 			await m.turn('t1');
 			expect(await m.search()).toEqual(REMINDER);
-			await m.sessionStart(source);
+			await m.sessionEnd(reason);
 			expect(await m.search()).toBeUndefined();
 		});
 	}
@@ -318,7 +322,7 @@ describe('nudge budget', () => {
 		expect(existsCalls).toBe(1);
 	});
 
-	test('a SessionStart clear empties the risk cache', async () => {
+	test('a /clear empties the risk cache', async () => {
 		let calls = 0;
 		const mcp: RiskPort = {
 			after: () => {},
@@ -332,7 +336,7 @@ describe('nudge budget', () => {
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		expect(calls).toBe(1);
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		expect(calls).toBe(2);
 	});
@@ -391,10 +395,10 @@ describe('nudge budget', () => {
 		expect(await m.band()).toContain("Not signed in");
 	});
 
-	test('a SessionStart clear takes the onboarding band down', async () => {
+	test('a /clear takes the onboarding band down', async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(await m.band()).toBe('');
 	});
 
@@ -405,13 +409,13 @@ describe('nudge budget', () => {
 		expect(await m.band()).toBe('');
 	});
 
-	test('a SessionStart clear starts the adoption session counts over', async () => {
+	test('a /clear starts the adoption session counts over', async () => {
 		const m = load({});
 		await m.search();
 		await m.search('agent-1');
 		await settled();
 		expect(total(sessionCounts()).symbol).toBe(2);
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(total(sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
 	});
 
@@ -446,11 +450,11 @@ describe('nudge budget', () => {
 		expect(invalidations).toBe(0);
 	});
 
-	test('a SessionStart reset clears subagent budgets too', async () => {
+	test('a /clear resets subagent budgets too', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		await m.search('agent-1');
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 });
@@ -564,16 +568,16 @@ describe('freshness band above the prompt', () => {
 });
 
 describe('budget hooks as a loaded plugin', () => {
-	test('turn.start, a code_intel call and SessionStart pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
+	test('turn.start, a code_intel call and session.end pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		on('session.cwd', () => ({ value: PROJECT }));
 		on('turn.start', (_$, e) => ({ turnId: e.turnId }));
 		on('tool.call', () => ({ result: 'beneath' }));
-		on('classic.SessionStart', () => ({ additionalContext: ['beneath'] }));
+		on('session.end', (_$, e) => ({ sessionId: e.sessionId }));
 		expect(await $.turn.start({ text: 'hi', turnId: 't1' })).toEqual({ turnId: 't1' });
 		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 		expect(call).toEqual({ result: 'beneath' });
 		expect(await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' })).toEqual({ result: 'beneath' });
-		const start = await $.classic.SessionStart({ source: 'clear' });
-		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
+		expect(await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })).toEqual({ sessionId: 's1' });
 	});
 });

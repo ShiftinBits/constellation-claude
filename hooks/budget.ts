@@ -25,9 +25,10 @@ type AgentBudget = {
 const budgets = new Map<string, AgentBudget>();
 
 /**
- * The main conversation's current turn, from `turn.start`. A subagent's run is
- * one turn (its loop's `turn.complete` closes the run, and `forgetAgentBudget`
- * then drops its state), so its turn is its `agentId`.
+ * The main conversation's current turn, set through `startMainTurn` by the
+ * `turn.start` hook in `describe.ts`. A subagent's run is one turn (its loop's
+ * `turn.complete` closes the run, and `forgetAgentBudget` then drops its
+ * state), so its turn is its `agentId`.
  */
 let mainTurn: string | undefined;
 
@@ -50,6 +51,11 @@ function budgetOf(key: string): AgentBudget {
 /** The turn the agent `key` is in, or undefined before the main conversation's first turn. */
 function turnOf(key: string): string | undefined {
 	return key === MAIN ? mainTurn : key;
+}
+
+/** Records `turnId` as the main conversation's current turn. */
+export function startMainTurn(turnId: string): void {
+	mainTurn = turnId;
 }
 
 /** True when the agent that made the tool call `e` already called code_intel in its current turn. */
@@ -77,12 +83,6 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	nudgeLimit = typeof limit === 'number' ? limit : DEFAULT_NUDGE_LIMIT;
 	budgets.clear();
 	mainTurn = undefined;
-
-	on('turn.start', async (_$, e, next) => {
-		if (e.agentId !== undefined) return next(e);
-		mainTurn = e.turnId;
-		return next(e);
-	});
 
 	on('tool.call', { tool: /code_intel$/ }, async ($, e, next) => {
 		const key = agentKey(e);

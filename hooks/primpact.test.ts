@@ -215,7 +215,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 		/** Registers the session hooks on the same stand-in `on` and raises a `/clear`. */
 		clear: () => {
 			registerSession(capture as unknown as On);
-			return raise('classic.SessionStart', { source: 'clear' }, async () => ({}));
+			return raise('session.end', { reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } }, async () => ({}));
 		},
 	};
 }

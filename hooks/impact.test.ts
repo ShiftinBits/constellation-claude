@@ -163,14 +163,15 @@ function load(options: PluginOptions, world: World = {}) {
 		return raise('tool.call', e, async () => ({ result: 'ran' }) as unknown as ToolCheckResult);
 	};
 
-	const sessionStart = (source: string) =>
-		raise('classic.SessionStart', { source }, async () => ({ decision: 'allow' }));
+	/** The session ending for `reason`, as `/clear` (`clear`) or `/resume` and `/branch` (`resume`) raise it. */
+	const sessionEnd = (reason: string) =>
+		raise('session.end', { reason, sessionId: 'session-1', resume: { id: 'session-1' } }, async () => ({ decision: 'allow' }));
 
 	/** A prompt submitted in permission mode `mode`, as `classic.UserPromptSubmit` carries it. */
 	const prompt = (mode: string) =>
 		raise('classic.UserPromptSubmit', { prompt: 'edit it', permission_mode: mode }, async () => ({ decision: 'allow' }));
 
-	return { calls, check, query, edit, sessionStart, prompt };
+	return { calls, check, query, edit, sessionEnd, prompt };
 }
 
 const HIGH: FileRisk = {
@@ -235,10 +236,10 @@ describe('impact gate dialog', () => {
 		expect(m.calls.asks.length).toBe(2);
 	});
 
-	test('a SessionStart clear forgets the files not to ask about', async () => {
+	test('a /clear forgets the files not to ask about', async () => {
 		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
 		await m.check();
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		await m.check();
 		expect(m.calls.asks.length).toBe(2);
 	});
@@ -414,10 +415,10 @@ describe('impact gate in auto mode', () => {
 		expect(native.calls.programs).toBe(0);
 	});
 
-	test('a SessionStart clear forgets the mode', async () => {
+	test('a /clear forgets the mode', async () => {
 		const m = load({ impactGate: 'dialog' });
 		await m.prompt('auto');
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		await m.check('ask');
 		expect(m.calls.asks).toEqual([]);
 		expect(m.calls.toasts.length).toBe(1);
@@ -516,10 +517,10 @@ describe('impact gate require-analysis', () => {
 		expect(await m.edit()).toEqual({ deny: DENIED });
 	});
 
-	test('a SessionStart clear forgets the refusals', async () => {
+	test('a /clear forgets the refusals', async () => {
 		const m = load(options);
 		await m.edit();
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(await m.edit()).toEqual({ deny: DENIED });
 	});
 
