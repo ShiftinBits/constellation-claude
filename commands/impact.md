@@ -1,6 +1,7 @@
 ---
 description: Analyze the impact of changing a symbol or file
 argument-hint: "<symbol-name> [file-path]"
+arguments: symbol path
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
@@ -9,8 +10,8 @@ allowed-tools: mcp__plugin_constellation_constellation__code_intel
 Analyze the impact of changing the specified symbol.
 
 **Arguments:**
-- $1: Symbol name (required)
-- $2: File path (optional, helps disambiguate)
+- $symbol: Symbol name (required)
+- $path: File path (optional, helps disambiguate)
 
 If no symbol name is provided, ask the user what symbol they want to analyze.
 
@@ -18,8 +19,8 @@ Call `mcp__plugin_constellation_constellation__code_intel` with this code parame
 
 ```javascript
 const result = await api.impactAnalysis({
-  symbolName: "$1",
-  filePath: "$2" || undefined,
+  symbolName: "$symbol",
+  filePath: "$path" === "" ? undefined : "$path",
   depth: 3
 });
 return result;
