@@ -11,7 +11,7 @@ import { pingProject } from './onboarding';
  * the cached description keeps the prompt cache valid.
  */
 export const GUIDANCE =
-	'\n\nThe code_intel tool is the preferred tool for searching and navigating the codebase. For symbol definitions, references, dependents, call graphs or impact, use the code_intel tool. Grep, Glob and grep or rg in the shell are for literal text such as error messages, config values, log strings and comments.';
+	'\n\nPrefer the code_intel tool for searching and navigating the codebase: symbol definitions, references, dependents, call graphs and impact. Grep, Glob and grep or rg in the shell are for literal text such as error messages, config values, log strings and comments.';
 
 /**
  * The last gate result a description was built under; undefined until one is.
