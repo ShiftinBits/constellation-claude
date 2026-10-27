@@ -59,7 +59,7 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 ## Verified Claude Code behavior
 
 - `$.mcp.connect('constellation')` before every call and pass the name it returns to `$.mcp.call`: the name differs by load (`plugin:constellation:constellation`, or the project server's name under `--plugin-dir` in this repo). Never hard-code it. A refusal returns a reason (reported as `MCP_UNAVAILABLE`), it does not throw.
-- `$.command.register({ name: 'constellation' })` resolves bare `constellation`, coexisting with the Markdown `/constellation:*` commands. Names allow letters, digits, `_`, `-`. Register last inside try/catch, no retry: a throw skips the rest of `session.start`.
+- `$.command.register({ name: 'constellation' })` resolves bare `constellation`, coexisting with the `/constellation:*` skills. Names allow letters, digits, `_`, `-`. Register last inside try/catch, no retry: a throw skips the rest of `session.start`.
 - `$.command.run` is refused inside `command.run`; schedule `reload-plugins` with `$.clock.after(0, ...)`. A reload unloads the module, so chain nothing after it.
 - `$.fs.ancestors` accepts only `.md` names; `projectRoot`/`gitRoot` walk up with `$.fs.exists`.
 - `tool.describe` has no `agentId`; the rewritten description reaches subagents. `tool.check` carries `agentId` since 2.1.290 but still no permission mode; on a real call it carries `approver`, who answers its asks.

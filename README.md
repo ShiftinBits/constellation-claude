@@ -140,7 +140,7 @@ claude plugin marketplace add ShiftinBits/constellation-claude
 claude plugin install constellation@constellation-plugins --scope project
 ```
 
-Or install in one command (Claude Code 2.1.292+):
+Or install in one command (Claude Code 2.1.304+):
 
 ```bash
 claude plugin install constellation --marketplace ShiftinBits/constellation-claude

@@ -17,7 +17,7 @@ import type { Scheme } from './theme';
 
 /**
  * The command's name. Mod commands allow letters, digits, `_` and `-`, so the
- * bare name sits beside the Markdown `/constellation:*` commands, and a name
+ * bare name sits beside the `/constellation:*` skills, and a name
  * a built-in owns is refused.
  */
 export const COMMAND = 'constellation';
@@ -768,7 +768,7 @@ export function registerCommand(on: On): void {
 				immediate: true,
 			});
 		} catch {
-			// Registration refused: the Markdown commands still work.
+			// Registration refused: the `/constellation:*` skills still work.
 		}
 		return r;
 	});

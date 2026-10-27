@@ -53,8 +53,8 @@ const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_
 
 /**
  * This session's stored entry per day key, as a promise so that calls arriving
- * together share one read of the store. Kept across `resetAdoption()`: the
- * stored day totals belong to the day, not the conversation.
+ * together share one read of the store. Kept when `session.end` starts the counts
+ * over: the stored day totals belong to the day, not the conversation.
  */
 const days = new Map<string, Promise<Buckets>>();
 
