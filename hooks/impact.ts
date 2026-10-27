@@ -9,9 +9,6 @@ type Mode = 'off' | 'dialog' | 'native' | 'require-analysis';
 
 const MODES: readonly Mode[] = ['off', 'dialog', 'native', 'require-analysis'];
 
-/** How long the toast for an edit already headed to the permission prompt stays. */
-const TOAST_MS = 10_000;
-
 /**
  * How long an edit waits for its file's risk before it goes ahead ungated. The
  * hook's own time limit pauses while `$.mcp.call` runs, so a slow server would
@@ -28,15 +25,6 @@ let mode: Mode = 'off';
 let threshold: RiskLevel = 'high';
 
 /**
- * The session's permission mode as of the last prompt. In `auto` an `ask` goes
- * to the classifier, not a person, so the gate treats it as auto-approved.
- * Read from `classic.UserPromptSubmit`, because `tool.check` and the
- * `classic.PreToolUse` envelope carry no mode; a mode switched mid-turn is seen
- * at the next prompt.
- */
-let permissionMode: string | undefined;
-
-/**
  * Files the user chose not to be asked about again, by absolute path. Session
  * wide, not per agent. `tool.check` has carried `agentId` since 2.1.290, but
  * the choice is about the file, not who edits it.
@@ -47,7 +35,7 @@ const remembered = new Set<string>();
 const assessed = new Map<string, Set<string>>();
 
 /**
- * The risk word first, so a narrow toast that cuts the end keeps it, then how
+ * The risk word first, so a narrow line that cuts the end keeps it, then how
  * many files depend on the file, the file, and the indexed commit when known.
  */
 export function impactLine(risk: FileRisk): string {
@@ -55,7 +43,7 @@ export function impactLine(risk: FileRisk): string {
 	return `${tone(risk.level).word} risk · ${plural(risk.dependents, 'dependent')} · ${risk.path}${commit}`;
 }
 
-/** `impactLine` after the brand, for a log or dialog. A toast is already titled with the plugin's name. */
+/** `impactLine` after the brand, for the dialog or a permission prompt's reason. */
 export function headline(risk: FileRisk): string {
 	return branded(impactLine(risk));
 }
@@ -133,53 +121,34 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 	}
 	if (mode !== 'dialog' && mode !== 'native') return;
 
-	on('classic.UserPromptSubmit', async (_$, e, next) => {
-		permissionMode = e.permission_mode;
-		return next(e);
-	});
-
 	// Every return is `next(e)` or a fixed `ask` or `deny`: core's decision is read from a
 	// `$.tool.check` query, never from what `next` resolves to, so the gate cannot turn it into an allow.
 	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog or toast.
+		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog.
 		if (e.tool_use_id === undefined) return next(e);
+		// With no one to answer, a hook's ask would turn the edit into a refusal.
+		if (e.approver === undefined) return next(e);
 		const input = typeof e.input === 'object' && e.input !== null ? e.input : undefined;
 		const raw = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
 		if (raw === undefined) return next(e);
 		// The query skips this hook and asks no settings PreToolUse hook, so it is the rules' and the mode's decision.
 		const { decision } = await $.tool.check({ tool: e.tool, input: e.input });
 		if (decision === 'deny') return next(e);
-		// In auto mode an ask goes to the classifier: no one would see it, so the gate asks itself.
-		const classified = decision === 'ask' && permissionMode === 'auto';
-		// An edit headed to the permission prompt needs no downgrade (native) and gets only a toast (dialog).
-		if (mode === 'native' && decision === 'ask' && !classified) return next(e);
-		// A -p or SDK run has no one to answer: a downgrade there would turn the edit into a refusal.
-		if (mode === 'native' && decision === 'allow' && (await $.session.surfaces()).length === 0) return next(e);
 		const path = absolute(raw, await $.session.cwd());
-		const asks = (mode === 'dialog' && decision === 'allow') || classified;
-		if (asks && remembered.has(path)) return next(e);
+		// Only an edit core would run, with a person to answer, gets the plugin's own dialog.
+		const dialog = mode === 'dialog' && decision === 'allow' && e.approver === 'person';
+		if (dialog && remembered.has(path)) return next(e);
 		const risk = await gatedRisk($, String(e.tool), path, next.signal);
 		if (risk === undefined) return next(e);
+		// A hook's ask goes to a person or the host's callback, never to the auto-mode classifier.
+		if (!dialog) return { decision: 'ask', reason: headline(risk) };
 
-		const line = headline(risk);
-		if (!asks) {
-			$.ui.toast(impactLine(risk), { timeoutMs: TOAST_MS });
-			// Dialog mode leaves a prompted edit at its prompt; native mode sends an auto-approved one there.
-			if (mode !== 'native') return next(e);
-			return { decision: 'ask', reason: line };
-		}
-		// A -p or SDK run has no one to ask: no one would see the dialog, so fail open.
-		if ((await $.session.surfaces()).length === 0) {
-			$.ui.log(`${line} · could not ask, edit allowed`);
-			return next(e);
-		}
 		let answer = CANCEL;
 		try {
 			answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
 		} catch {
-			// With someone to ask, a rejection is the dialog dismissed (Esc), which refuses.
+			// With a person to ask, a rejection is the dialog dismissed (Esc), which refuses.
 		}
-		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
 		if (answer === PROCEED) return next(e);
 		if (answer === PROCEED_REMEMBER) {
 			remembered.add(path);
@@ -191,7 +160,6 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 
 /** Forgets every file the user chose not to be asked about, for a new conversation (`/clear`, `/resume`, `/branch`). */
 export function resetImpact(): void {
-	permissionMode = undefined;
 	remembered.clear();
 	assessed.clear();
 }

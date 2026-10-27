@@ -1,4 +1,4 @@
-import type { McpToolResult, On, PluginOptions, RenderSurface, ToolCallArgs, ToolCheckResult } from 'claude-code';
+import type { McpToolResult, On, PluginOptions, ToolCallArgs, ToolCheckApprover, ToolCheckResult } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { forgetAgentImpact, headline, impactLine, registerImpactGate } from './impact';
 import { type FileRisk, noteCodeIntel, RETRY_MS } from './risk';
@@ -32,8 +32,6 @@ type World = {
 	success?: boolean;
 	/** What `$.ui.ask` resolves to, or an Error it rejects with; `Proceed` when not given. */
 	answer?: string | Error;
-	/** What `$.session.surfaces` resolves to; the terminal when not given. */
-	surfaces?: readonly RenderSurface[];
 	/** When true, code_intel never answers and the gate's deadline passes at once. */
 	slow?: boolean;
 	/** The access key; `KEY` when not given. */
@@ -45,8 +43,6 @@ type World = {
 /** What the fake `$` recorded. */
 type Calls = {
 	asks: Array<{ question: string; options: unknown }>;
-	toasts: Array<{ text: string; options: unknown }>;
-	logs: string[];
 	programs: number;
 	envReads: number;
 	/** Every path `$.fs.exists` was asked about. */
@@ -70,7 +66,7 @@ function load(options: PluginOptions, world: World = {}) {
 	registerImpactGate(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 
-	const calls: Calls = { asks: [], toasts: [], logs: [], programs: 0, envReads: 0, exists: [], timers: [] };
+	const calls: Calls = { asks: [], programs: 0, envReads: 0, exists: [], timers: [] };
 	/** Core's decision for the check being raised, which the gate's `$.tool.check` query resolves to. */
 	let core: ToolCheckResult['decision'] = 'allow';
 	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
@@ -81,7 +77,7 @@ function load(options: PluginOptions, world: World = {}) {
 				return world.key ?? KEY;
 			},
 		},
-		session: { cwd: async () => PROJECT, surfaces: async () => world.surfaces ?? ['terminal'] },
+		session: { cwd: async () => PROJECT },
 		tool: { check: async (): Promise<ToolCheckResult> => ({ decision: core }) },
 		fs: {
 			exists: async (path: string) => {
@@ -121,12 +117,6 @@ function load(options: PluginOptions, world: World = {}) {
 				if (answer instanceof Error) throw answer;
 				return answer;
 			},
-			toast: (text: string, opts: unknown) => {
-				calls.toasts.push({ text, options: opts });
-			},
-			log: (text: string) => {
-				calls.logs.push(text);
-			},
 		},
 	};
 
@@ -145,14 +135,19 @@ function load(options: PluginOptions, world: World = {}) {
 		return step(0)(e);
 	};
 
-	/** A real call's check (it carries a `tool_use_id`) of `tool` on `path`, over core's `decision`. */
-	const check = (decision: ToolCheckResult['decision'] = 'allow', path = FILE, tool = 'Edit') => {
+	/**
+	 * A real call's check (it carries a `tool_use_id`) of `tool` on `path`, over
+	 * core's `decision`, with `approver` answering its asks (`null` leaves the
+	 * field out, as where nobody can be asked).
+	 */
+	const check = (decision: ToolCheckResult['decision'] = 'allow', path = FILE, tool = 'Edit', approver: ToolCheckApprover | null = 'person') => {
 		const field = tool === 'NotebookEdit' ? 'notebook_path' : 'file_path';
 		core = decision;
-		return raise('tool.check', { tool, input: { [field]: path }, tool_use_id: 'u1' }, async () => ({ decision }));
+		const e = { tool, input: { [field]: path }, tool_use_id: 'u1', ...(approver === null ? {} : { approver }) };
+		return raise('tool.check', e, async () => ({ decision }));
 	};
 
-	/** A query's check of an Edit of `FILE`: no `tool_use_id`, as another plugin's `$.tool.check` raises it. */
+	/** A query's check of an Edit of `FILE`: no `tool_use_id` and no approver, as another plugin's `$.tool.check` raises it. */
 	const query = (decision: ToolCheckResult['decision']) =>
 		raise('tool.check', { tool: 'Edit', input: { file_path: FILE } }, async () => ({ decision }));
 
@@ -167,11 +162,7 @@ function load(options: PluginOptions, world: World = {}) {
 	const sessionEnd = (reason: string) =>
 		raise('session.end', { reason, sessionId: 'session-1', resume: { id: 'session-1' } }, async () => ({ decision: 'allow' }));
 
-	/** A prompt submitted in permission mode `mode`, as `classic.UserPromptSubmit` carries it. */
-	const prompt = (mode: string) =>
-		raise('classic.UserPromptSubmit', { prompt: 'edit it', permission_mode: mode }, async () => ({ decision: 'allow' }));
-
-	return { calls, check, query, edit, sessionEnd, prompt };
+	return { calls, check, query, edit, sessionEnd };
 }
 
 const HIGH: FileRisk = {
@@ -183,7 +174,7 @@ const HIGH: FileRisk = {
 	asOfCommit: '0123456',
 };
 
-/** What a toast shows: no brand, since Claude Code titles the toast with the plugin's name. */
+/** The impact line without the brand. */
 const LINE = 'HIGH risk · 25 dependents · src/core.ts · as of 0123456';
 const HEADLINE = `${BRAND} · ${LINE}`;
 const QUESTION = `${HEADLINE}\nTop dependents: src/dep0.ts, src/dep1.ts, src/dep2.ts\nEdit it anyway?`;
@@ -203,7 +194,7 @@ describe('headline', () => {
 		expect(headline({ ...risk, dependents: 60, level: 'critical' })).toBe(`${BRAND} · CRITICAL risk · 60 dependents · src/core.ts`);
 	});
 
-	test('impactLine is the headline without the brand, for a toast', () => {
+	test('impactLine is the headline without the brand', () => {
 		expect(impactLine(HIGH)).toBe(LINE);
 	});
 });
@@ -213,7 +204,6 @@ describe('impact gate dialog', () => {
 		const m = load({ impactGate: 'dialog' });
 		expect(await m.check()).toEqual({ decision: 'allow' });
 		expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
-		expect(m.calls.toasts).toEqual([]);
 	});
 
 	test('Cancel denies with the reason the model reads', async () => {
@@ -236,6 +226,14 @@ describe('impact gate dialog', () => {
 		expect(m.calls.asks.length).toBe(2);
 	});
 
+	test('a remembered file is still sent to the permission prompt when core asks or the host answers', async () => {
+		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
+		await m.check();
+		expect(await m.check('ask')).toEqual({ decision: 'ask', reason: HEADLINE });
+		expect(await m.check('allow', FILE, 'Edit', 'host')).toEqual({ decision: 'ask', reason: HEADLINE });
+		expect(m.calls.asks.length).toBe(1);
+	});
+
 	test('a /clear forgets the files not to ask about', async () => {
 		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
 		await m.check();
@@ -244,10 +242,9 @@ describe('impact gate dialog', () => {
 		expect(m.calls.asks.length).toBe(2);
 	});
 
-	test('an edit core already sends to the permission prompt gets one toast and no dialog', async () => {
+	test('an edit core already asks about goes to the permission prompt with the headline, and no dialog', async () => {
 		const m = load({ impactGate: 'dialog' });
-		expect(await m.check('ask')).toEqual({ decision: 'ask' });
-		expect(m.calls.toasts).toEqual([{ text: LINE, options: { timeoutMs: 10000 } }]);
+		expect(await m.check('ask')).toEqual({ decision: 'ask', reason: HEADLINE });
 		expect(m.calls.asks).toEqual([]);
 	});
 
@@ -263,7 +260,6 @@ describe('impact gate dialog', () => {
 		expect(await m.query('allow')).toEqual({ decision: 'allow' });
 		expect(await m.query('ask')).toEqual({ decision: 'ask' });
 		expect(m.calls.asks).toEqual([]);
-		expect(m.calls.toasts).toEqual([]);
 		expect(m.calls.envReads).toBe(0);
 	});
 
@@ -328,17 +324,9 @@ describe('impact gate dialog', () => {
 		expect(critical.calls.asks.length).toBe(1);
 	});
 
-	test('with no surfaces (headless) the edit stays allowed, nothing is asked and one line is logged', async () => {
-		const m = load({ impactGate: 'dialog' }, { surfaces: [] });
-		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.asks).toEqual([]);
-		expect(m.calls.logs).toEqual([`${HEADLINE} · could not ask, edit allowed`]);
-	});
-
 	test('a dismissed dialog (Esc) denies as Cancel does, whatever the rejection says', async () => {
 		const m = load({ impactGate: 'dialog' }, { answer: new Error('dismissed') });
 		expect(await m.check()).toEqual(DENY);
-		expect(m.calls.logs).toEqual([]);
 	});
 
 	test('a remembered file makes no second lookup', async () => {
@@ -374,117 +362,116 @@ describe('impact gate dialog', () => {
 	});
 });
 
-describe('impact gate in auto mode', () => {
-	const ASK: ToolCheckResult = { decision: 'ask' };
+describe('impact gate by approver and core decision', () => {
+	type Decision = ToolCheckResult['decision'];
+	type Row = { mode: string; approver: ToolCheckApprover | null; core: Decision; result: ToolCheckResult; lookups: number; dialogs: number };
+	const ASK: ToolCheckResult = { decision: 'ask', reason: HEADLINE };
+	const rows: Row[] = [
+		{ mode: 'dialog', approver: null, core: 'allow', result: { decision: 'allow' }, lookups: 0, dialogs: 0 },
+		{ mode: 'dialog', approver: null, core: 'ask', result: { decision: 'ask' }, lookups: 0, dialogs: 0 },
+		{ mode: 'dialog', approver: null, core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+		{ mode: 'dialog', approver: 'host', core: 'allow', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'dialog', approver: 'host', core: 'ask', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'dialog', approver: 'host', core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+		{ mode: 'dialog', approver: 'person', core: 'allow', result: { decision: 'allow' }, lookups: 1, dialogs: 1 },
+		{ mode: 'dialog', approver: 'person', core: 'ask', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'dialog', approver: 'person', core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+		{ mode: 'native', approver: null, core: 'allow', result: { decision: 'allow' }, lookups: 0, dialogs: 0 },
+		{ mode: 'native', approver: null, core: 'ask', result: { decision: 'ask' }, lookups: 0, dialogs: 0 },
+		{ mode: 'native', approver: null, core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+		{ mode: 'native', approver: 'host', core: 'allow', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'native', approver: 'host', core: 'ask', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'native', approver: 'host', core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+		{ mode: 'native', approver: 'person', core: 'allow', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'native', approver: 'person', core: 'ask', result: ASK, lookups: 1, dialogs: 0 },
+		{ mode: 'native', approver: 'person', core: 'deny', result: { decision: 'deny' }, lookups: 0, dialogs: 0 },
+	];
 
-	for (const impactGate of ['dialog', 'native']) {
-		test(`${impactGate}: an edit headed to the auto-mode classifier asks, and Proceed leaves it to the classifier`, async () => {
-			const m = load({ impactGate });
-			await m.prompt('auto');
-			expect(await m.check('ask')).toEqual(ASK);
-			expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
-			expect(m.calls.toasts).toEqual([]);
-		});
-
-		test(`${impactGate}: Cancel refuses an edit headed to the classifier`, async () => {
-			const m = load({ impactGate }, { answer: 'Cancel' });
-			await m.prompt('auto');
-			expect(await m.check('ask')).toEqual(DENY);
+	for (const row of rows) {
+		test(`${row.mode}: approver ${row.approver ?? 'absent'}, core ${row.core} -> ${row.result.decision}`, async () => {
+			const m = load({ impactGate: row.mode });
+			expect(await m.check(row.core, FILE, 'Edit', row.approver)).toEqual(row.result);
+			expect(m.calls.programs).toBe(row.lookups);
+			expect(m.calls.asks.length).toBe(row.dialogs);
 		});
 	}
 
-	test('a remembered file is not asked about again', async () => {
-		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
-		await m.prompt('auto');
-		await m.check('ask');
-		await m.check('ask');
-		expect(m.calls.asks.length).toBe(1);
-		expect(m.calls.programs).toBe(1);
-	});
+	const quiet: Array<{ name: string; options: PluginOptions; world: World }> = [
+		{ name: 'a file below the threshold', options: {}, world: { dependents: 4 } },
+		{ name: 'a high-risk file under impactThreshold critical', options: { impactThreshold: 'critical' }, world: {} },
+		{ name: 'a failed lookup (unknown risk)', options: {}, world: { success: false } },
+		{ name: 'a lookup past the deadline (unknown risk)', options: {}, world: { slow: true } },
+	];
 
-	test('in default mode an ask still reaches the permission prompt: a toast in dialog mode, nothing in native', async () => {
-		const dialog = load({ impactGate: 'dialog' });
-		await dialog.prompt('default');
-		expect(await dialog.check('ask')).toEqual(ASK);
-		expect(dialog.calls.asks).toEqual([]);
-		expect(dialog.calls.toasts.length).toBe(1);
-		const native = load({ impactGate: 'native' });
-		await native.prompt('default');
-		expect(await native.check('ask')).toEqual(ASK);
-		expect(native.calls.toasts).toEqual([]);
-		expect(native.calls.programs).toBe(0);
-	});
-
-	test('a /clear forgets the mode', async () => {
-		const m = load({ impactGate: 'dialog' });
-		await m.prompt('auto');
-		await m.sessionEnd('clear');
-		await m.check('ask');
-		expect(m.calls.asks).toEqual([]);
-		expect(m.calls.toasts.length).toBe(1);
-	});
+	for (const impactGate of ['dialog', 'native']) {
+		for (const approver of ['host', 'person'] as const) {
+			for (const core of ['allow', 'ask'] as const) {
+				for (const q of quiet) {
+					test(`${impactGate}: approver ${approver}, core ${core}, ${q.name} keeps core's decision`, async () => {
+						const m = load({ impactGate, ...q.options }, q.world);
+						expect(await m.check(core, FILE, 'Edit', approver)).toEqual({ decision: core });
+						expect(m.calls.asks).toEqual([]);
+					});
+				}
+			}
+		}
+	}
 });
 
 describe('impact gate native', () => {
 	const ASK: ToolCheckResult = { decision: 'ask', reason: HEADLINE };
 
-	test('an allowed edit to a high-risk file is downgraded to the permission prompt with one toast', async () => {
+	test('an allowed edit to a high-risk file is sent to the permission prompt with the headline', async () => {
 		const m = load({ impactGate: 'native' });
 		expect(await m.check()).toEqual(ASK);
-		expect(m.calls.toasts).toEqual([{ text: LINE, options: { timeoutMs: 10000 } }]);
 		expect(m.calls.asks).toEqual([]);
 	});
 
-	test('an ask decision passes through with no toast and no lookup', async () => {
+	test('an edit core already asks about gets the headline as the reason', async () => {
 		const m = load({ impactGate: 'native' });
-		expect(await m.check('ask')).toEqual({ decision: 'ask' });
-		expect(m.calls.toasts).toEqual([]);
-		expect(m.calls.programs).toBe(0);
+		expect(await m.check('ask')).toEqual(ASK);
+		expect(m.calls.programs).toBe(1);
 	});
 
-	test('a deny decision passes through with no toast', async () => {
+	test('a deny decision passes through with no lookup', async () => {
 		const m = load({ impactGate: 'native' });
 		expect(await m.check('deny')).toEqual({ decision: 'deny' });
-		expect(m.calls.toasts).toEqual([]);
 		expect(m.calls.programs).toBe(0);
 	});
 
 	test('a query (no tool_use_id) is left alone', async () => {
 		const m = load({ impactGate: 'native' });
 		expect(await m.query('allow')).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
 		expect(m.calls.envReads).toBe(0);
 	});
 
 	test('a low-risk file is left alone', async () => {
 		const m = load({ impactGate: 'native' }, { dependents: 2 });
 		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
 	});
 
 	test('a new file is left alone', async () => {
 		const m = load({ impactGate: 'native' }, { files: [] });
 		expect(await m.check('allow', FILE, 'Write')).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.programs).toBe(0);
 	});
 
 	test('mode off is left alone', async () => {
 		const m = load({ impactGate: 'off' });
 		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
+		expect(m.calls.programs).toBe(0);
 	});
 
 	test('a code_intel error is left alone', async () => {
 		const m = load({ impactGate: 'native' }, { success: false });
 		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
 	});
 
-	test('with no surfaces the edit stays allowed, nothing is shown and nothing is looked up', async () => {
-		const m = load({ impactGate: 'native' }, { surfaces: [] });
-		expect(await m.check()).toEqual({ decision: 'allow' });
-		expect(m.calls.toasts).toEqual([]);
+	test('with no approver the edit keeps core\'s decision and nothing is looked up', async () => {
+		const m = load({ impactGate: 'native' });
+		expect(await m.check('allow', FILE, 'Edit', null)).toEqual({ decision: 'allow' });
 		expect(m.calls.programs).toBe(0);
+		expect(m.calls.envReads).toBe(0);
 	});
 });
 
@@ -606,11 +593,10 @@ describe('impact gate require-analysis', () => {
 });
 
 describe('impact gate as a loaded plugin', () => {
-	test('a $.tool.check query of a high-risk file is left alone: no lookup, no dialog, no toast', { options: { impactGate: 'dialog' } }, async ($, on) => {
+	test('a $.tool.check query of a high-risk file is left alone: no lookup and no dialog', { options: { impactGate: 'dialog' } }, async ($, on) => {
 		const raised: string[] = [];
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
 		on('session.cwd', () => ({ value: PROJECT }));
-		on('session.surfaces', () => ({ value: ['terminal'] }));
 		on('fs.exists', (_$, e) => ({ value: e.path === `${PROJECT}/constellation.json` || e.path === FILE }));
 		on('mcp.connect', () => ({ value: { isConnected: true, server: 'plugin:constellation:constellation' } }));
 		on('mcp.call', () => {
@@ -622,10 +608,6 @@ describe('impact gate as a loaded plugin', () => {
 		on('tool.call', (_$, e) => {
 			raised.push(String(e.tool));
 			return { result: 'Proceed' };
-		});
-		on('ui.toast', (_$, e) => {
-			raised.push(`toast ${e.text}`);
-			return { value: undefined };
 		});
 		expect(await $.tool.check({ tool: 'Edit', input: { file_path: FILE } })).toEqual({ decision: 'allow' });
 		expect(raised).toEqual([]);

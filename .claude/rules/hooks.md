@@ -29,7 +29,7 @@ Version floor: Claude Code 2.1.304 (the least version with every event, field an
 | `turn.complete` | `session.ts` | `forget*` for an ended subagent run; main-loop turn summary line |
 | `session.start` | `command.ts` | registers `/constellation`, onboarding key read-back + `$.env.set`, freshness ping + 5 min git timer |
 | `command.run`, `ui.render` Pane, `ui.close` | `command.ts` | |
-| `classic.UserPromptSubmit`, `tool.check` edit tools | `impact.ts` (`dialog`/`native` only) | records `permission_mode` (`tool.check` carries none) |
+| `tool.check` edit tools | `impact.ts` (`dialog`/`native` only) | real calls with an `approver` only; reads core's decision from a `$.tool.check` query |
 | `tool.call` edit tools | `impact.ts` (require-analysis only), `turnsummary.ts` | |
 | `tool.call` `'Bash'` | `primpact.ts` | registered unless `prImpact` is `off` |
 | `tool.call` `/^Bash$/` | `freshness.ts` | rechecks after git commit/pull/checkout/merge/rebase |
@@ -62,16 +62,16 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 - `$.command.register({ name: 'constellation' })` resolves bare `constellation`, coexisting with the Markdown `/constellation:*` commands. Names allow letters, digits, `_`, `-`. Register last inside try/catch, no retry: a throw skips the rest of `session.start`.
 - `$.command.run` is refused inside `command.run`; schedule `reload-plugins` with `$.clock.after(0, ...)`. A reload unloads the module, so chain nothing after it.
 - `$.fs.ancestors` accepts only `.md` names; `projectRoot`/`gitRoot` walk up with `$.fs.exists`.
-- `tool.describe` has no `agentId`; the rewritten description reaches subagents. `tool.check` carries `agentId` since 2.1.290 but still no permission mode.
+- `tool.describe` has no `agentId`; the rewritten description reaches subagents. `tool.check` carries `agentId` since 2.1.290 but still no permission mode; on a real call it carries `approver`, who answers its asks.
 - `$.ui.toast` is plain text: no ANSI (escape drawn as `�`), titled with the plugin `name`, fullscreen draws up to three at a time, and the classic renderer replaces the older toast with the newer one.
 - The `/theme` picker raises neither `config.set` nor `classic.ConfigChange` (the `/config` menu does), so cached theme reads also expire after one second.
 - `theme` row of `$.config.list()` options: `auto`, `dark`, `light`, `light-daltonized`, `dark-daltonized`, `light-ansi`, `dark-ansi`; `auto` reads as dark.
 - A real Edit raises `tool.call` with `tool.check` inside it, both with the same `tool_use_id`; a `$.tool.check` query has none.
-- `$.ui.ask` rejects on Esc and in `-p`; tell them apart with `$.session.surfaces()`, never the error text. A hook `ask` with no one to answer (`-p`) becomes a refusal. Only core's own `ask` goes to the auto-mode classifier; a hook's `ask` goes to a person. `bypassPermissions` still honors a hook `ask`.
+- `$.ui.ask` rejects on Esc and in `-p`; never read the error text. `tool.check`'s `approver` is known before any hook runs: `person` (a dialog or card), `host` (a host's permission callback), absent where nobody can be asked. A hook `ask` with no one to answer becomes a refusal, so the impact gate leaves such a call to core. Only core's own `ask` goes to the auto-mode classifier; a hook's `ask` goes to the approver, in auto mode too. `bypassPermissions` still honors a hook `ask`.
 - `tool.check` deny reaches the model as `Permission to use Edit denied by plugin <name>: <reason>`; `tool.call` `{ deny }` reaches it verbatim in `<tool_use_error>`.
 - `turn.complete` `text` shows as a system informational line and never enters the model's transcript.
 - `session.end` (checked on 2.1.311): `/clear` raises it with `clear` before the next prompt, under the ending session's id; the next `turn.start` runs under a new one. `/branch` and `/resume` raise it with `resume` for the session being left. No `session.start` follows any of them.
-- Not live-verified: `$.prompt.fill`, `$.ui.copy`, spinner redraw, auto-mode dialog in an interactive session.
+- Not live-verified: `$.prompt.fill`, `$.ui.copy`, spinner redraw, the impact gate's hook `ask` in each permission mode.
 
 ## Tests (`claude-code/testing`)
 
