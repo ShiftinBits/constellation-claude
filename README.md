@@ -140,6 +140,14 @@ claude plugin marketplace add ShiftinBits/constellation-claude
 claude plugin install constellation@constellation-plugins --scope project
 ```
 
+Or install in one command (Claude Code 2.1.292+):
+
+```bash
+claude plugin install constellation --marketplace ShiftinBits/constellation-claude
+```
+
+Auto-update is off by default for third-party marketplaces. To keep the plugin current, enable it under `/plugin` -> Marketplaces.
+
 ## Usage Examples
 
 ### Check Your Setup

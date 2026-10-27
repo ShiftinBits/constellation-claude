@@ -4,9 +4,9 @@
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@constellationdev/mcp@1.3.0"],
-			"env": {
-				"CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
-			}
+      "env": {
+        "CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
+      }
     }
   }
 }

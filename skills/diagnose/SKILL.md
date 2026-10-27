@@ -32,8 +32,7 @@ Auth         · not checked
 Index        · not checked
 
 ✗ MCP_UNAVAILABLE · The Constellation MCP server isn't connected · restart Claude Code
-  Check that npm can run it: npx @constellationdev/mcp@1.3.0 --version
-  Check the .mcp.json configuration in the plugin directory
+  Check that npm can run the server version set in the plugin's .mcp.json (the one place the version is set)
 ```
 
 ### If `result.success` is true:
