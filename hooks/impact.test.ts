@@ -49,6 +49,8 @@ type Calls = {
 	exists: string[];
 	/** `$.clock.after` timers, in the order they were set. */
 	timers: Array<{ ms: number; fn: () => void }>;
+	/** What the gate's `$.tool.check` queries asked about. */
+	queries: unknown[];
 };
 
 /**
@@ -66,7 +68,7 @@ function load(options: PluginOptions, world: World = {}) {
 	registerImpactGate(capture as unknown as On, options);
 	registerSession(capture as unknown as On);
 
-	const calls: Calls = { asks: [], programs: 0, envReads: 0, exists: [], timers: [] };
+	const calls: Calls = { asks: [], programs: 0, envReads: 0, exists: [], timers: [], queries: [] };
 	/** Core's decision for the check being raised, which the gate's `$.tool.check` query resolves to. */
 	let core: ToolCheckResult['decision'] = 'allow';
 	const files = new Set([`${PROJECT}/constellation.json`, ...(world.files ?? [FILE])]);
@@ -78,7 +80,12 @@ function load(options: PluginOptions, world: World = {}) {
 			},
 		},
 		session: { cwd: async () => PROJECT },
-		tool: { check: async (): Promise<ToolCheckResult> => ({ decision: core }) },
+		tool: {
+			check: async (query: unknown): Promise<ToolCheckResult> => {
+				calls.queries.push(query);
+				return { decision: core };
+			},
+		},
 		fs: {
 			exists: async (path: string) => {
 				calls.exists.push(path);
@@ -204,6 +211,12 @@ describe('impact gate dialog', () => {
 		const m = load({ impactGate: 'dialog' });
 		expect(await m.check()).toEqual({ decision: 'allow' });
 		expect(m.calls.asks).toEqual([{ question: QUESTION, options: OPTIONS }]);
+	});
+
+	test("core's decision is queried for the same tool and input", async () => {
+		const m = load({ impactGate: 'dialog' });
+		await m.check();
+		expect(m.calls.queries).toEqual([{ tool: 'Edit', input: { file_path: FILE } }]);
 	});
 
 	test('Cancel denies with the reason the model reads', async () => {

@@ -115,7 +115,7 @@ const SPINNER = { word: 'Sauteing', message: null, suffix: '…', mode: 'thinkin
  * raised directly over `store`, with the session totals and the day entries in
  * memory started over.
  */
-function load(store: Store = fakeStore(), options: PluginOptions = {}) {
+function load(store: Store = fakeStore(), options: PluginOptions = {}, state = fakeState()) {
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -132,7 +132,7 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 		env: { get: async () => session.key },
 		session: { cwd: async () => session.cwd, surfaces: async () => ['terminal'], id: async () => 'session-1' },
 		ui: { log: () => undefined },
-		state: fakeState(),
+		state,
 		store,
 		clock: { now: async () => session.now },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
@@ -226,6 +226,18 @@ describe('adoption counting through the hooks', () => {
 		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
 		await settled();
 		expect((await m.counts()).main).toEqual(counts(1, 5, 0, 1));
+	});
+
+	test('a refused state write still saves the count to the store', async () => {
+		const state = fakeState();
+		state.set = async () => {
+			throw new Error('refused');
+		};
+		const m = load(fakeStore(), {}, state);
+		await m.codeIntel(took(5));
+		await m.grep('AuthService');
+		await settled();
+		expect(await stored(m.store, m.key)).toEqual({ main: counts(1, 5, 1, 0), subagents: NONE });
 	});
 
 	test('the answers come back without waiting for a store write that never settles', async () => {
