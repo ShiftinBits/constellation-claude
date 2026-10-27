@@ -1,7 +1,8 @@
+import { atom, read, update } from 'claude-code';
 import type { EngineInterface, On } from 'claude-code';
 import { startMainTurn } from './budget';
-import { freshnessLine, observeEnvelope, recheck, track } from './freshness';
-import type { Run } from './freshness';
+import { FRESHNESS_SHAPE, observeEnvelope, recheck, track } from './freshness';
+import type { Publish, Run } from './freshness';
 import { canDraw, isConfigured, projectRoot } from './lib';
 import type { McpPort } from './lib';
 import { pingProject } from './onboarding';
@@ -12,6 +13,8 @@ import { pingProject } from './onboarding';
  */
 export const GUIDANCE =
 	'\n\nPrefer the code_intel tool for searching and navigating the codebase: symbol definitions, references, dependents, call graphs and impact. Grep, Glob and grep or rg in the shell are for literal text such as error messages, config values, log strings and comments.';
+
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /**
  * The last gate result a description was built under; undefined until one is.
@@ -67,21 +70,20 @@ export function registerDescribe(on: On): void {
 				const root = isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')) ? await projectRoot(cwd, (p) => $.fs.exists(p)) : null;
 				if (root !== null) {
 					const run: Run = (argv, init) => $.process.run(argv, init);
-					const invalidate = () => $.ui.invalidate('ui.render');
+					const publish: Publish = (view) => update($, FRESHNESS, () => view);
 					const log = async (text: string) => {
 						if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 					};
-					const showing = freshnessLine(Date.now()) !== undefined;
 					if (track(root)) {
 						// The last project's line goes.
-						if (showing) invalidate();
+						if ((await read($, FRESHNESS)) !== null) await publish(null).catch(() => undefined);
 						const mcp: McpPort = { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) };
 						void pingProject(root, { read: (p) => $.fs.read(p), mcp })
-							.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, invalidate, log)))
-							.then(() => recheck(run, invalidate, log))
+							.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, publish, log)))
+							.then(() => recheck(run, publish, log))
 							.catch(() => undefined);
 					} else {
-						void recheck(run, invalidate, log).catch(() => undefined);
+						void recheck(run, publish, log).catch(() => undefined);
 					}
 				}
 			} catch {

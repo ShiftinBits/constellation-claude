@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { dayKey } from './adoption';
 import type { Buckets } from './adoption';
-import { COMMAND, parseArgs, summarize } from './command';
+import { COMMAND, parseArgs, registerCommand, summarize } from './command';
 import type { Tab } from './command';
 import { searchCode } from './explore';
 import { palette } from './theme';
@@ -226,8 +226,13 @@ async function run($: Engine, args = '') {
 	});
 }
 
-/** Mounts the pane the command opened, as a surface drawing it. */
+/**
+ * Mounts the pane the command opened, as a surface drawing it, once the work the command started has run as far
+ * as it can: the kit does not draw again for a state write that lands while the drawing that read the value is
+ * still being dispatched, so a first drawing would miss an answer that lands during it.
+ */
 async function mountPane($: Engine, surface: (typeof SURFACES)[number], bodyColumns = 100) {
+	await settle();
 	return $.ui.mount({
 		plugin: 'constellation',
 		surface,
@@ -272,9 +277,9 @@ async function markdownText(ui: Awaited<ReturnType<typeof mountPane>>): Promise<
 	return (await ui.findAll({ type: 'Markdown' })).map((m) => String(m.props['text'])).join('\n');
 }
 
-/** Lets the query a drawing started settle and the redraw it asked for run. */
+/** Lets the work a handler started settle and the redraw its state write brings run: each write is a read and a write through the host. */
 async function settle(): Promise<void> {
-	for (let i = 0; i < 50; i++) await Promise.resolve();
+	for (let i = 0; i < 200; i++) await Promise.resolve();
 }
 
 describe('parseArgs', () => {
@@ -848,7 +853,7 @@ describe('the pane', () => {
 	});
 
 	test('an answer that lands after the pane closed is not kept', async ($, on) => {
-		const { codes, release } = gateFirst(on, success(PING));
+		const { codes, release } = gateFirst(on, failure('STALE_CODE', 'stale'));
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
@@ -856,9 +861,16 @@ describe('the pane', () => {
 		release();
 		await settle();
 		await ui.unmount();
+		// Closed, the pane holds nothing: a drawing shows the status tab with no answer and asks nothing.
+		const closed = await mountPane($, 'terminal');
+		expect(await closed.find({ type: 'Text', text: /STALE_CODE|Connection/ })).toBeUndefined();
+		expect(codes).toHaveLength(1);
+		await closed.unmount();
+		await run($);
 		const again = await mountPane($, 'terminal');
 		await settle();
 		expect(codes).toHaveLength(2);
+		expect(await again.find({ type: 'Text', text: /STALE_CODE/ })).toBeUndefined();
 		expect(await again.find({ type: 'Text', text: /Connection/ })).toBeDefined();
 	});
 
@@ -876,18 +888,20 @@ describe('the pane', () => {
 		expect(await exact(ui, 'MCP_CALL_FAILED')).toBeDefined();
 	});
 
-	test('a drawing that cannot read the working directory draws an error badge', async ($, on) => {
+	test('a query that cannot read the working directory draws an error badge', async ($, on) => {
 		const { armed } = world(on, { throws: 'session.cwd' });
+		on('session.end', (_, e) => ({ sessionId: e.sessionId }));
 		await run($);
-		const first = await mountPane($, 'terminal');
+		const ui = await mountPane($, 'terminal');
 		await settle();
-		await first.press({ key: 'close' });
-		await first.unmount();
+		// A new conversation starts the pane over, with no directory of its own: a refresh then reads the session's.
+		await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } });
+		await settle();
 		armed.cwd = true;
-		const again = await mountPane($, 'terminal');
+		await ui.press({ key: 'refresh' });
 		await settle();
-		expect(await exact(again, 'The call to the Constellation MCP server failed')).toBeDefined();
-		expect(await again.find({ type: 'Text', text: /no implementation for session\.cwd/ })).toBeDefined();
+		expect(await exact(ui, 'The call to the Constellation MCP server failed')).toBeDefined();
+		expect(await ui.find({ type: 'Text', text: /no implementation for session\.cwd/ })).toBeDefined();
 	});
 
 	test('an unreadable theme falls back to the dark colors', async ($, on) => {
@@ -1151,7 +1165,14 @@ describe('the pane', () => {
 		await settle();
 		await first.press({ key: 'close' });
 		await first.unmount();
-		// With nothing held, a drawing starts over on the status tab and asks again.
+		// With nothing held, a drawing is back on the status tab, with no answer and nothing selected, and asks nothing.
+		const closed = await mountPane($, 'terminal');
+		expect(await closed.find({ type: 'Button', key: 'tab-status' })).toMatchObject({ props: selectedProps('terminal', 'Status') });
+		expect(await closed.find({ type: 'Text', text: /unused exports/ })).toBeUndefined();
+		expect(codes).toHaveLength(1);
+		await closed.unmount();
+		// Opened again, it starts over on the status tab and asks again.
+		await run($);
 		const again = await mountPane($, 'terminal');
 		await settle();
 		expect(codes).toHaveLength(2);
@@ -1667,6 +1688,127 @@ describe('the stats tab', () => {
 		expect(await exact(ui, '10 code_intel calls (2.0 s)')).toBeDefined();
 		expect(await exact(ui, '4 code_intel calls (1.5 s)')).toBeUndefined();
 		expect(await reads(ui, /reading the stored counts/)).toBe(false);
+	});
+});
+
+describe('the pane across a reload and a new conversation', () => {
+	type Handler = ($: object, e: object, next: (e: object) => Promise<unknown>) => Promise<unknown>;
+
+	/** `$.state` over a `Map`, as the host keeps it across a reload of the plugin's code. */
+	function fakeState() {
+		const values = new Map<string, { value: unknown; version: number }>();
+		const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
+		return {
+			get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
+			set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+				const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
+				if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
+				values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
+				return { isSet: true, version: held.version + 1 };
+			},
+		};
+	}
+
+	/** Elements as plain data: the type and the props. */
+	const EL = new Proxy({}, { get: (_, type) => (props: Record<string, unknown>) => ({ type: String(type), props }) });
+
+	/** Every element of a drawn tree, depth first. */
+	function elements(tree: unknown): { type: string; props: Record<string, unknown> }[] {
+		if (Array.isArray(tree)) return tree.flatMap(elements);
+		if (typeof tree !== 'object' || tree === null || !('props' in tree)) return [];
+		const node = tree as { type: string; props: Record<string, unknown> };
+		return [node, ...elements(node.props['children'])];
+	}
+
+	/**
+	 * One load of the command's hooks, through a stand-in `on`, over a `$` whose `$.state` is `state`: a reload is
+	 * a second load over the same state. Records the code_intel queries sent.
+	 */
+	function load(state: ReturnType<typeof fakeState>, codes: string[]) {
+		const handlers = new Map<string, Handler>();
+		registerCommand(((event: string, ...rest: unknown[]) => void handlers.set(event, rest[rest.length - 1] as Handler)) as unknown as On);
+		const $ = {
+			state,
+			session: { surfaces: async () => ['terminal'], cwd: async () => '/work/app' },
+			store: { get: async () => undefined },
+			config: { list: async () => [] },
+			mcp: {
+				connect: async () => ({ isConnected: true, server: SERVER }),
+				call: async (_server: string, _tool: string, args: Record<string, unknown>) => {
+					codes.push(String(args['code']));
+					return answer(String(args['code']));
+				},
+			},
+			ui: { open: async () => ({ isPlaced: true }), resolve: () => EL, invalidate: () => undefined },
+		};
+		const raise = (event: string, e: object) => {
+			const handler = handlers.get(event);
+			if (handler === undefined) throw new Error(`no ${event} hook`);
+			return handler($, e, async () => ({ type: 'engine' }));
+		};
+		return {
+			run: (args: string) => raise('command.run', { command: COMMAND, args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }),
+			draw: async () =>
+				elements(
+					await raise('ui.render', {
+						component: 'Pane',
+						surface: 'terminal',
+						requestId: 'constellation',
+						props: { title: 'Constellation', isFocused: true, bodyColumns: 100, placement: 'dock', scroll: { offset: 0, bodyRows: 30 }, view: {} },
+					}),
+				),
+		};
+	}
+
+	const selectedTab = (drawn: { type: string; props: Record<string, unknown> }[]) =>
+		drawn.find((n) => n.type === 'Button' && String(n.props['key']).startsWith('tab-') && String(n.props['label']).startsWith('▸'))?.props['key'];
+	const reads = (drawn: { type: string; props: Record<string, unknown> }[], text: string) =>
+		drawn.some((n) => n.type === 'Text' && n.props['children'] === text);
+
+	test('the drawing reads the tab and its answer from the state, and a reload keeps both without asking again', async () => {
+		const state = fakeState();
+		const codes: string[] = [];
+		const first = load(state, codes);
+		await first.run('diagnose');
+		await settle();
+		const before = await first.draw();
+		expect(selectedTab(before)).toBe('tab-diagnose');
+		expect(reads(before, '120')).toBe(true);
+		expect(codes).toHaveLength(1);
+
+		const reloaded = load(state, codes);
+		const after = await reloaded.draw();
+		expect(selectedTab(after)).toBe('tab-diagnose');
+		expect(reads(after, '120')).toBe(true);
+		expect(codes).toHaveLength(1);
+	});
+
+	test('a new conversation (/clear) starts the open pane over on the status tab with no answer', async ($, on) => {
+		const { codes } = world(on);
+		on('session.end', (_, e) => ({ sessionId: e.sessionId }));
+		await run($, 'diagnose');
+		const ui = await mountPane($, 'terminal');
+		await settle();
+		expect(await ui.find({ type: 'Button', key: 'tab-diagnose' })).toMatchObject({ props: selectedProps('terminal', 'Diagnose') });
+		expect(await ui.find({ type: 'Text', text: '120' })).toBeDefined();
+		await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } });
+		await settle();
+		expect(await ui.find({ type: 'Button', key: 'tab-status' })).toMatchObject({ props: selectedProps('terminal', 'Status') });
+		expect(await ui.find({ type: 'Text', text: '120' })).toBeUndefined();
+		expect(codes).toHaveLength(1);
+	});
+
+	test('a press writes the state, and the next drawing reads the new tab', async () => {
+		const state = fakeState();
+		const first = load(state, []);
+		await first.run('diagnose');
+		await settle();
+		const status = (await first.draw()).find((n) => n.props['key'] === 'tab-status');
+		const press = status?.props['onPress'];
+		if (typeof press !== 'function') throw new Error('no status tab');
+		await press();
+		await settle();
+		expect(selectedTab(await first.draw())).toBe('tab-status');
 	});
 });
 

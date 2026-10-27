@@ -1,3 +1,4 @@
+import { atom, read, update } from 'claude-code';
 import type {
 	McpToolResult,
 	On,
@@ -6,10 +7,13 @@ import type {
 	ProcessSpawnRequest,
 	ProcessSpawnResult,
 	RenderSurface,
+	StateDollar,
 } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import {
+	BAND_SHAPE,
 	KEY_PATTERN,
+	NO_BAND,
 	NOT_REGISTERED_OUTPUT,
 	band,
 	checkConnection,
@@ -27,13 +31,14 @@ import {
 	parseStoredKey,
 	readStoredKeyAtStart,
 	registerOnboarding,
+	resetBand,
 	resetOnboarding,
 	startIndex,
 	startSignIn,
 	startTask,
 	storedKey,
 } from './onboarding';
-import type { BandView, ButtonPorts, OnboardingPorts, OnboardingState, Run } from './onboarding';
+import type { BandView, ButtonPorts, OnboardingPorts, OnboardingState, Run, Task } from './onboarding';
 import { onboarding, palette } from './theme';
 
 /** A key in the CLI's format. Compared, never printed: a failing check shows a boolean, not the key. */
@@ -81,12 +86,61 @@ function shown(tree: unknown): string {
 	return `${own}${shown(tree.props['children'])}\n`;
 }
 
+/** `$.state` over a `Map`, as the host keeps it: each value with a version, a write that misses on a stale `ifVersion`, and the keys written. */
+function fakeState() {
+	const values = new Map<string, { value: unknown; version: number }>();
+	const written: string[] = [];
+	const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
+	return {
+		written,
+		clear: () => {
+			values.clear();
+			written.length = 0;
+		},
+		get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
+		set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+			const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
+			if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
+			values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
+			written.push(ref.key);
+			return { isSet: true, version: held.version + 1 };
+		},
+	};
+}
+
+/** The session's `$.state`, which the ports write the band into and the band's drawing reads. `loadBand` starts it over. */
+const hostState = fakeState();
+const state$ = { state: hostState } as unknown as StateDollar;
+const BAND = atom({ plugin: 'constellation', key: 'band' } as const, NO_BAND, { shape: BAND_SHAPE });
+/** How many times the band was written, each a redraw of it. */
+const bandWrites = () => hostState.written.filter((k) => k === 'band').length;
+
+/** What `observeCodeIntel` tells: the band in `$.state`, and `log` where nothing draws. */
+const notify = (log?: (text: string) => Promise<void>) => ({
+	band: () => read(state$, BAND),
+	setBand: (change: (b: Parameters<typeof resetBand>[0]) => Parameters<typeof resetBand>[0]) => update(state$, BAND, change),
+	...(log === undefined ? {} : { log }),
+});
+
+/** A new conversation, as the `session.end` hook starts one: the module's reset, and the band's in `$.state`. */
+async function newConversation(): Promise<void> {
+	resetOnboarding();
+	await update(state$, BAND, resetBand);
+}
+
+/** Claims a CLI run for `task` and puts up working, as a press of the band's button does before it looks for the CLI. */
+async function begin(task: Task): Promise<number | undefined> {
+	const generation = startTask(task);
+	if (generation !== undefined) await update(state$, BAND, () => ({ state: 'working' as const, task }));
+	return generation;
+}
+
 const buttons = (tree: unknown) => nodes(tree).filter((n) => n.type === 'Button');
 const keys = (tree: unknown) => buttons(tree).map((b) => b.props['key']);
 
 /** Records what the ports were asked to do, on a host that has `/bin/sh`. */
 function fakePorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: string) => boolean; config?: string } = {}) {
-	const seen = { envSet: [] as string[], reloads: 0, toasts: [] as string[], logs: [] as string[], invalidations: 0, pings: [] as string[], reads: [] as string[] };
+	const seen = { envSet: [] as string[], reloads: 0, toasts: [] as string[], logs: [] as string[], writes: 0, pings: [] as string[], reads: [] as string[] };
 	const timers: (() => void)[] = [];
 	const ports: OnboardingPorts = {
 		run: world.run ?? (async () => ({ exitCode: 0, stdout: '' })),
@@ -115,8 +169,10 @@ function fakePorts(world: { answer?: McpToolResult; run?: Run; exists?: (p: stri
 		toast: (text) => {
 			seen.toasts.push(text);
 		},
-		invalidate: () => {
-			seen.invalidations += 1;
+		band: () => read(state$, BAND),
+		setBand: (change) => {
+			seen.writes += 1;
+			return update(state$, BAND, change);
 		},
 		log: async (text) => {
 			seen.logs.push(text);
@@ -139,7 +195,7 @@ const FALLTHROUGH = { type: 'fallthrough', props: {} };
  * The band's render hook as `registerOnboarding` registers it, raised through
  * a stand-in `on` with a fake `$`: the store, theme row and element table.
  */
-function loadBand(store = new Map<string, unknown>(), world: Record<string, unknown> = {}) {
+function loadBand(store = new Map<string, unknown>(), world: Record<string, unknown> = {}, reload = false) {
 	let handler: RenderHandler | undefined;
 	let matcher: unknown;
 	const capture = (event: string, ...rest: unknown[]) => {
@@ -148,6 +204,8 @@ function loadBand(store = new Map<string, unknown>(), world: Record<string, unkn
 		handler = rest[rest.length - 1] as RenderHandler;
 	};
 	registerOnboarding(capture as unknown as On);
+	// A reload starts the module over and keeps `$.state`; a fresh load (each test) starts both over.
+	if (!reload) hostState.clear();
 	const seen = { invalidations: 0, logs: [] as string[], toasts: [] as string[], storeReads: 0, configReads: 0 };
 	const flags = { storeDown: false, now: 0 };
 	const $ = {
@@ -179,6 +237,7 @@ function loadBand(store = new Map<string, unknown>(), world: Record<string, unkn
 			},
 		},
 		session: { cwd: async () => REPO, surfaces: async () => ['terminal'] },
+		state: hostState,
 	};
 	const draw = async (props: Record<string, unknown> = {}) => {
 		if (handler === undefined) throw new Error('no render hook');
@@ -353,16 +412,16 @@ describe('storedKey', () => {
 
 describe('readStoredKeyAtStart', () => {
 	test('returns a stored key and the project root for the caller to set before next', async () => {
-		resetOnboarding();
+		loadBand();
 		const { ports, seen } = fakePorts({ run: async () => ({ exitCode: 0, stdout: `${KEY}\n` }) });
 		const found = await readStoredKeyAtStart(`${REPO}/src`, ports);
 		expect(isKey(found?.key)).toBe(true);
 		expect(found?.projectRoot).toBe(REPO);
-		expect(seen.invalidations).toBe(0);
+		expect(seen.writes).toBe(0);
 	});
 
 	test('a project root is null without a constellation.json', async () => {
-		resetOnboarding();
+		loadBand();
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: `${KEY}\n` }), exists: (p) => p === `${REPO}/.git` });
 		expect((await readStoredKeyAtStart(REPO, ports))?.projectRoot).toBeNull();
 	});
@@ -371,13 +430,13 @@ describe('readStoredKeyAtStart', () => {
 		const band = loadBand();
 		const { ports, seen } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '\n' }) });
 		expect(await readStoredKeyAtStart(REPO, ports)).toBeUndefined();
-		expect(seen.invalidations).toBe(1);
+		expect(seen.writes).toBe(1);
 		expect(seen.logs).toEqual(['✦ >_CONSTELLATION://CODE_INTEL · Not signed in · run const auth']);
 		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('outside a git repository nothing runs', async () => {
-		resetOnboarding();
+		loadBand();
 		let runs = 0;
 		const { ports, seen } = fakePorts({
 			run: async () => {
@@ -388,7 +447,7 @@ describe('readStoredKeyAtStart', () => {
 		});
 		expect(await readStoredKeyAtStart('/tmp/scratch', ports)).toBeUndefined();
 		expect(runs).toBe(0);
-		expect(seen.invalidations).toBe(0);
+		expect(seen.writes).toBe(0);
 	});
 
 	test('a read-back that times out counts as no key', async () => {
@@ -458,7 +517,7 @@ describe('checkConnection', () => {
 	test('an AUTH_ERROR ping while a sign-in runs leaves the run and its band alone', async () => {
 		const band = loadBand();
 		const { ports, seen, timers } = fakePorts({ answer: mcpText(failed('AUTH_ERROR')) });
-		startTask('auth', ports);
+		await begin('auth');
 		await checkConnection(REPO, ports);
 		expect(timers).toHaveLength(0);
 		expect(seen.reloads).toBe(0);
@@ -478,7 +537,7 @@ describe('checkConnection', () => {
 		const band = loadBand();
 		const { ports, seen } = fakePorts();
 		await checkConnection(REPO, ports);
-		expect(seen.invalidations).toBe(0);
+		expect(seen.writes).toBe(0);
 		expect(await band.draw()).toBe(FALLTHROUGH);
 	});
 
@@ -545,7 +604,7 @@ describe('pingProject', () => {
 describe('connect', () => {
 	test('sets the key, takes the band down, toasts and then reloads on a timer', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const { ports, seen, timers, fire } = fakePorts();
 		await connect(KEY, ports, 'Connected');
 		expect(seen.envSet.map(isKey)).toEqual([true]);
@@ -562,12 +621,9 @@ describe('connect', () => {
 describe('observeCodeIntel', () => {
 	const observed = async (r: Parameters<typeof observeCodeIntel>[0]) => {
 		const band = loadBand();
-		let invalidations = 0;
-		observeCodeIntel(r, true, () => {
-			invalidations += 1;
-		});
+		await observeCodeIntel(r, true, notify());
 		const tree = await band.draw();
-		return { tree, invalidations, text: shown(tree) };
+		return { tree, invalidations: bandWrites(), text: shown(tree) };
 	};
 
 	test('AUTH_ERROR puts up sign in again', async () => {
@@ -603,9 +659,9 @@ describe('observeCodeIntel', () => {
 	test('a success takes down the states an error put up', async () => {
 		for (const code of ['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'PROJECT_NOT_REGISTERED', 'CWD_NOT_INDEXED']) {
 			const band = loadBand();
-			observeCodeIntel(errored(code, []), true, () => undefined);
+			await observeCodeIntel(errored(code, []), true, notify());
 			expect(await band.draw()).not.toBe(FALLTHROUGH);
-			observeCodeIntel(OK, true, () => undefined);
+			await observeCodeIntel(OK, true, notify());
 			expect(await band.draw()).toBe(FALLTHROUGH);
 		}
 	});
@@ -614,12 +670,12 @@ describe('observeCodeIntel', () => {
 		const band = loadBand();
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
-		observeCodeIntel(OK, false, () => undefined);
+		await observeCodeIntel(OK, false, notify());
 		expect(shown(await band.draw())).toContain("Not signed in");
 
 		const again = loadBand();
-		startTask('index', { invalidate: () => undefined });
-		observeCodeIntel(OK, true, () => undefined);
+		await begin('index');
+		await observeCodeIntel(OK, true, notify());
 		expect(shown(await again.draw())).toContain('Indexing this project');
 		endTask();
 	});
@@ -628,40 +684,38 @@ describe('observeCodeIntel', () => {
 		const band = loadBand();
 		const { ports } = fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) });
 		await readStoredKeyAtStart(REPO, ports);
-		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), false, notify());
 		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('with no key set, not signed in outlasts a reset and an AUTH_ERROR after it', async () => {
 		const band = loadBand();
 		await readStoredKeyAtStart(REPO, fakePorts({ run: async () => ({ exitCode: 0, stdout: '' }) }).ports);
-		resetOnboarding();
+		await newConversation();
 		expect(shown(await band.draw())).toContain("Not signed in");
-		observeCodeIntel(errored('AUTH_ERROR'), false, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), false, notify());
 		expect(shown(await band.draw())).toContain("Not signed in");
 	});
 
 	test('a reset keeps no project and takes down the states a conversation put up', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined);
-		resetOnboarding();
+		await observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, notify());
+		await newConversation();
 		expect(shown(await band.draw())).toContain('Not set up for this project');
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
-		resetOnboarding();
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
+		await newConversation();
 		expect(await band.draw()).toBe(FALLTHROUGH);
 	});
 
 	test('a CLI run holds the band: nothing is written while it is live', async () => {
 		const band = loadBand();
-		let invalidations = 0;
-		expect(startTask('auth', { invalidate: () => undefined })).toBeDefined();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => {
-			invalidations += 1;
-		});
-		expect(invalidations).toBe(0);
+		expect(await begin('auth')).toBeDefined();
+		const before = bandWrites();
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
+		expect(bandWrites()).toBe(before);
 		expect(shown(await band.draw())).toContain('Signing in');
 		endTask();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		expect(shown(await band.draw())).toContain("This project hasn't been indexed yet");
 	});
 
@@ -676,10 +730,10 @@ describe('observeCodeIntel', () => {
 		const log = async (text: string) => {
 			logs.push(text);
 		};
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined, log);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined, log);
-		resetOnboarding();
-		observeCodeIntel(errored('CWD_NOT_INDEXED'), true, () => undefined, log);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify(log));
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify(log));
+		await newConversation();
+		await observeCodeIntel(errored('CWD_NOT_INDEXED'), true, notify(log));
 		expect(logs).toEqual([
 			'✦ >_CONSTELLATION://CODE_INTEL · Sign-in failed · run const auth',
 			'✦ >_CONSTELLATION://CODE_INTEL · Not set up for this project · run const init',
@@ -688,15 +742,15 @@ describe('observeCodeIntel', () => {
 });
 
 describe('startTask', () => {
-	test('a second run is refused while the first is live, and a reset does not end it', () => {
+	test('a second run is refused while the first is live, and a reset does not end it', async () => {
 		loadBand();
-		const generation = startTask('auth', { invalidate: () => undefined });
+		const generation = await begin('auth');
 		expect(generation).toBeDefined();
-		expect(startTask('index', { invalidate: () => undefined })).toBeUndefined();
-		resetOnboarding();
-		expect(startTask('index', { invalidate: () => undefined })).toBeUndefined();
+		expect(await begin('index')).toBeUndefined();
+		await newConversation();
+		expect(await begin('index')).toBeUndefined();
 		endTask();
-		const next = startTask('index', { invalidate: () => undefined });
+		const next = await begin('index');
 		expect(next !== undefined && generation !== undefined && next > generation).toBe(true);
 		endTask();
 	});
@@ -778,7 +832,7 @@ describe('the band above the prompt', () => {
 	test('passes with no state, and while a survey holds the band', async () => {
 		const band = loadBand();
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		expect(await band.draw({ hasSurvey: true })).toBe(FALLTHROUGH);
 		expect(await band.draw()).not.toBe(FALLTHROUGH);
 	});
@@ -792,17 +846,17 @@ describe('the band above the prompt', () => {
 				"Not signed in",
 				['onboarding-dismiss', 'onboarding-sign-in'],
 			],
-			[() => observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined), 'Sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
-			[() => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined), 'Not set up for this project', ['onboarding-dismiss']],
+			[() => observeCodeIntel(errored('AUTH_ERROR'), true, notify()), 'Sign-in failed', ['onboarding-dismiss', 'onboarding-sign-in']],
+			[() => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, notify()), 'Not set up for this project', ['onboarding-dismiss']],
 			[
-				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
+				() => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, notify()),
 				"This project isn't registered",
 				['onboarding-dismiss'],
 			],
-			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined), "This project hasn't been indexed yet", ['onboarding-dismiss', 'onboarding-index']],
+			[() => observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify()), "This project hasn't been indexed yet", ['onboarding-dismiss', 'onboarding-index']],
 			[
-				() => {
-					startTask('auth', { invalidate: () => undefined });
+				async () => {
+					await begin('auth');
 				},
 				'Signing in',
 				[],
@@ -818,20 +872,36 @@ describe('the band above the prompt', () => {
 		}
 	});
 
+	test('a reload keeps the band: the module starts over and draws what $.state holds', async () => {
+		loadBand();
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
+		const reloaded = loadBand(new Map(), {}, true);
+		const tree = await reloaded.draw();
+		expect(shown(tree)).toContain('Sign-in failed');
+		expect(keys(tree)).toEqual(['onboarding-dismiss', 'onboarding-sign-in']);
+	});
+
+	test('a reload that ended a CLI run shows nothing for its working band', async () => {
+		loadBand();
+		await begin('auth');
+		const reloaded = loadBand(new Map(), {}, true);
+		expect(await reloaded.draw()).toBe(FALLTHROUGH);
+	});
+
 	test('Dismiss hides the band for the repository until a different state comes', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		await band.press(await band.draw(), 'onboarding-dismiss');
 		expect(band.store.get(`onboarding-dismissed:${REPO}`)).toBe('sign-in-again');
 		expect(band.seen.invalidations).toBe(1);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		expect(shown(await band.draw())).toContain("This project hasn't been indexed yet");
 	});
 
 	test('draws read the dismissal once and the theme at most once a second', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		for (let i = 0; i < 5; i++) await band.draw();
 		expect(band.seen.storeReads).toBe(1);
 		expect(band.seen.configReads).toBe(1);
@@ -843,7 +913,7 @@ describe('the band above the prompt', () => {
 
 	test('an unavailable store shows the band, and the next draw reads it again', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		band.flags.storeDown = true;
 		expect(shown(await band.draw())).toContain('Sign-in failed');
 		band.flags.storeDown = false;
@@ -1114,7 +1184,7 @@ describe('the Sign in button', () => {
 	test('spawns constellation auth with the inherited key emptied and no color', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Opening browser for authentication...\n')] });
 		const band = loadBand(new Map(), world);
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
 		expect(spawns).toEqual([{ argv: [CLI, 'auth'], env: { CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }]);
@@ -1152,7 +1222,7 @@ describe('the Sign in button', () => {
 
 	test('a new stored key sets the env, takes the band down and reloads only through after(0)', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const { ports, seen, timers, fire } = buttonPorts({ run: host({ keys: [undefined, KEY] }).run, child: { code: 1 } });
 		await startSignIn(ports);
 		await settle();
@@ -1185,7 +1255,7 @@ describe('the Sign in button', () => {
 
 	test('while it runs the band says so with no Sign in, and the manual URL is a Link', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const held = gate();
 		const printed = `Could not open browser automatically.\n  Please open this URL manually:\n\n    ${MANUAL}\n`;
 		const { ports } = buttonPorts({ run: host().run, child: { chunks: [err(printed)], hold: held.promise } });
@@ -1203,7 +1273,7 @@ describe('the Sign in button', () => {
 
 	test('a URL still being written is not offered', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const held = gate();
 		const { ports } = buttonPorts({
 			run: host().run,
@@ -1219,7 +1289,7 @@ describe('the Sign in button', () => {
 	test("a CLI only the login shell finds signs in with the profile's PATH, never through the login shell", async () => {
 		const { world, spawns } = buttonWorld(host({ loginOnly: true }).run);
 		const band = loadBand(new Map(), world);
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		await band.press(await band.draw(), 'onboarding-sign-in');
 		await settle();
 		expect(spawns).toEqual([{ argv: [CLI, 'auth'], env: { PATH: `${LOGIN_PATH}:${HOST_PATH}`, CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }]);
@@ -1227,7 +1297,7 @@ describe('the Sign in button', () => {
 
 	test('a second press is refused while the child is live, and a loop that ends after a reset does nothing', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const held = gate();
 		const { run, readBacks } = host({ keys: [undefined, KEY, undefined, undefined] });
 		const { ports, seen, timers, spawns } = buttonPorts({ run, child: { hold: held.promise } });
@@ -1235,14 +1305,14 @@ describe('the Sign in button', () => {
 		await startSignIn(ports);
 		await startIndex(ports);
 		expect(spawns).toHaveLength(1);
-		resetOnboarding();
+		await newConversation();
 		held.open();
 		await settle();
 		expect(readBacks()).toBe(1);
 		expect(seen.envSet).toEqual([]);
 		expect(timers).toHaveLength(0);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		await startSignIn(ports);
 		await settle();
 		expect(spawns).toHaveLength(2);
@@ -1254,7 +1324,7 @@ describe('the Sign in button', () => {
 	] as const) {
 		test(`a reset during ${what} spawns nothing and frees the claim`, async () => {
 			const band = loadBand();
-			observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+			await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 			const held = gate();
 			const base = host();
 			const run: Run = async (argv, init) => {
@@ -1264,20 +1334,20 @@ describe('the Sign in button', () => {
 			const { ports, spawns } = buttonPorts({ run });
 			const pressed = startSignIn(ports);
 			await settle();
-			resetOnboarding();
+			await newConversation();
 			held.open();
 			await pressed;
 			await settle();
 			expect(spawns).toEqual([]);
 			expect(await band.draw()).toBe(FALLTHROUGH);
-			expect(startTask('auth', ports)).toBeDefined();
+			expect(startTask('auth')).toBeDefined();
 			endTask();
 		});
 	}
 
 	test('a missing CLI shows the install hint and spawns nothing, and a press after installing runs', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const installed = { cli: null as string | null };
 		const run: Run = (argv, init) => host({ cli: installed.cli }).run(argv, init);
 		const { ports, spawns } = buttonPorts({ run });
@@ -1301,7 +1371,7 @@ describe('the Index button', () => {
 	test('spawns constellation index --wait in the project root, with no --dirty', async () => {
 		const { world, spawns } = buttonWorld(host().run, { chunks: [out('Indexing...\n')] });
 		const band = loadBand(new Map(), world);
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		await band.press(await band.draw(), 'onboarding-index');
 		await settle();
 		expect(spawns).toEqual([{ argv: [CLI, 'index', '--wait'], cwd: REPO, env: { NO_COLOR: '1' } }]);
@@ -1310,7 +1380,7 @@ describe('the Index button', () => {
 
 	test('an exit 1 with a successful ping takes the band down and says so', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, seen } = buttonPorts({ run: host().run, child: { chunks: [err('Upload failed\n')], code: 1 } });
 		await startIndex(ports);
 		await settle();
@@ -1321,7 +1391,7 @@ describe('the Index button', () => {
 
 	test('an exit 0 with PROJECT_NOT_INDEXED stays not indexed, with the last line', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, seen } = buttonPorts({
 			run: host().run,
 			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
@@ -1338,7 +1408,7 @@ describe('the Index button', () => {
 
 	test('Project not registered in the output with PROJECT_NOT_INDEXED says not registered', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports } = buttonPorts({
 			run: host().run,
 			answer: mcpText(failed('PROJECT_NOT_INDEXED')),
@@ -1353,7 +1423,7 @@ describe('the Index button', () => {
 
 	test('an AUTH_ERROR ping after the run says sign in again, with the last line', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, seen } = buttonPorts({ run: host().run, answer: mcpText(failed('AUTH_ERROR')), child: { chunks: [err('Unauthorized\n')], code: 1 } });
 		await startIndex(ports);
 		await settle();
@@ -1366,7 +1436,7 @@ describe('the Index button', () => {
 
 	test('an API_UNREACHABLE ping after the run stays not indexed, with the last line, and says nothing was indexed', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, seen } = buttonPorts({ run: host().run, answer: mcpText(failed('API_UNREACHABLE')), child: { chunks: [out('Indexing...\n')], code: 0 } });
 		await startIndex(ports);
 		await settle();
@@ -1379,31 +1449,31 @@ describe('the Index button', () => {
 
 	test('a reset while the project root is looked up spawns nothing and frees the claim', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const held = gate();
 		const built = buttonPorts({ run: host().run });
 		const ports: ButtonPorts = { ...built.ports, cwd: () => held.promise.then(() => REPO) };
 		const pressed = startIndex(ports);
 		await settle();
-		resetOnboarding();
+		await newConversation();
 		held.open();
 		await pressed;
 		await settle();
 		expect(built.spawns).toEqual([]);
 		expect(await band.draw()).toBe(FALLTHROUGH);
-		expect(startTask('index', ports)).toBeDefined();
+		expect(startTask('index')).toBeDefined();
 		endTask();
 	});
 
 	test('a loop that ends after a reset neither pings nor writes the band', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const held = gate();
 		const { ports, seen, spawns } = buttonPorts({ run: host().run, child: { chunks: [out('Indexing...\n')], hold: held.promise } });
 		await startIndex(ports);
 		await startIndex(ports);
 		expect(spawns).toHaveLength(1);
-		resetOnboarding();
+		await newConversation();
 		held.open();
 		await settle();
 		expect(seen.pings).toEqual([]);
@@ -1413,7 +1483,7 @@ describe('the Index button', () => {
 
 	test('with no constellation.json above the session directory nothing spawns, and the band says where to run it', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, spawns } = buttonPorts({ run: host().run, exists: (p) => p === `${REPO}/.git` });
 		await startIndex(ports);
 		await settle();
@@ -1425,7 +1495,7 @@ describe('the Index button', () => {
 
 	test('a missing CLI shows the install hint and spawns nothing', async () => {
 		const band = loadBand();
-		observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, () => undefined);
+		await observeCodeIntel(errored('PROJECT_NOT_INDEXED'), true, notify());
 		const { ports, spawns } = buttonPorts({ run: host({ cli: null }).run });
 		await startIndex(ports);
 		await settle();
@@ -1444,7 +1514,7 @@ describe('with no /bin/sh (Windows)', () => {
 		] as const) {
 			const { world, spawns } = buttonWorld(host().run);
 			const band = loadBand(new Map(), { ...world, fs: { exists: async (p: string) => p === `${REPO}/.git` } });
-			observeCodeIntel(errored(code), true, () => undefined);
+			await observeCodeIntel(errored(code), true, notify());
 			const tree = await band.draw();
 			expect(shown(tree)).toContain(step);
 			expect(keys(tree)).toEqual(['onboarding-dismiss']);
@@ -1468,8 +1538,8 @@ describe('with no /bin/sh (Windows)', () => {
 describe('states with no button', () => {
 	test('no project and not registered offer only Dismiss, and nothing spawns', async () => {
 		for (const put of [
-			async () => observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, () => undefined),
-			async () => observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, () => undefined),
+			async () => await observeCodeIntel(errored('CWD_NOT_INDEXED', []), true, notify()),
+			async () => await observeCodeIntel(errored('PROJECT_NOT_REGISTERED'), true, notify()),
 		]) {
 			const { world, spawns } = buttonWorld(host().run);
 			const band = loadBand(new Map(), world);
@@ -1549,7 +1619,7 @@ describe('the key stays out of what is shown', () => {
 		await fire();
 		const drawn: string[] = [];
 		for (const code of ['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'PROJECT_NOT_REGISTERED', 'CWD_NOT_INDEXED']) {
-			observeCodeIntel(errored(code, []), true, () => undefined, ports.log);
+			await observeCodeIntel(errored(code, []), true, notify(ports.log));
 			drawn.push(shown(await band.draw()));
 		}
 		const everything = [...seen.logs, ...seen.toasts, ...band.seen.logs, ...band.seen.toasts, ...drawn];
@@ -1560,13 +1630,13 @@ describe('the key stays out of what is shown', () => {
 	test('no toast, log or drawn text holds the key through a failed and a successful sign-in', async () => {
 		const drawn: string[] = [];
 		const band = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const unchanged = buttonPorts({ run: host({ keys: [KEY, KEY] }).run, child: { chunks: [out('Waiting for authentication...\n')] } });
 		await startSignIn(unchanged.ports);
 		await settle();
 		drawn.push(shown(await band.draw()));
 		const again = loadBand();
-		observeCodeIntel(errored('AUTH_ERROR'), true, () => undefined);
+		await observeCodeIntel(errored('AUTH_ERROR'), true, notify());
 		const held = gate();
 		const signedIn = buttonPorts({
 			run: host({ keys: [undefined, KEY] }).run,

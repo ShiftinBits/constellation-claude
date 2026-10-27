@@ -1,9 +1,12 @@
+import { atom, update } from 'claude-code';
 import type { On } from 'claude-code';
-import { background, noteSearch, save, showsAdoption } from './adoption';
+import { ADOPTION_SHAPE, background, counted, NO_COUNTS, noteSearch, save } from './adoption';
 import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
 import { branded } from './theme';
+
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
 
 /** Added to the model's context with a search tool call's result. */
 export const REMINDER_TEXT = branded(
@@ -28,10 +31,10 @@ export function registerNudges(on: On): void {
 			const isMain = agentKey(e) === MAIN;
 			background(async () => {
 				if (!(await inProject())) return;
-				const counted = noteSearch(isMain, symbolLike);
-				// A literal search changes nothing the spinner shows.
-				if (symbolLike && showsAdoption()) $.ui.invalidate('ui.render');
-				await save(counted, {
+				const note = noteSearch(isMain, symbolLike);
+				// The state write redraws the spinner and the Stats tab; the store keeps the day's counts, whatever the write did.
+				await update($, ADOPTION, (b) => counted(b, note)).catch(() => undefined);
+				await save(note, {
 					now: () => $.clock.now(),
 					sessionId: () => $.session.id(),
 					get: (k) => $.store.get(k),

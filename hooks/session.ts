@@ -1,15 +1,21 @@
+import { atom, update } from 'claude-code';
 import type { On } from 'claude-code';
-import { resetAdoption } from './adoption';
+import { ADOPTION_SHAPE, NO_COUNTS } from './adoption';
 import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
+import { forgetPane, NO_PANE, PANE_SHAPE } from './command';
 import { resetFreshness } from './freshness';
 import { forgetAgentImpact, resetImpact } from './impact';
 import { isConfigured } from './lib';
-import { resetOnboarding } from './onboarding';
+import { BAND_SHAPE, NO_BAND, resetBand, resetOnboarding } from './onboarding';
 import { resetPrImpact } from './primpact';
 import { resetRiskCache } from './risk';
 import { resetToolRows } from './toolrows';
 import { resetTurnSummary, summarizeTurn } from './turnsummary';
+
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+const BAND = atom({ plugin: 'constellation', key: 'band' } as const, NO_BAND, { shape: BAND_SHAPE });
+const PANE_STATE = atom({ plugin: 'constellation', key: 'pane' } as const, NO_PANE, { shape: PANE_SHAPE });
 
 /**
  * Session lifecycle for the module's state, in one place: when a conversation
@@ -19,7 +25,7 @@ import { resetTurnSummary, summarizeTurn } from './turnsummary';
  * answered turn also gets its impact summary line here.
  */
 export function registerSession(on: On): void {
-	on('session.end', { reason: ['clear', 'resume'] }, async (_$, e, next) => {
+	on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
 		resetBudgets();
 		resetAugment();
 		resetRiskCache();
@@ -28,8 +34,11 @@ export function registerSession(on: On): void {
 		resetPrImpact();
 		resetToolRows();
 		resetOnboarding();
-		resetAdoption();
 		resetFreshness();
+		forgetPane();
+		// `$.state` outlasts the conversation, so the next one starts its drawn values over here. The
+		// freshness line stays: it describes the repository, not the conversation.
+		await Promise.allSettled([update($, ADOPTION, () => NO_COUNTS), update($, BAND, resetBand), update($, PANE_STATE, () => NO_PANE)]);
 		return next(e);
 	});
 

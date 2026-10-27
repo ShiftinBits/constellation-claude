@@ -1,26 +1,19 @@
+import { atom, read } from 'claude-code';
 import type { On, PluginOptions } from 'claude-code';
+import type { ConstellationBuckets, ConstellationCounts, ConstellationStats } from '../types';
 import { isRecord, num } from './lib';
 
 /** How often code_intel was called, how long those calls took, and how many text searches ran beside them. */
-export type Counts = {
-	/** code_intel calls the agent made. */
-	codeIntel: number;
-	/** The time those calls reported, summed, in milliseconds. */
-	codeIntelMs: number;
-	/** Text searches for something that looks like a symbol. */
-	symbol: number;
-	/** Text searches for literal text. */
-	literal: number;
-};
+export type Counts = ConstellationCounts;
 
 /** Counts for the main conversation and for every subagent together. */
-export type Buckets = { main: Counts; subagents: Counts };
+export type Buckets = ConstellationBuckets;
 
 /** One counted call: whose it was and what it adds. */
 export type Note = { isMain: boolean; counts: Counts };
 
 /** Totals for the local day of the clock value given, and for the 30 days ending with it. */
-export type Stats = { today: Counts; last30: Counts };
+export type Stats = ConstellationStats;
 
 const FIELDS = ['codeIntel', 'codeIntelMs', 'symbol', 'literal'] as const;
 
@@ -46,11 +39,17 @@ function add(into: Counts, counts: Counts): void {
 	for (const field of FIELDS) into[field] += counts[field];
 }
 
-/** This session's totals. Module state only: a reload of the hooks module starts them over. */
-let session = empty();
+/** The shape tag of the `adoption` state key; each file that reads or writes it builds its atom with it. */
+export const ADOPTION_SHAPE = 'adoption-1';
 
-/** Whether the spinner shows the session's counts: the `showAdoption` option, read when the hooks register. */
-let shown = false;
+/** The counts a session starts with. */
+export const NO_COUNTS: Buckets = empty();
+
+/**
+ * This session's totals, kept in `$.state` so a reload of the hooks module
+ * keeps them. The counting hooks write them with `update($, ADOPTION, (b) => counted(b, note))`.
+ */
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
 
 /**
  * This session's stored entry per day key, as a promise so that calls arriving
@@ -72,24 +71,21 @@ const running = new Set<Promise<void>>();
 /** Whether this load already deleted the entries past their kept days. */
 let pruned = false;
 
-function note(isMain: boolean, counts: Counts): Note {
-	add(isMain ? session.main : session.subagents, counts);
-	return { isMain, counts };
-}
-
-/** Counts one code_intel call in the session totals, with its time when the answer carried one. */
+/** One code_intel call, with its time when the answer carried one. */
 export function noteCodeIntelCall(isMain: boolean, timeMs?: number): Note {
-	return note(isMain, { ...zero(), codeIntel: 1, codeIntelMs: typeof timeMs === 'number' ? timeMs : 0 });
+	return { isMain, counts: { ...zero(), codeIntel: 1, codeIntelMs: typeof timeMs === 'number' ? timeMs : 0 } };
 }
 
-/** Counts one text search in the session totals, as symbol-like or literal. */
+/** One text search, as symbol-like or literal. */
 export function noteSearch(isMain: boolean, symbolLike: boolean): Note {
-	return note(isMain, { ...zero(), symbol: symbolLike ? 1 : 0, literal: symbolLike ? 0 : 1 });
+	return { isMain, counts: { ...zero(), symbol: symbolLike ? 1 : 0, literal: symbolLike ? 0 : 1 } };
 }
 
-/** This session's totals, as copies. */
-export function sessionCounts(): Buckets {
-	return { main: { ...session.main }, subagents: { ...session.subagents } };
+/** The session totals `buckets` with `note` added, as a new value. */
+export function counted(buckets: Buckets, note: Note): Buckets {
+	const next = { main: { ...buckets.main }, subagents: { ...buckets.subagents } };
+	add(note.isMain ? next.main : next.subagents, note.counts);
+	return next;
 }
 
 /** The main conversation's counts and the subagents' together. */
@@ -115,14 +111,9 @@ export function ratio(counts: Counts): number | undefined {
  * and symbol-like text searches, main conversation and subagents together.
  * Empty while both are 0.
  */
-export function suffixText(): string {
-	const { codeIntel, symbol } = total(session);
+export function suffixText(buckets: Buckets): string {
+	const { codeIntel, symbol } = total(buckets);
 	return codeIntel === 0 && symbol === 0 ? '' : ` · ${MARK} ${codeIntel} code_intel / ${symbol} grep`;
-}
-
-/** True when the spinner shows the counts, so a new count asks for a redraw. */
-export function showsAdoption(): boolean {
-	return shown;
 }
 
 /** Thousands separators for a count, as `3,079`. */
@@ -374,11 +365,6 @@ export async function loadStats(
 	return stats;
 }
 
-/** Starts the session totals over, for a new conversation (`/clear`, `/resume`, `/branch`). The stored day totals stay. */
-export function resetAdoption(): void {
-	session = empty();
-}
-
 /**
  * Drops the day entries held in memory and the saves still queued, as a reload
  * of the hooks module does; the next count reads the store again and prunes it.
@@ -391,18 +377,17 @@ export function forgetDays(): void {
 }
 
 /**
- * Starts the counts over for this load and, with `showAdoption` on, puts the
- * session's counts on the spinner, before the engine's own suffix. Unset reads
- * as off. Counting never depends on the option.
+ * With `showAdoption` on, puts the session's counts on the spinner, before the
+ * engine's own suffix. Unset reads as off. Counting never depends on the
+ * option, and the counts outlast a reload: they live in `$.state`, and the
+ * `session.end` hook in `session.ts` starts them over for a new conversation.
  */
 export function registerAdoption(on: On, options: PluginOptions): void {
-	resetAdoption();
 	forgetDays();
-	shown = options.showAdoption === true;
-	if (!shown) return;
+	if (options.showAdoption !== true) return;
 
-	on('ui.render', { component: 'Spinner' }, async (_$, e, next) => {
-		const text = suffixText();
+	on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+		const text = suffixText(await read($, ADOPTION));
 		return text === '' ? next(e) : next({ ...e, props: { ...e.props, suffix: text + e.props.suffix } });
 	});
 }

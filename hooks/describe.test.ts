@@ -135,8 +135,8 @@ describe('the freshness indicator follows the working directory', () => {
 	/**
 	 * Two projects, /repo and /other, on the default API, with HEAD two commits
 	 * past the index: records the pings, the git runs, the describe rebuilds
-	 * and, in `timeline`, the pings and band redraws in the order they
-	 * happened. `at(dir)` starts a main-loop turn with the working directory at
+	 * and, in `timeline`, the pings and the freshness line's writes to `$.state`
+	 * (each one redraws the band) in the order they happened. `at(dir)` starts a main-loop turn with the working directory at
 	 * `dir`; `subagentAt(dir)` starts a subagent's.
 	 */
 	function projects($: Engine, on: On, signedIn = true) {
@@ -166,9 +166,12 @@ describe('the freshness indicator follows the working directory', () => {
 		on('turn.start', (_, e) => ({ turnId: e.turnId }));
 		on('tool.describe', (_, e) => ({ description: e.description }));
 		on('ui.invalidate', (_, e) => {
-			if (e.event === 'ui.render') timeline.push('redraw');
 			if (e.event === 'tool.describe') described.push(cwd);
 			return { value: undefined };
+		});
+		on('state.set', (_, e, next) => {
+			if (e.plugin === 'constellation' && e.key === 'freshness') timeline.push('redraw');
+			return next(e);
 		});
 		const at = async (dir: string, agentId?: string) => {
 			cwd = dir;

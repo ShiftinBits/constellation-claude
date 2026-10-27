@@ -31,6 +31,7 @@ Validate on the plugin manifest prints every event the module hooks and every `$
 | `hooks/hooks.json` | Empty `"hooks"` block beside `"modules": ["./register.ts"]` |
 | `hooks/register.ts` | Module entry: one `registerX(on[, options])` call per handler file |
 | `hooks/*.ts` / `*.test.ts` | In-process hooks module and co-located tests (`claude-code/testing`) |
+| `types/index.d.ts` | The plugin's contract (`"types"` in `plugin.json`): the `$.state` keys its drawings read (`PluginState`) |
 
 Loading the plugin writes git-ignored `.claude-plugin/types/` (engine `.d.ts`) and a root `tsconfig.json` extending it.
 

@@ -8,6 +8,7 @@
 		"email": "hello@shiftinbits.com",
 		"url": "https://shiftinbits.com"
 	},
+	"types": "./types/index.d.ts",
 	"homepage": "https://constellationdev.io",
 	"repository": "https://github.com/ShiftinBits/constellation-claude",
 	"license": "AGPL-3.0",

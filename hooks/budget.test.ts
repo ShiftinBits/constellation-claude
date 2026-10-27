@@ -1,9 +1,10 @@
-import type { On, PluginOptions } from 'claude-code';
+import { atom, read } from 'claude-code';
+import type { On, PluginOptions, StateDollar } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { registerAdoption, sessionCounts, settled, total } from './adoption';
+import { ADOPTION_SHAPE, NO_COUNTS, registerAdoption, settled, total } from './adoption';
 import { registerBudget } from './budget';
 import { registerDescribe } from './describe';
-import { freshnessLine, registerFreshness, track } from './freshness';
+import { FRESHNESS_SHAPE, freshnessText, registerFreshness, track } from './freshness';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
 import { REMINDER_TEXT, registerNudges } from './nudge';
 import { registerOnboarding } from './onboarding';
@@ -57,8 +58,35 @@ function shown(tree: unknown): string {
 	return shown(Reflect.get(Reflect.get(tree, 'props') ?? {}, 'children'));
 }
 
-/** How many times a handler asked for a redraw. */
-let invalidations = 0;
+/** `$.state` over a `Map`, as the host keeps it: each value with a version, a write that misses on a stale `ifVersion`, and the keys written. */
+function fakeState() {
+	const values = new Map<string, { value: unknown; version: number }>();
+	const written: string[] = [];
+	const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
+	return {
+		written,
+		clear: () => {
+			values.clear();
+			written.length = 0;
+		},
+		get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
+		set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+			const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
+			if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
+			values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
+			written.push(ref.key);
+			return { isSet: true, version: held.version + 1 };
+		},
+	};
+}
+
+/** The values the handlers keep in `$.state`; each write redraws what reads it. */
+const state = fakeState();
+/** How many times the handlers wrote the state key `key`, each a redraw of what draws it. */
+const writes = (key: string): number => state.written.filter((k) => k === key).length;
+
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /** The session's access key as `$.env.get` answers it. */
 let sessionKey: string | undefined = KEY;
@@ -74,10 +102,8 @@ const HEAD = '0123456789abcdef0123456789abcdef01234567';
 const $ = {
 	env: { get: async () => sessionKey },
 	session: { cwd: async () => PROJECT, surfaces: async () => surfaces, id: async () => 'session-1' },
+	state,
 	ui: {
-		invalidate: () => {
-			invalidations += 1;
-		},
 		resolve: () => EL,
 		log: (text: string) => void logLines.push(text),
 	},
@@ -124,7 +150,7 @@ function load(options: PluginOptions) {
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On);
 	registerFreshness(capture as unknown as On, options);
-	invalidations = 0;
+	state.clear();
 	gitRuns.length = 0;
 	configReads = 0;
 	surfaces = ['terminal'];
@@ -380,7 +406,7 @@ describe('nudge budget', () => {
 	test('an AUTH_ERROR from the agent\'s code_intel call reaches the onboarding band', async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
-		expect(invalidations).toBe(1);
+		expect(writes('band')).toBe(1);
 		expect(await m.band()).toContain('Sign-in failed');
 	});
 
@@ -405,7 +431,7 @@ describe('nudge budget', () => {
 	test("a plugin's own code_intel error leaves the onboarding band alone", async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
-		expect(invalidations).toBe(0);
+		expect(writes('band')).toBe(0);
 		expect(await m.band()).toBe('');
 	});
 
@@ -414,9 +440,9 @@ describe('nudge budget', () => {
 		await m.search();
 		await m.search('agent-1');
 		await settled();
-		expect(total(sessionCounts()).symbol).toBe(2);
+		expect(total(await sessionCounts()).symbol).toBe(2);
 		await m.sessionEnd('clear');
-		expect(total(sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
+		expect(total(await sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
 	});
 
 	test('a subagent run ending keeps its adoption counts', async () => {
@@ -424,7 +450,7 @@ describe('nudge budget', () => {
 		await m.search('agent-1');
 		await m.runEnds('agent-1');
 		await settled();
-		expect(sessionCounts().subagents.symbol).toBe(1);
+		expect((await sessionCounts()).subagents.symbol).toBe(1);
 	});
 
 	test("an agent's code_intel answer with a newer index commit updates the freshness indicator", async () => {
@@ -434,8 +460,8 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', { text: JSON.stringify({ success: true, result: {}, asOfCommit: old }) });
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(0)?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind');
-		expect(invalidations).toBe(1);
+		expect(await freshnessLine(0)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind');
+		expect(writes('freshness')).toBe(1);
 	});
 
 	test("a plugin's own code_intel answer and a denied call leave the freshness indicator alone", async () => {
@@ -446,8 +472,8 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', { deny: 'no', text });
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 		expect(gitRuns).toEqual([]);
-		expect(freshnessLine(0)).toBeUndefined();
-		expect(invalidations).toBe(0);
+		expect(await freshnessLine(0)).toBeUndefined();
+		expect(writes('freshness')).toBe(0);
 	});
 
 	test('a /clear resets subagent budgets too', async () => {
@@ -531,12 +557,12 @@ describe('freshness band above the prompt', () => {
 
 	test("an agent's call in another project runs no git and leaves the indicator alone", async () => {
 		const m = await behind();
-		const before = { runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations };
+		const before = { runs: gitRuns.length, line: await freshnessLine(Date.now()), writes: writes('freshness') };
 		projectFiles.push(`${OTHER}/constellation.json`);
 		const newer = { text: JSON.stringify({ success: true, result: {}, asOfCommit: 'ab' + OLD.slice(2), lastIndexedAt: new Date().toISOString() }) };
 		await m.program('main', 'return await api.ping()', newer, ENGINE, OTHER);
 		await settle();
-		expect({ runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations }).toEqual(before);
+		expect({ runs: gitRuns.length, line: await freshnessLine(Date.now()), writes: writes('freshness') }).toEqual(before);
 	});
 
 	test("an agent's call with a relative cwd resolves under the session's and updates the indicator", async () => {
@@ -545,7 +571,7 @@ describe('freshness band above the prompt', () => {
 		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, 'src/lib');
 		await settle();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(Date.now())?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
+		expect(await freshnessLine(Date.now())).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
 	});
 
 	test("an agent's call outside any project runs no git", async () => {
@@ -554,8 +580,8 @@ describe('freshness band above the prompt', () => {
 		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, '/elsewhere/app');
 		await settle();
 		expect(gitRuns).toEqual([]);
-		expect(freshnessLine(0)).toBeUndefined();
-		expect(invalidations).toBe(0);
+		expect(await freshnessLine(0)).toBeUndefined();
+		expect(writes('freshness')).toBe(0);
 	});
 
 	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
@@ -581,3 +607,14 @@ describe('budget hooks as a loaded plugin', () => {
 		expect(await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })).toEqual({ sessionId: 's1' });
 	});
 });
+
+/** The session's adoption counts, as the handlers keep them in `$.state`. */
+function sessionCounts() {
+	return read($ as unknown as StateDollar, ADOPTION);
+}
+
+/** The freshness line as the band shows it at `now`, from `$.state`; undefined when there is none. */
+async function freshnessLine(now: number): Promise<string | undefined> {
+	const view = await read($ as unknown as StateDollar, FRESHNESS);
+	return view === null ? undefined : freshnessText(view, now);
+}

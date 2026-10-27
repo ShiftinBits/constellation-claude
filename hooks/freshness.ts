@@ -1,4 +1,6 @@
+import { atom, update } from 'claude-code';
 import type { ElementTable, On, PluginOptions, ProcessRunInit, ProcessRunResult, RenderElement, Timer } from 'claude-code';
+import type { ConstellationFreshnessView } from '../types';
 import { explain } from './explain';
 import { canDraw, type CodeIntelEnvelope, type CodeIntelError, GIT, GIT_ENV, GIT_TIMEOUT_MS, isConfigured, plural, stringArg } from './lib';
 import { badge, brandMark, branded, forTheme, status } from './theme';
@@ -10,6 +12,12 @@ export type Run = (argv: readonly string[], init: ProcessRunInit) => Promise<Pic
 /** Writes the line where nothing draws it. A promise it returns may reject; that is ignored. */
 export type Log = (text: string) => Promise<void> | void;
 
+/**
+ * Writes what the line shows into `$.state`, where the band reads it, which
+ * draws it again: `(view) => update($, FRESHNESS, () => view)`.
+ */
+export type Publish = (view: FreshnessView | null) => Promise<unknown>;
+
 /** What the graph was indexed at, from a code_intel envelope. */
 type Index = { asOfCommit: string; lastIndexedAt?: string; branch?: string };
 
@@ -17,10 +25,13 @@ type Index = { asOfCommit: string; lastIndexedAt?: string; branch?: string };
 type Local = { head: string; branch: string; behind: number | undefined };
 
 /** What the indicator shows, or nothing when the graph matches the checkout. */
-export type FreshnessView =
-	| { kind: 'behind'; behind: number; lastIndexedAt?: string }
-	| { kind: 'mismatch'; asOfCommit: string; lastIndexedAt?: string }
-	| { kind: 'error'; failure: CodeIntelError; lastIndexedAt?: string };
+export type FreshnessView = ConstellationFreshnessView;
+
+/** The shape tag of the `freshness` state key; each file that reads or writes it builds its atom with it. */
+export const FRESHNESS_SHAPE = 'freshness-1';
+
+/** What the line shows, kept in `$.state`: null while there is nothing to show. */
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /** Error codes the onboarding band already shows, so the indicator stays quiet. */
 const ONBOARDING_CODES: ReadonlySet<string> = new Set(['AUTH_ERROR', 'PROJECT_NOT_INDEXED', 'NOT_CONFIGURED', 'MCP_UNAVAILABLE']);
@@ -39,7 +50,8 @@ const GIT_MOVES = /\bgit\s[^;&|\n]*\b(?:commit|pull|checkout|merge|rebase)\b/;
 
 /**
  * Module state, cleared by `registerFreshness`. The index, the local checkout
- * and the root describe the repository, so `resetFreshness` keeps them.
+ * and the root describe the repository, so `resetFreshness` keeps them. What
+ * they show lives in `$.state` (the `freshness` key), so a reload keeps the line.
  */
 let index: Index | undefined;
 let local: Local | undefined;
@@ -164,38 +176,39 @@ function lineNow(): string | undefined {
 	return view === undefined ? undefined : freshnessText(view, Date.now());
 }
 
-/** Draws again and logs once when the line changed from `before`. */
-function changed(before: string | undefined, invalidate: () => void, log?: Log): void {
+/** Publishes the view and logs once when the line changed from `before`. A publish that fails leaves the line as it was. */
+async function changed(before: string | undefined, publish: Publish, log?: Log): Promise<void> {
 	const after = lineNow();
 	if (after === before) return;
-	invalidate();
+	const view = freshnessView(index, local, failure);
 	// Only a stale index is worth a line where nothing draws the indicator.
-	if (after !== undefined && log !== undefined && !logged && freshnessView(index, local, failure)?.kind === 'behind') {
+	if (after !== undefined && log !== undefined && !logged && view?.kind === 'behind') {
 		logged = true;
 		void Promise.resolve(log(after)).catch(() => undefined);
 	}
+	await publish(view ?? null).catch(() => undefined);
 }
 
-/** Compares the checkout with the index, then draws again when the line changed from `before`. Never rejects. */
-async function compare(before: string | undefined, run: Run, invalidate: () => void, log?: Log): Promise<void> {
-	if (root === undefined || index === undefined) return changed(before, invalidate, log);
+/** Compares the checkout with the index, then publishes when the line changed from `before`. Never rejects. */
+async function compare(before: string | undefined, run: Run, publish: Publish, log?: Log): Promise<void> {
+	if (root === undefined || index === undefined) return changed(before, publish, log);
 	const mine = ++seq;
 	const next = await compareLocal(run, root, index.asOfCommit);
 	if (mine !== seq) return;
-	if (next === undefined) return changed(before, invalidate, log);
+	if (next === undefined) return changed(before, publish, log);
 	// The snapshot is per branch: one taken on another branch says nothing here.
 	if (index.branch === undefined) index = { ...index, branch: next.branch };
 	else if (index.branch !== next.branch) index = undefined;
 	local = next;
-	changed(before, invalidate, log);
+	return changed(before, publish, log);
 }
 
 /**
- * Compares the checkout with the index and draws again when the line changed.
+ * Compares the checkout with the index and publishes when the line changed.
  * A no-op without a tracked root and an index. Never rejects.
  */
-export function recheck(run: Run, invalidate: () => void, log?: Log): Promise<void> {
-	return compare(lineNow(), run, invalidate, log);
+export function recheck(run: Run, publish: Publish, log?: Log): Promise<void> {
+	return compare(lineNow(), run, publish, log);
 }
 
 /**
@@ -208,7 +221,7 @@ export async function observeEnvelope(
 	envelope: CodeIntelEnvelope,
 	at: string,
 	run: Run,
-	invalidate: () => void,
+	publish: Publish,
 	log?: Log,
 ): Promise<void> {
 	if (at !== root) return;
@@ -216,14 +229,14 @@ export async function observeEnvelope(
 	if (!envelope.success) {
 		const error = envelope.error;
 		if (index === undefined && error !== undefined && !ONBOARDING_CODES.has(error.code)) failure = error;
-		return changed(before, invalidate, log);
+		return changed(before, publish, log);
 	}
 	failure = undefined;
 	const commit = envelope.asOfCommit;
-	if (commit === undefined || !COMMIT.test(commit)) return changed(before, invalidate, log);
-	if (index?.asOfCommit === commit && index.lastIndexedAt === envelope.lastIndexedAt) return changed(before, invalidate, log);
+	if (commit === undefined || !COMMIT.test(commit)) return changed(before, publish, log);
+	if (index?.asOfCommit === commit && index.lastIndexedAt === envelope.lastIndexedAt) return changed(before, publish, log);
 	index = { asOfCommit: commit, ...(envelope.lastIndexedAt === undefined ? {} : { lastIndexedAt: envelope.lastIndexedAt }) };
-	await compare(before, run, invalidate, log);
+	await compare(before, run, publish, log);
 }
 
 /** Whether the `showFreshness` option is on. */
@@ -233,7 +246,8 @@ export function showsFreshness(): boolean {
 
 /**
  * Tracks the project at `at`. A different root drops what was known about the
- * last one; true when it changed. With `showFreshness` off nothing is tracked.
+ * last one; true when it changed, and the caller then takes the last project's
+ * line down. With `showFreshness` off nothing is tracked.
  */
 export function track(at: string): boolean {
 	if (!enabled || at === root) return false;
@@ -248,12 +262,6 @@ export function track(at: string): boolean {
 export function startTicks(every: () => Timer): void {
 	timer?.cancel();
 	timer = every();
-}
-
-/** The indicator now: what to draw and its line, or undefined for nothing. */
-export function freshnessLine(now: number): { view: FreshnessView; text: string } | undefined {
-	const view = freshnessView(index, local, failure);
-	return view === undefined ? undefined : { view, text: freshnessText(view, now) };
 }
 
 /**
@@ -282,7 +290,7 @@ export function registerFreshness(on: On, options: PluginOptions): void {
 			if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
 			void recheck(
 				(argv, init) => $.process.run(argv, init),
-				() => $.ui.invalidate('ui.render'),
+				(view) => update($, FRESHNESS, () => view),
 				async (text) => {
 					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 				},

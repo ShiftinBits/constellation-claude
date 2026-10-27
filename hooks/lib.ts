@@ -1,4 +1,5 @@
 import type { EngineInterface, RenderSurface } from 'claude-code';
+import type { ConstellationCodeIntelEnvelope, ConstellationCodeIntelError } from '../types';
 
 /**
  * The MCP calls `codeIntel` makes. `claude plugin validate` follows `$` only
@@ -8,26 +9,11 @@ import type { EngineInterface, RenderSurface } from 'claude-code';
  */
 export type McpPort = Pick<EngineInterface['mcp'], 'connect' | 'call'>;
 
-export type CodeIntelError = {
-	code: string;
-	message?: string;
-	guidance?: readonly string[];
-	/** Project roots code_intel found under the git root, sent with `CWD_NOT_INDEXED`. */
-	candidates?: readonly string[];
-	/** A documentation link the server sends with the error. */
-	docs?: string;
-};
+/** A code_intel error: its code, message, guidance, and for `CWD_NOT_INDEXED` the project roots found. */
+export type CodeIntelError = ConstellationCodeIntelError;
 
-export type CodeIntelEnvelope = {
-	success: boolean;
-	result?: unknown;
-	error?: CodeIntelError;
-	asOfCommit?: string;
-	lastIndexedAt?: string;
-	time?: number;
-	/** Why a result came back empty (`resultContext.reason`), such as `branch_not_indexed`. */
-	reason?: string;
-};
+/** A code_intel answer as parsed from the tool's text. Declared in the state contract, since the pane keeps answers in `$.state`. */
+export type CodeIntelEnvelope = ConstellationCodeIntelEnvelope;
 
 /** How long each git command may run. */
 export const GIT_TIMEOUT_MS = 5000;

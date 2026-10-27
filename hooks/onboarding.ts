@@ -1,3 +1,4 @@
+import { atom, read, update } from 'claude-code';
 import type {
 	ElementTable,
 	EngineInterface,
@@ -8,7 +9,8 @@ import type {
 	ProcessSpawnRequest,
 	RenderElement,
 } from 'claude-code';
-import { freshnessBand, freshnessLine } from './freshness';
+import type { ConstellationBand, ConstellationOnboardingState, ConstellationTask } from '../types';
+import { FRESHNESS_SHAPE, freshnessBand } from './freshness';
 import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
 import { badge, brandMark, branded, buttonRow, forTheme, onboarding, scheme } from './theme';
@@ -50,10 +52,22 @@ const AUTH_IN_TERMINAL = 'Run const auth in a terminal';
 const INDEX_IN_PROJECT = 'Run const index in a terminal, in the project directory';
 
 /** The band's states. The first that holds wins, in this order. */
-export type OnboardingState = 'not-set-up' | 'sign-in-again' | 'no-project' | 'not-registered' | 'not-indexed' | 'working';
+export type OnboardingState = ConstellationOnboardingState;
 
 /** The CLI run in progress. */
-export type Task = 'auth' | 'index';
+export type Task = ConstellationTask;
+
+/** What the band draws, kept in `$.state` (the `band` key) so a reload keeps it. */
+export type Band = ConstellationBand;
+
+/** The shape tag of the `band` state key; each file that reads or writes it builds its atom with it. */
+export const BAND_SHAPE = 'band-1';
+
+/** The band that shows nothing. */
+export const NO_BAND: Band = {};
+
+const BAND = atom({ plugin: 'constellation', key: 'band' } as const, NO_BAND, { shape: BAND_SHAPE });
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /** What the band's state is decided from. */
 export type OnboardingFacts = {
@@ -152,14 +166,19 @@ export type OnboardingPorts = {
 	/** Runs `/reload-plugins`, which restarts the MCP server with the session's environment. */
 	reload: () => Promise<unknown>;
 	toast: (text: string) => void;
-	/** Draws the band again. */
-	invalidate: () => void;
+	/** Reads the band from `$.state`: `() => read($, BAND)`. */
+	band: () => Promise<Band>;
+	/**
+	 * Changes the band in `$.state`, which draws it again: `(change) => update($, BAND, change)`.
+	 * `change` runs again when another write landed first, so it only computes.
+	 */
+	setBand: (change: (band: Band) => Band) => Promise<Band>;
 	/** Writes `text` as a transcript line when no surface of the session draws the band. */
 	log: (text: string) => Promise<void>;
 };
 
-/** How a state change is told: a redraw, and a line where nothing draws. */
-type Notify = Pick<OnboardingPorts, 'invalidate'> & Partial<Pick<OnboardingPorts, 'log'>>;
+/** How a state change is told: the band in `$.state`, and a line where nothing draws. */
+type Notify = Pick<OnboardingPorts, 'band' | 'setBand'> & Partial<Pick<OnboardingPorts, 'log'>>;
 
 /** The one line a session that cannot draw the band gets, with the command to run. */
 const LOG_STEP: Readonly<Record<Exclude<OnboardingState, 'working'>, string>> = {
@@ -176,17 +195,13 @@ const ERROR_STATES: ReadonlySet<OnboardingState> = new Set(['sign-in-again', 'no
 /**
  * Module state, cleared by `registerOnboarding` and `resetOnboarding`.
  * `generation` changes with each, so work started before a reset can tell.
+ * What the band shows is not here but in `$.state` (`Band`).
  */
 let generation = 0;
-let state: OnboardingState | undefined;
 /** The CLI run in progress; it ends with its child, whatever resets meanwhile. */
 let running: Task | undefined;
 /** What the running or last CLI run printed. */
 let buffer = '';
-/** The line under the state's headline once a CLI run has ended, such as its last output line. */
-let detail: string | undefined;
-/** The last button press found no CLI: the band says how to install it. */
-let cliMissing = false;
 /** A session that cannot draw gets one line. */
 let logged = false;
 /** Whether a POSIX `/bin/sh` is present, once asked: Windows has none, and the band starts no CLI there. */
@@ -198,36 +213,46 @@ let theme: { value: unknown; readAt: number } | undefined;
 /** The git root (else the working directory) the session started in: dismissals are kept per repository. */
 let repoRoot: string | undefined;
 
-/** Draws the band again. */
-function redraw(notify: Pick<OnboardingPorts, 'invalidate'>): void {
-	try {
-		notify.invalidate();
-	} catch {
-		// Refused while a band draws: the next draw reads the new state.
-	}
-}
-
-/** Puts up `next`, with `line` under its headline, and tells the band, unless a CLI run holds the band. */
-function apply(next: OnboardingState | undefined, notify: Notify, line?: string): void {
-	if (running !== undefined || next === state) return;
-	state = next;
-	detail = line;
-	redraw(notify);
-	if (next === undefined || next === 'working' || logged || notify.log === undefined) return;
-	logged = true;
-	notify.log(branded(`${HEADLINE[next]} · ${LOG_STEP[next]}`)).catch(() => undefined);
+/** A band showing `state`, with `detail` under its headline, and the install hint when `cliMissing`. */
+function bandOf(state: OnboardingState | undefined, detail?: string, cliMissing?: boolean): Band {
+	return {
+		...(state === undefined ? {} : { state }),
+		...(detail === undefined ? {} : { detail }),
+		...(cliMissing === true ? { cliMissing } : {}),
+	};
 }
 
 /**
- * Starts a CLI run: the band shows it as working, and nothing else writes the
- * band until `endTask`. Returns the generation, which a run compares once its
- * child exits to tell whether a reset came meanwhile, or undefined (refused)
- * while another run is live, so sign-in and indexing never overlap.
+ * Puts up `next`, with `line` under its headline, unless a CLI run holds the
+ * band or it already shows `next`. The install hint stays. A failing write
+ * leaves the band as it was.
  */
-export function startTask(task: Task, notify: Pick<OnboardingPorts, 'invalidate'>): number | undefined {
+async function apply(next: OnboardingState | undefined, notify: Notify, line?: string): Promise<void> {
+	if (running !== undefined) return;
+	try {
+		if ((await notify.band()).state === next) return;
+		let isChanged = false;
+		await notify.setBand((b) => {
+			isChanged = running === undefined && b.state !== next;
+			return isChanged ? bandOf(next, line, b.cliMissing) : b;
+		});
+		if (!isChanged || next === undefined || next === 'working' || logged || notify.log === undefined) return;
+		logged = true;
+		notify.log(branded(`${HEADLINE[next]} · ${LOG_STEP[next]}`)).catch(() => undefined);
+	} catch {
+		// The band stays as it was.
+	}
+}
+
+/**
+ * Claims the CLI run for `task`: nothing else writes the band until `endTask`.
+ * Returns the generation, which a run compares once its child exits to tell
+ * whether a reset came meanwhile, or undefined (refused) while another run is
+ * live, so sign-in and indexing never overlap. The caller puts up `working`.
+ */
+export function startTask(task: Task): number | undefined {
 	if (running !== undefined) return undefined;
 	buffer = '';
-	apply(onboardingState({ configured: true, running: true }), notify);
 	running = task;
 	return generation;
 }
@@ -328,7 +353,7 @@ export async function readStoredKeyAtStart(
 	if ((await rememberRepo(cwd, ports.exists)) === null) return undefined;
 	const key = await storedKey(ports);
 	if (key === undefined) {
-		apply(onboardingState({ configured: false, stored: false }), ports);
+		await apply(onboardingState({ configured: false, stored: false }), ports);
 		return undefined;
 	}
 	return { key, projectRoot: await projectRoot(cwd, ports.exists) };
@@ -338,11 +363,9 @@ export async function readStoredKeyAtStart(
  * Takes the band down, shows `toast` when given, and reloads the plugins on a
  * timer. The reload unloads this module, so nothing is chained after it.
  */
-function reloadPlugins(ports: OnboardingPorts, toast?: string): void {
-	state = undefined;
-	detail = undefined;
+async function reloadPlugins(ports: OnboardingPorts, toast?: string): Promise<void> {
 	buffer = '';
-	ports.invalidate();
+	await ports.setBand(() => NO_BAND).catch(() => undefined);
 	if (toast !== undefined) ports.toast(toast);
 	// `$.command.run` is refused inside a hook the turn waits on, so it always goes through the timer.
 	ports.after(0, () => {
@@ -357,7 +380,7 @@ function reloadPlugins(ports: OnboardingPorts, toast?: string): void {
  */
 export async function connect(key: string, ports: OnboardingPorts, toast: string): Promise<void> {
 	await ports.envSet(key);
-	reloadPlugins(ports, toast);
+	await reloadPlugins(ports, toast);
 }
 
 /** The API a `constellation.json` with no `apiUrl` reaches. */
@@ -413,11 +436,11 @@ export async function checkConnection(root: string, ports: OnboardingPorts, obse
 		if (code === 'AUTH_ERROR') {
 			// No toast: nothing is known to work. The agent's next AUTH_ERROR says sign in again.
 			// A sign-in already running connects when it ends; a reload now would kill its child.
-			if (running === undefined) reloadPlugins(ports);
+			if (running === undefined) await reloadPlugins(ports);
 			return;
 		}
 		const next = onboardingState({ configured: true, code });
-		if (next !== undefined) apply(next, ports);
+		if (next !== undefined) await apply(next, ports);
 	} catch {
 		// The band stays as it was.
 	}
@@ -431,23 +454,18 @@ export async function checkConnection(root: string, ports: OnboardingPorts, obse
  * `configured` is whether the session's key starts with `ak:`; with none,
  * `AUTH_ERROR` says "not signed in": the server then got no key.
  */
-export function observeCodeIntel(
-	r: { deny?: string; text?: string; isError?: boolean },
-	configured: boolean,
-	invalidate: () => void,
-	log?: (text: string) => Promise<void>,
-): void {
+export async function observeCodeIntel(r: { deny?: string; text?: string; isError?: boolean }, configured: boolean, notify: Notify): Promise<void> {
 	if (r.deny !== undefined || running !== undefined) return;
-	const notify: Notify = log === undefined ? { invalidate } : { invalidate, log };
 	const envelope = parseToolText(r.text, r.isError === true);
 	if (envelope.success) {
-		if (state !== undefined && ERROR_STATES.has(state)) apply(undefined, notify);
+		const { state } = await notify.band();
+		if (state !== undefined && ERROR_STATES.has(state)) await apply(undefined, notify);
 		return;
 	}
 	const error = envelope.error;
 	if (error === undefined || error.code === 'MCP_UNAVAILABLE') return;
 	const next = onboardingState({ configured, code: error.code, candidates: error.candidates });
-	if (next !== undefined) apply(next, notify);
+	if (next !== undefined) await apply(next, notify);
 }
 
 /** What the band's buttons call beyond the session start's ports. */
@@ -458,48 +476,55 @@ export type ButtonPorts = OnboardingPorts & {
 	cwd: () => Promise<string>;
 };
 
-/** A claimed CLI run: the generation it started in, the CLI it runs and what its environment sets. */
-type Claim = { gen: number; cli: string; env: Record<string, string> };
+/** A claimed CLI run: the generation it started in, the CLI it runs, what its environment sets and the state the band showed before. */
+type Claim = { gen: number; cli: string; env: Record<string, string>; prior: OnboardingState | undefined };
 
 /**
  * Claims the band for `task` before anything is awaited, so a second press
- * is refused at once, then finds the CLI. Undefined when a run is live, when
- * a reset came during the lookup (the claim is released), or when no CLI is
- * found: the band then goes back to what it showed and says how to install
- * it, and nothing is spawned.
+ * is refused at once, puts up `working`, then finds the CLI. Undefined when a
+ * run is live, when a reset came during the lookup (the claim is released), or
+ * when no CLI is found: the band then goes back to what it showed and says how
+ * to install it, and nothing is spawned.
  */
 async function claim(task: Task, ports: ButtonPorts): Promise<Claim | undefined> {
-	const prior = state;
-	const gen = startTask(task, ports);
+	const gen = startTask(task);
 	if (gen === undefined) return undefined;
+	let prior: OnboardingState | undefined;
+	await ports
+		.setBand((b) => {
+			prior = b.state;
+			return { state: 'working', task };
+		})
+		.catch(() => undefined);
 	const { path, env } = await ports
 		.cwd()
 		.then(async (cwd) => cliPath(ports.run, [cwd, (await gitRoot(cwd, ports.exists)) ?? cwd]))
 		.catch((): CliLookup => ({ path: undefined, env: {} }));
-	if (path !== undefined && generation === gen) {
-		cliMissing = false;
-		return { gen, cli: path, env };
-	}
+	if (path !== undefined && generation === gen) return { gen, cli: path, env, prior };
 	endTask();
-	if (generation === gen) {
-		cliMissing = true;
-		apply(prior, ports);
-	}
+	if (generation === gen) await ports.setBand(() => bandOf(prior, undefined, true)).catch(() => undefined);
 	return undefined;
 }
 
 /**
- * Reads a CLI run's child to its end, both streams into `buffer`, and draws
- * the band again when its latest line changes. False when the child could not
- * start. What it prints after a reset is not kept: the band it was for is gone.
+ * Reads a CLI run's child to its end, both streams into `buffer`, and writes
+ * the band when its latest line changes: that line and, for a sign-in, the
+ * address it asks to be opened, from complete lines only. False when the child
+ * could not start. What it prints after a reset is not kept: the band it was
+ * for is gone.
  */
-async function follow(start: () => AsyncIterable<ProcessSpawnChunk>, gen: number, notify: Pick<OnboardingPorts, 'invalidate'>): Promise<boolean> {
+async function follow(start: () => AsyncIterable<ProcessSpawnChunk>, gen: number, task: Task, notify: Pick<OnboardingPorts, 'setBand'>): Promise<boolean> {
 	try {
 		for await (const { text } of start()) {
 			if (generation !== gen) continue;
 			const was = lastLine(buffer);
 			buffer += text;
-			if (lastLine(buffer) !== was) redraw(notify);
+			const line = lastLine(buffer);
+			if (line === was) continue;
+			const url = task === 'auth' ? manualUrl(buffer.slice(0, buffer.lastIndexOf('\n') + 1)) : undefined;
+			await notify
+				.setBand(() => ({ state: 'working', task, ...(line === undefined ? {} : { detail: line }), ...(url === undefined ? {} : { url }) }))
+				.catch(() => undefined);
 		}
 		return true;
 	} catch {
@@ -532,6 +557,7 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 				// Never through a login shell: its profile would export the stored key again over the empty one.
 				() => ports.spawn({ argv: [cli, 'auth'], env: { ...env, CONSTELLATION_ACCESS_KEY: '', NO_COLOR: '1' } }),
 				gen,
+				'auth',
 				ports,
 			);
 			if (started && generation === gen) after = await storedKey(ports);
@@ -553,7 +579,7 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
 				// The key could not be set: the sign-in failed.
 			}
 		}
-		apply('sign-in-again', ports, lastLine(buffer) ?? AUTH_IN_TERMINAL);
+		await apply('sign-in-again', ports, lastLine(buffer) ?? AUTH_IN_TERMINAL);
 	})();
 }
 
@@ -566,23 +592,22 @@ export async function startSignIn(ports: ButtonPorts): Promise<void> {
  * answers. A run that outlives a reset acts on nothing.
  */
 export async function startIndex(ports: ButtonPorts): Promise<void> {
-	const prior = state;
 	const claimed = await claim('index', ports);
 	if (claimed === undefined) return;
-	const { gen, cli, env } = claimed;
+	const { gen, cli, env, prior } = claimed;
 	const root = await ports
 		.cwd()
 		.then((cwd) => projectRoot(cwd, ports.exists))
 		.catch(() => null);
 	if (root === null || generation !== gen) {
 		endTask();
-		if (generation === gen) apply(prior, ports, INDEX_IN_PROJECT);
+		if (generation === gen) await apply(prior, ports, INDEX_IN_PROJECT);
 		return;
 	}
 	void (async () => {
 		let ping: CodeIntelEnvelope | undefined;
 		try {
-			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { ...env, NO_COLOR: '1' } }), gen, ports);
+			await follow(() => ports.spawn({ argv: [cli, 'index', '--wait'], cwd: root, env: { ...env, NO_COLOR: '1' } }), gen, 'index', ports);
 			if (generation === gen) ping = await codeIntel(ports.mcp, 'return await api.ping()', { cwd: root });
 		} finally {
 			endTask();
@@ -590,12 +615,12 @@ export async function startIndex(ports: ButtonPorts): Promise<void> {
 		if (generation !== gen) return;
 		if (ping?.success === true) {
 			buffer = '';
-			apply(undefined, ports);
+			await apply(undefined, ports);
 			ports.toast('Indexed this project');
 			return;
 		}
 		const code = ping?.error?.code;
-		apply(onboardingState({ configured: true, code, notRegistered: NOT_REGISTERED_OUTPUT.test(buffer) }) ?? 'not-indexed', ports, lastLine(buffer));
+		await apply(onboardingState({ configured: true, code, notRegistered: NOT_REGISTERED_OUTPUT.test(buffer) }) ?? 'not-indexed', ports, lastLine(buffer));
 	})();
 }
 
@@ -614,7 +639,8 @@ function portsOf($: EngineInterface): ButtonPorts {
 		mcp: { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 		reload: () => $.command.run({ command: 'reload-plugins' }),
 		toast: (text) => $.ui.toast(text),
-		invalidate: () => $.ui.invalidate('ui.render'),
+		band: () => read($, BAND),
+		setBand: (change) => update($, BAND, change),
 		log: async (text) => {
 			if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 		},
@@ -734,18 +760,17 @@ function isEmpty(element: RenderElement): boolean {
 }
 
 /**
- * The onboarding band above the prompt. Draws from module state only; a
- * repository whose stored dismissal equals the current state passes, so a
- * new, different error shows the band again. The dismissal is read once and
- * the theme at most once a second, so a running CLI's redraws read neither.
+ * The onboarding band above the prompt. Draws what `$.state` holds (the
+ * `band` key, else the `freshness` line), so a write redraws it and a reload
+ * keeps it; a repository whose stored dismissal equals the current state
+ * passes, so a new, different error shows the band again. The dismissal is
+ * read once and the theme at most once a second, so a running CLI's redraws
+ * read neither.
  */
 export function registerOnboarding(on: On): void {
 	generation += 1;
-	state = undefined;
 	running = undefined;
 	buffer = '';
-	detail = undefined;
-	cliMissing = false;
 	logged = false;
 	repoRoot = undefined;
 	shell = undefined;
@@ -753,16 +778,18 @@ export function registerOnboarding(on: On): void {
 	theme = undefined;
 
 	on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-		const shown = state;
 		if (e.props.hasSurvey) return next(e);
+		const current = await read($, BAND);
+		// A run this load never started is one a reload ended with its child: its band shows nothing.
+		const shown = current.state === 'working' && running === undefined ? undefined : current.state;
 		if (shown === undefined) {
 			// A fresh index reads nothing; the line draws only while no onboarding state exists.
-			const row = freshnessLine(Date.now());
-			if (row === undefined) return next(e);
+			const view = await read($, FRESHNESS);
+			if (view === null) return next(e);
 			const { now, tint } = await readTint($);
 			const below = await next(e);
 			const el = $.ui.resolve(e);
-			const line = freshnessBand(el, row.view, tint, now);
+			const line = freshnessBand(el, view, tint, now);
 			return isEmpty(below) ? line : el.Box({ flexDirection: 'column', children: [line, below] });
 		}
 		const key = dismissalKey(repoRoot ?? (await $.session.cwd()));
@@ -776,17 +803,14 @@ export function registerOnboarding(on: On): void {
 		if (dismissal?.key === key && dismissal.value === shown) return next(e);
 		const { tint } = await readTint($);
 		const noShell = !(await hasShell((p) => $.fs.exists(p)));
-		// While a run goes, its latest line; then the line it ended on.
-		const line = running === undefined ? detail : lastLine(buffer);
-		// Only complete lines: a URL still being written is not offered.
-		const url = running === 'auth' ? manualUrl(buffer.slice(0, buffer.lastIndexOf('\n') + 1)) : undefined;
+		const { detail, task, url, cliMissing } = current;
 		return band($.ui.resolve(e), {
 			state: shown,
 			tint,
-			...(line === undefined ? {} : { detail: line }),
-			...(running === undefined ? {} : { task: running }),
+			...(detail === undefined ? {} : { detail }),
+			...(task === undefined ? {} : { task }),
 			...(url === undefined ? {} : { url }),
-			...(cliMissing ? { cliMissing } : {}),
+			...(cliMissing === true ? { cliMissing } : {}),
 			...(noShell ? { noShell } : {}),
 			dismiss: async () => {
 				dismissal = { key, value: shown };
@@ -795,7 +819,8 @@ export function registerOnboarding(on: On): void {
 				} catch {
 					// Kept for this session only: the next one shows the band again.
 				}
-				portsOf($).invalidate();
+				// The dismissal is this module's copy of the store, not state: only a redraw shows it.
+				$.ui.invalidate('ui.render');
 			},
 			signIn: () => startSignIn(portsOf($)),
 			index: () => startIndex(portsOf($)),
@@ -804,19 +829,22 @@ export function registerOnboarding(on: On): void {
 }
 
 /**
- * Starts the band over for a new conversation (`/clear`, `/resume`, `/branch`).
- * Not set up and no project stay: they describe the process and the
- * repository, not the conversation. A CLI run still going keeps `running`: its
- * loop clears it when the child exits, so sign-in and indexing never overlap,
- * and the changed generation tells it not to act on what it finds.
+ * Starts the onboarding over for a new conversation (`/clear`, `/resume`,
+ * `/branch`), with `resetBand` for what it shows. A CLI run still going keeps
+ * `running`: its loop clears it when the child exits, so sign-in and indexing
+ * never overlap, and the changed generation tells it not to act on what it finds.
  */
 export function resetOnboarding(): void {
 	generation += 1;
-	if (state !== 'not-set-up' && state !== 'no-project') {
-		state = undefined;
-		detail = undefined;
-	}
 	buffer = '';
-	cliMissing = false;
 	logged = false;
+}
+
+/**
+ * The band a new conversation starts with: not set up and no project stay,
+ * since they describe the process and the repository, not the conversation;
+ * the install hint goes. The `session.end` hook writes it with `update`.
+ */
+export function resetBand(band: Band): Band {
+	return band.state === 'not-set-up' || band.state === 'no-project' ? bandOf(band.state, band.detail) : NO_BAND;
 }
