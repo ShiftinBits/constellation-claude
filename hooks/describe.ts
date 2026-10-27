@@ -26,8 +26,8 @@ let lastGate: boolean | undefined;
 
 /**
  * The working directory the main loop's last turn started in; undefined until
- * the first. A change between two turns (a `cd` included) is noticed here, at
- * the start of the next main-loop turn.
+ * the first. A change between two turns (a `cd` included), or since session
+ * start, is noticed here, at the start of the next main-loop turn.
  */
 let lastCwd: string | undefined;
 
@@ -55,16 +55,9 @@ export function registerDescribe(on: On): void {
 		const before = lastCwd;
 		try {
 			const cwd = await $.session.cwd();
-			if (lastCwd === undefined) {
-				// The session's first turn: the freshness indicator already pinged at session start.
-				lastCwd = cwd;
-				if (lastGate === false && (await gateOpen($, cwd))) {
-					lastGate = true;
-					$.ui.invalidate('tool.describe');
-				}
-				return r;
-			}
-			if (cwd === lastCwd) return r;
+			// The session's first turn checks like a change: the directory may have moved since session start.
+			const first = lastCwd === undefined;
+			if (!first && cwd === lastCwd) return r;
 			lastCwd = cwd;
 			// The freshness indicator follows the project: a new one is pinged for what is indexed, the same one compared again.
 			try {
@@ -83,7 +76,8 @@ export function registerDescribe(on: On): void {
 							.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, publish, log)))
 							.then(() => recheck(run, publish, log))
 							.catch(() => undefined);
-					} else {
+					} else if (!first) {
+						// The same project as before. At the first turn that is the one session start just pinged.
 						void recheck(run, publish, log).catch(() => undefined);
 					}
 				}

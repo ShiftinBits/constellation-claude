@@ -193,6 +193,9 @@ describe('the freshness indicator follows the working directory', () => {
 			return { value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } };
 		});
 		on('turn.start', (_, e) => ({ turnId: e.turnId }));
+		on('session.start', (_, e) => ({ cwd: e.cwd }));
+		on('command.register', (_, e) => ({ value: { command: e.name } }));
+		on('ui.panes', () => ({ value: [] }));
 		on('tool.describe', (_, e) => ({ description: e.description }));
 		on('ui.invalidate', (_, e) => {
 			if (e.event === 'tool.describe') described.push(cwd);
@@ -207,16 +210,32 @@ describe('the freshness indicator follows the working directory', () => {
 			await $.turn.start({ text: '', turnId: `t${(turns += 1)}`, agentId });
 			await clock.settle();
 		};
+		/** The session starting in `dir`, which pings the project it is in. */
+		const start = async (dir: string) => {
+			cwd = dir;
+			await $.session.start({ cwd: dir, surface: 'terminal', isInteractive: false });
+			await clock.settle();
+		};
 		const revParses = () => runs.filter((r) => r.includes('rev-parse')).length;
 		const redraws = () => timeline.filter((t) => t === 'redraw').length;
-		return { at, subagentAt: (dir: string) => at(dir, 'agent-1'), pings, revParses, timeline, redraws, described };
+		return { at, start, subagentAt: (dir: string) => at(dir, 'agent-1'), pings, revParses, timeline, redraws, described };
 	}
 
-	test('the first main-loop turn seeds the working directory without a ping', async ($, on) => {
-		const { at, pings, revParses } = projects($, on);
+	test('the first main-loop turn in the project session start pinged pings and compares nothing more', async ($, on) => {
+		const { at, start, pings, revParses } = projects($, on);
+		await start('/repo/app');
+		expect(pings).toEqual(['/repo']);
+		const compared = revParses();
 		await at('/repo/app');
-		expect(pings).toEqual([]);
-		expect(revParses()).toBe(0);
+		expect(pings).toEqual(['/repo']);
+		expect(revParses()).toBe(compared);
+	});
+
+	test('a cd between session start and the first main-loop turn pings the new project at that turn', async ($, on) => {
+		const { at, start, pings } = projects($, on);
+		await start('/repo/app');
+		await at('/other/app');
+		expect(pings).toEqual(['/repo', '/other']);
 	});
 
 	test('a cd into a project between two main-loop turns pings it once and compares the checkout', async ($, on) => {
@@ -293,7 +312,7 @@ describe('the freshness indicator follows the working directory', () => {
 
 	test('outside a project nothing is pinged or compared', async ($, on) => {
 		const { at, pings, revParses } = projects($, on);
-		await at('/repo');
+		await at('/tmp');
 		await at('/elsewhere');
 		expect(pings).toEqual([]);
 		expect(revParses()).toBe(0);
