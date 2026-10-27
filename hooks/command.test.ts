@@ -1,11 +1,13 @@
-import type { McpToolResult, On, PaneOpenArgs, RenderSurface, ToolCallArgs } from 'claude-code';
+import { atom, read, update } from 'claude-code';
+import type { McpToolResult, On, PaneOpenArgs, RenderSurface, StateDollar, ToolCallArgs } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import { dayKey } from './adoption';
 import type { Buckets } from './adoption';
-import { COMMAND, parseArgs, registerCommand, summarize } from './command';
+import { COMMAND, NO_PANE, PANE_SHAPE, parseArgs, registerCommand, summarize } from './command';
 import type { Tab } from './command';
 import { searchCode } from './explore';
+import { FRESHNESS_SHAPE } from './freshness';
 import { palette } from './theme';
 import { orphanCode } from './unused';
 
@@ -1694,13 +1696,22 @@ describe('the stats tab', () => {
 describe('the pane across a reload and a new conversation', () => {
 	type Handler = ($: object, e: object, next: (e: object) => Promise<unknown>) => Promise<unknown>;
 
-	/** `$.state` over a `Map`, as the host keeps it across a reload of the plugin's code. */
+	/**
+	 * `$.state` over a `Map`, as the host keeps it across a reload of the plugin's code. A key in `unreadable`
+	 * fails its reads, and with `refusing` set every write is refused, as the host refuses one.
+	 */
 	function fakeState() {
 		const values = new Map<string, { value: unknown; version: number }>();
 		const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
 		return {
-			get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
-			set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+			unreadable: new Set<string>(),
+			refusing: false,
+			async get(ref: { plugin: string; key: string }) {
+				if (this.unreadable.has(ref.key)) throw new Error(`denied: ${ref.key}`);
+				return values.get(id(ref)) ?? { value: undefined, version: 0 };
+			},
+			async set(ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) {
+				if (this.refusing) throw new Error(`denied: ${ref.key}`);
 				const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
 				if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
 				values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
@@ -1708,6 +1719,11 @@ describe('the pane across a reload and a new conversation', () => {
 			},
 		};
 	}
+
+	const PANE_STATE = atom({ plugin: 'constellation', key: 'pane' } as const, NO_PANE, { shape: PANE_SHAPE });
+	const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
+	/** The `$` that reads and writes `state` from the test, as a handler's would. */
+	const holder = (state: ReturnType<typeof fakeState>) => ({ state }) as unknown as StateDollar;
 
 	/** Elements as plain data: the type and the props. */
 	const EL = new Proxy({}, { get: (_, type) => (props: Record<string, unknown>) => ({ type: String(type), props }) });
@@ -1722,13 +1738,22 @@ describe('the pane across a reload and a new conversation', () => {
 
 	/**
 	 * One load of the command's hooks, through a stand-in `on`, over a `$` whose `$.state` is `state`: a reload is
-	 * a second load over the same state. Records the code_intel queries sent.
+	 * a second load over the same state. Records the code_intel queries sent; `panes` are the ids the engine
+	 * still holds open, and `invalidated` counts the redraws asked for.
 	 */
-	function load(state: ReturnType<typeof fakeState>, codes: string[]) {
+	function load(
+		state: ReturnType<typeof fakeState>,
+		codes: string[],
+		{ panes = [], respond = answer }: { panes?: string[]; respond?: (code: string) => McpToolResult | Promise<McpToolResult> } = {},
+	) {
 		const handlers = new Map<string, Handler>();
 		registerCommand(((event: string, ...rest: unknown[]) => void handlers.set(event, rest[rest.length - 1] as Handler)) as unknown as On);
+		const counted = { invalidated: 0 };
 		const $ = {
 			state,
+			env: { get: async () => undefined },
+			fs: { exists: async () => false },
+			command: { register: async () => undefined },
 			session: { surfaces: async () => ['terminal'], cwd: async () => '/work/app' },
 			store: { get: async () => undefined },
 			config: { list: async () => [] },
@@ -1736,10 +1761,15 @@ describe('the pane across a reload and a new conversation', () => {
 				connect: async () => ({ isConnected: true, server: SERVER }),
 				call: async (_server: string, _tool: string, args: Record<string, unknown>) => {
 					codes.push(String(args['code']));
-					return answer(String(args['code']));
+					return respond(String(args['code']));
 				},
 			},
-			ui: { open: async () => ({ isPlaced: true }), resolve: () => EL, invalidate: () => undefined },
+			ui: {
+				open: async () => ({ isPlaced: true }),
+				panes: async () => panes.map((id) => ({ id })),
+				resolve: () => EL,
+				invalidate: () => void (counted.invalidated += 1),
+			},
 		};
 		const raise = (event: string, e: object) => {
 			const handler = handlers.get(event);
@@ -1747,6 +1777,8 @@ describe('the pane across a reload and a new conversation', () => {
 			return handler($, e, async () => ({ type: 'engine' }));
 		};
 		return {
+			counted,
+			sessionStart: () => raise('session.start', { cwd: '/work/app', surface: 'terminal', isInteractive: false }),
 			run: (args: string) => raise('command.run', { command: COMMAND, args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 120 } }),
 			draw: async () =>
 				elements(
@@ -1796,6 +1828,73 @@ describe('the pane across a reload and a new conversation', () => {
 		expect(await ui.find({ type: 'Button', key: 'tab-status' })).toMatchObject({ props: selectedProps('terminal', 'Status') });
 		expect(await ui.find({ type: 'Text', text: '120' })).toBeUndefined();
 		expect(codes).toHaveLength(1);
+	});
+
+	test('a reload with the pane up asks again what the last load left unanswered', async () => {
+		const state = fakeState();
+		const codes: string[] = [];
+		const notIndexed = { success: false, error: { code: 'CWD_NOT_INDEXED', message: 'no project', candidates: ['/work/app/core', '/work/app/web'] } };
+		await update(holder(state), PANE_STATE, () => ({ ...NO_PANE, tab: 'diagnose' as const, cwd: '/work/app', results: { status: notIndexed } }));
+		const reloaded = load(state, codes, { panes: ['constellation'] });
+		await reloaded.sessionStart();
+		await settle();
+		expect(codes).toHaveLength(3);
+		expect(codes.filter((c) => c.includes('getCapabilities'))).toHaveLength(3);
+		const pane = await read(holder(state), PANE_STATE);
+		expect(Object.keys(pane.details).sort()).toEqual(['/work/app/core', '/work/app/web']);
+		expect(reads(await reloaded.draw(), '120')).toBe(true);
+	});
+
+	test('a reload with the pane closed asks nothing', async () => {
+		const state = fakeState();
+		const codes: string[] = [];
+		await update(holder(state), PANE_STATE, () => ({ ...NO_PANE, tab: 'diagnose' as const, cwd: '/work/app' }));
+		await load(state, codes).sessionStart();
+		await settle();
+		expect(codes).toEqual([]);
+	});
+
+	test("a load's session start takes down the freshness line the last load left", async () => {
+		const state = fakeState();
+		await update(holder(state), FRESHNESS, () => ({ kind: 'behind' as const, behind: 3 }));
+		await load(state, []).sessionStart();
+		expect(await read(holder(state), FRESHNESS)).toBeNull();
+	});
+
+	test('an answer the state refuses takes the pending badge down with a redraw', async () => {
+		const state = fakeState();
+		let release = (): void => undefined;
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const first = load(state, [], {
+			respond: async (code: string) => {
+				await held;
+				return answer(code);
+			},
+		});
+		const opened = first.run('diagnose');
+		await settle();
+		await opened;
+		expect(JSON.stringify(await first.draw())).toContain('querying Constellation');
+		state.refusing = true;
+		const before = first.counted.invalidated;
+		release();
+		await settle();
+		expect(first.counted.invalidated).toBe(before + 1);
+		expect(JSON.stringify(await first.draw())).not.toContain('querying Constellation');
+	});
+
+	test('the Stats tab with unreadable session counts still lands its read', async () => {
+		const state = fakeState();
+		state.unreadable.add('adoption');
+		const first = load(state, []);
+		await first.run('stats');
+		await settle();
+		const pane = await read(holder(state), PANE_STATE);
+		expect(pane.stats?.session.main.codeIntel).toBe(0);
+		state.unreadable.clear();
+		expect(JSON.stringify(await first.draw())).not.toContain('reading the stored counts');
 	});
 
 	test('a press writes the state, and the next drawing reads the new tab', async () => {

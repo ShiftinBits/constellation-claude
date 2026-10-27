@@ -10,7 +10,7 @@ import type {
 	RenderElement,
 } from 'claude-code';
 import type { ConstellationBand, ConstellationOnboardingState, ConstellationTask } from '../types';
-import { FRESHNESS_SHAPE, freshnessBand } from './freshness';
+import { FRESHNESS_SHAPE, freshnessBand, showsFreshness } from './freshness';
 import { absolute, canDraw, codeIntel, gitRoot, isRecord, parseToolText, projectRoot, relativeTo } from './lib';
 import type { CodeIntelEnvelope, McpPort } from './lib';
 import { badge, brandMark, branded, buttonRow, forTheme, onboarding, scheme } from './theme';
@@ -783,6 +783,8 @@ export function registerOnboarding(on: On): void {
 		// A run this load never started is one a reload ended with its child: its band shows nothing.
 		const shown = current.state === 'working' && running === undefined ? undefined : current.state;
 		if (shown === undefined) {
+			// With `showFreshness` off a line the state still holds is not drawn.
+			if (!showsFreshness()) return next(e);
 			// A fresh index reads nothing; the line draws only while no onboarding state exists.
 			const view = await read($, FRESHNESS);
 			if (view === null) return next(e);

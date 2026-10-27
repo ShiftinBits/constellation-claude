@@ -135,9 +135,10 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 		const { decision } = await $.tool.check({ tool: e.tool, input: e.input });
 		if (decision === 'deny') return next(e);
 		const path = absolute(raw, await $.session.cwd());
+		// A file the person chose not to be asked about again is never asked about, whoever answers this edit.
+		if (remembered.has(path)) return next(e);
 		// Only an edit core would run, with a person to answer, gets the plugin's own dialog.
 		const dialog = mode === 'dialog' && decision === 'allow' && e.approver === 'person';
-		if (dialog && remembered.has(path)) return next(e);
 		const risk = await gatedRisk($, String(e.tool), path, next.signal);
 		if (risk === undefined) return next(e);
 		// A hook's ask goes to a person or the host's callback, never to the auto-mode classifier.

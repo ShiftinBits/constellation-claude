@@ -463,25 +463,34 @@ function launch($: EngineInterface, pane: Pane, written: Promise<unknown>): void
  * Runs the tab's query and writes the envelope into the pane. A result that
  * lands after its tab was dropped (refresh, a new path, the pane closing) is
  * discarded. An error that lists project roots starts each one's picker read.
+ * Never rejects: an answer the state refuses leaves the tab without one, and
+ * a redraw takes its pending badge down, so Refresh asks again.
  */
 async function runQuery($: EngineInterface, tab: QueryTab, pane: Pane, written: Promise<unknown>): Promise<void> {
 	const generation = generations.get(tab) ?? 0;
-	pending.add(tab);
-	let envelope: CodeIntelEnvelope;
-	try {
-		const cwd = pane.cwd ?? target(await $.session.cwd());
-		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, codeFor(tab, pane), { cwd });
-	} catch (error) {
-		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
-	}
-	await written;
 	const current = (): boolean => (generations.get(tab) ?? 0) === generation;
-	if (!current()) return;
-	pending.delete(tab);
-	const nextOffset = tab === 'unused' && envelope.success ? { nextOffset: orphanPage(envelope.result).nextOffset } : {};
-	const next = await update($, PANE_STATE, (s) => (current() ? { ...s, results: { ...s.results, [tab]: envelope }, ...nextOffset } : s));
-	for (const root of envelope.error?.candidates ?? []) {
-		if (next.details[root] === undefined && !detailsPending.has(root)) void runDetail($, root);
+	pending.add(tab);
+	try {
+		let envelope: CodeIntelEnvelope;
+		try {
+			const cwd = pane.cwd ?? target(await $.session.cwd());
+			envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, codeFor(tab, pane), { cwd });
+		} catch (error) {
+			envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+		}
+		await written;
+		if (!current()) return;
+		pending.delete(tab);
+		const nextOffset = tab === 'unused' && envelope.success ? { nextOffset: orphanPage(envelope.result).nextOffset } : {};
+		const next = await update($, PANE_STATE, (s) => (current() ? { ...s, results: { ...s.results, [tab]: envelope }, ...nextOffset } : s));
+		for (const root of envelope.error?.candidates ?? []) {
+			if (next.details[root] === undefined && !detailsPending.has(root)) void runDetail($, root);
+		}
+	} catch {
+		if (!current()) return;
+		pending.delete(tab);
+		// `pending` is this load's, not state: only a redraw shows the tab no longer waits.
+		$.ui.invalidate('ui.render');
 	}
 }
 
@@ -497,7 +506,8 @@ async function readStats($: EngineInterface): Promise<Snapshot> {
 	} catch {
 		// No timer: the stored counts are read as they are.
 	}
-	const session = await read($, ADOPTION);
+	// Unreadable, the session's counts show as none rather than holding the tab.
+	const session = await read($, ADOPTION).catch(() => NO_COUNTS);
 	try {
 		return { session, stored: await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k)) };
 	} catch {
@@ -505,7 +515,11 @@ async function readStats($: EngineInterface): Promise<Snapshot> {
 	}
 }
 
-/** Reads the Stats tab's counts into the pane; a read that lands after the tab was dropped is discarded. */
+/**
+ * Reads the Stats tab's counts into the pane; a read that lands after the tab
+ * was dropped is discarded. Never rejects: counts the state refuses leave the
+ * tab showing the session's, and the next visit reads again.
+ */
 async function readHistory($: EngineInterface, written: Promise<unknown>): Promise<void> {
 	const mine = (historyRead += 1);
 	historyReading = true;
@@ -513,10 +527,17 @@ async function readHistory($: EngineInterface, written: Promise<unknown>): Promi
 	await written;
 	if (historyRead !== mine) return;
 	historyReading = false;
-	await update($, PANE_STATE, (s) => (historyRead === mine ? { ...s, stats: snapshot } : s));
+	await update($, PANE_STATE, (s) => (historyRead === mine ? { ...s, stats: snapshot } : s)).catch(() => {
+		// `historyReading` is this load's, not state: only a redraw takes its badge down.
+		$.ui.invalidate('ui.render');
+	});
 }
 
-/** Reads one symbol's details, usages, impact and call graph; a result that lands after the explorer was dropped is discarded. */
+/**
+ * Reads one symbol's details, usages, impact and call graph; a result that
+ * lands after the explorer was dropped is discarded. Never rejects: a result
+ * the state refuses is dropped, and pressing the symbol again reads it again.
+ */
 async function runDrill($: EngineInterface, id: string, symbolKind: string, cwd: string | undefined, written: Promise<unknown>): Promise<void> {
 	drillPending.add(id);
 	let envelope: CodeIntelEnvelope;
@@ -528,7 +549,7 @@ async function runDrill($: EngineInterface, id: string, symbolKind: string, cwd:
 	}
 	await written;
 	if (!drillPending.delete(id)) return;
-	await update($, PANE_STATE, (s) => ({ ...s, drill: { ...s.drill, [id]: envelope } }));
+	await update($, PANE_STATE, (s) => ({ ...s, drill: { ...s.drill, [id]: envelope } })).catch(() => undefined);
 }
 
 /**
@@ -557,6 +578,9 @@ async function loadMore($: EngineInterface, pane: Pane): Promise<void> {
 		if (!current()) return s;
 		if (page === undefined) return { ...s, handoffNote: 'Could not load more. Try again.' };
 		return { ...s, morePages: [...s.morePages, ...page.rows], nextOffset: page.nextOffset };
+	}).catch(() => {
+		// A page the state refuses is dropped; the redraw brings Load more back.
+		$.ui.invalidate('ui.render');
 	});
 }
 
@@ -609,7 +633,11 @@ function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderEleme
 	});
 }
 
-/** Reads one project's capabilities for the picker; a result that lands after the pane closed is dropped. */
+/**
+ * Reads one project's capabilities for the picker; a result that lands after
+ * the pane closed is dropped. Never rejects: a result the state refuses is
+ * dropped, and the tab's Refresh reads it again.
+ */
 async function runDetail($: EngineInterface, root: string): Promise<void> {
 	detailsPending.add(root);
 	const envelope = await codeIntel(
@@ -618,12 +646,32 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 		{ cwd: root },
 	);
 	if (!detailsPending.delete(root)) return;
-	await update($, PANE_STATE, (s) => ({ ...s, details: { ...s.details, [root]: envelope } }));
+	await update($, PANE_STATE, (s) => ({ ...s, details: { ...s.details, [root]: envelope } })).catch(() => undefined);
+}
+
+/**
+ * Starts again what an open pane still waits for, after a reload ended the
+ * work in flight: its tab's query or Stats read, each project the picker lists
+ * without its details, and the symbol the explorer drilled into without its answer.
+ */
+function resume($: EngineInterface, pane: Pane): void {
+	const written = Promise.resolve();
+	launch($, pane, written);
+	for (const envelope of Object.values(pane.results)) {
+		for (const root of envelope?.error?.candidates ?? []) {
+			if (pane.details[root] === undefined && !detailsPending.has(root)) void runDetail($, root);
+		}
+	}
+	const focus = pane.focus;
+	if (focus !== undefined && pane.drill[focus.id] === undefined && !drillPending.has(focus.id)) void runDrill($, focus.id, focus.kind, pane.cwd, written);
+	// What is in flight is this load's, not state: only a redraw shows it pending.
+	$.ui.invalidate('ui.render');
 }
 
 /**
  * The `/constellation` command and its pane. A load starts the work in flight
- * over; what the pane shows is in `$.state`, so a reload keeps it.
+ * over; what the pane shows is in `$.state`, so a reload keeps it, and the
+ * load's `session.start` starts again what an open pane still waits for.
  */
 export function registerCommand(on: On): void {
 	forgetPane();
@@ -663,6 +711,13 @@ export function registerCommand(on: On): void {
 			found = undefined;
 		}
 		const r = await next(e);
+		// A load starts the freshness indicator over (`registerFreshness` drops what it knew), so the line in
+		// `$.state`, the last load's or the last project's, goes; the ping below draws this project's again.
+		try {
+			if ((await read($, FRESHNESS)) !== null) await publish(null);
+		} catch {
+			// The line stays until the next comparison changes it.
+		}
 		// The project to ping and watch: the stored key's, else the session's when its key is set.
 		let root: string | null = null;
 		try {
@@ -698,6 +753,12 @@ export function registerCommand(on: On): void {
 			} catch {
 				// No timer: git commands the agent runs and code_intel answers still update the indicator.
 			}
+		}
+		try {
+			// A reload keeps the pane up (`$.ui.panes` is the engine's record) but ended its work in flight.
+			if ((await $.ui.panes()).some((pane) => pane.id === PANE)) resume($, await read($, PANE_STATE));
+		} catch {
+			// The pane shows what it holds; Refresh asks again.
 		}
 		try {
 			await $.command.register({
@@ -1276,8 +1337,8 @@ export function registerCommand(on: On): void {
 			label: 'Close',
 			role: 'dismiss' as const,
 			onPress: async () => {
-				// The ui.close hook below sees Esc and unload, not this plugin's own
-				// close from a callback, so the button clears the state itself.
+				// The ui.close hook below sees the person's close (Esc), not this plugin's
+				// own close from a callback, so the button clears the state itself.
 				await $.ui.close({ id: PANE });
 				forgetPane();
 				await act(() => NO_PANE);
@@ -1414,6 +1475,8 @@ export function registerCommand(on: On): void {
 		});
 	});
 
+	// The person closed the pane. An unload never runs this: the engine drops the pane before hooks hear of it and
+	// skips its opener's, and a reload keeps an open pane up, with its state.
 	on('ui.close', { id: PANE }, async ($, e, next) => {
 		const r = await next(e);
 		forgetPane();

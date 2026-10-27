@@ -226,11 +226,12 @@ describe('impact gate dialog', () => {
 		expect(m.calls.asks.length).toBe(2);
 	});
 
-	test('a remembered file is still sent to the permission prompt when core asks or the host answers', async () => {
+	test('a remembered file is left to core when core asks or the host answers', async () => {
 		const m = load({ impactGate: 'dialog' }, { answer: "Proceed, and don't ask again for this file" });
-		await m.check();
 		expect(await m.check('ask')).toEqual({ decision: 'ask', reason: HEADLINE });
-		expect(await m.check('allow', FILE, 'Edit', 'host')).toEqual({ decision: 'ask', reason: HEADLINE });
+		await m.check();
+		expect(await m.check('ask')).toEqual({ decision: 'ask' });
+		expect(await m.check('allow', FILE, 'Edit', 'host')).toEqual({ decision: 'allow' });
 		expect(m.calls.asks.length).toBe(1);
 	});
 

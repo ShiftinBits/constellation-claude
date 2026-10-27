@@ -1,4 +1,4 @@
-import { atom, read } from 'claude-code';
+import { atom, read, update } from 'claude-code';
 import type { On, PluginOptions, StateDollar } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import { ADOPTION_SHAPE, NO_COUNTS, registerAdoption, settled, total } from './adoption';
@@ -90,6 +90,8 @@ const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, n
 
 /** The session's access key as `$.env.get` answers it. */
 let sessionKey: string | undefined = KEY;
+/** Whether `$.session.cwd` rejects, as a host that cannot answer it does. */
+let cwdFails = false;
 
 /** The git commands the handlers ran, and the commit HEAD is at. */
 const gitRuns: string[][] = [];
@@ -101,7 +103,14 @@ const HEAD = '0123456789abcdef0123456789abcdef01234567';
 
 const $ = {
 	env: { get: async () => sessionKey },
-	session: { cwd: async () => PROJECT, surfaces: async () => surfaces, id: async () => 'session-1' },
+	session: {
+		cwd: async () => {
+			if (cwdFails) throw new Error('session.cwd unavailable');
+			return PROJECT;
+		},
+		surfaces: async () => surfaces,
+		id: async () => 'session-1',
+	},
 	state,
 	ui: {
 		resolve: () => EL,
@@ -151,6 +160,7 @@ function load(options: PluginOptions) {
 	registerOnboarding(capture as unknown as On);
 	registerFreshness(capture as unknown as On, options);
 	state.clear();
+	cwdFails = false;
 	gitRuns.length = 0;
 	configReads = 0;
 	surfaces = ['terminal'];
@@ -262,6 +272,16 @@ describe('nudge budget', () => {
 		await m.codeIntel();
 		expect(await m.search()).toBeUndefined();
 		await m.turn('sub-turn-2', 'sub');
+		expect(await m.search()).toBeUndefined();
+	});
+
+	test('a main turn whose working directory cannot be read is still recorded', async () => {
+		const m = load({ nudgeLimit: 2 });
+		cwdFails = true;
+		expect(await m.turn('t1')).toEqual({});
+		cwdFails = false;
+		expect(await m.search()).toEqual(REMINDER);
+		await m.codeIntel();
 		expect(await m.search()).toBeUndefined();
 	});
 
@@ -538,6 +558,13 @@ describe('freshness band above the prompt', () => {
 		const text = shown(await m.draw());
 		expect(text).toContain(BRAND);
 		expect(text).toContain('API_UNREACHABLE');
+	});
+
+	test('with showFreshness off, a line the state still holds is not drawn', async () => {
+		const m = load({ showFreshness: false });
+		await update($ as unknown as StateDollar, FRESHNESS, () => ({ kind: 'behind' as const, behind: 3 }));
+		expect(await m.draw(BENEATH)).toBe(BENEATH);
+		expect(configReads).toBe(0);
 	});
 
 	test('yields to a survey', async () => {
