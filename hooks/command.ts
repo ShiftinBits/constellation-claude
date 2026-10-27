@@ -560,9 +560,9 @@ function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderEleme
 			el.Box({
 				flexDirection: 'column',
 				children: [
-					el.Text({ bold: true, children: 'Next steps' }),
+					el.Text({ weight: 'semibold', children: 'Next steps' }),
 					...ex.steps.map((step, i) =>
-						el.Box({ flexDirection: 'row', columnGap: 1, children: [el.Text({ dimColor: true, children: `${i + 1}.` }), el.Text({ bold: true, children: step })] }),
+						el.Box({ flexDirection: 'row', columnGap: 1, children: [el.Text({ dimColor: true, children: `${i + 1}.` }), el.Text({ weight: 'semibold', children: step })] }),
 					),
 				],
 			}),
@@ -581,7 +581,7 @@ function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderEleme
 		flexDirection: 'column',
 		gap: 1,
 		children: [
-			el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', forTheme(status('error'), tint)), el.Text({ bold: true, children: ex.title })] }),
+			el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', forTheme(status('error'), tint)), el.Text({ weight: 'semibold', children: ex.title })] }),
 			el.Box({ flexDirection: 'column', gap: 1, paddingLeft: 2, children: under }),
 		],
 	});
@@ -762,7 +762,7 @@ export function registerCommand(on: On): void {
 				el.Box({ ...(key === undefined ? {} : { key }), flexDirection: 'row', children: cells.map((cell, i) => el.Box({ width: widths[i] ?? 'auto', children: [cell] })) });
 			return el.Box({
 				flexDirection: 'column',
-				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ bold: true, children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
+				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ weight: 'semibold', children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
 			});
 		};
 		// Label and value rows, the label dim: the Desktop form of rows padded into a label column.
@@ -891,7 +891,7 @@ export function registerCommand(on: On): void {
 								flexDirection: 'row',
 								columnGap: 2,
 								children: [
-									el.Text({ bold: true, children: `${picked.size} selected` }),
+									el.Text({ weight: 'semibold', children: `${picked.size} selected` }),
 									el.Text({ dimColor: true, children: `of ${grouped(firstPage.total ?? loaded.length)} unused exports` }),
 									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
 								],
@@ -973,7 +973,7 @@ export function registerCommand(on: On): void {
 								el.Text({ children: f.calls }),
 								el.Text({ children: f.symbol }),
 								el.Text({ dimColor: true, children: f.literal }),
-								el.Text({ bold: true, children: f.share }),
+								el.Text({ weight: 'semibold', children: f.share }),
 							],
 						})),
 						['', 'code_intel calls', 'Symbol-like', 'Literal', SHARE_LABEL],
@@ -1002,7 +1002,7 @@ export function registerCommand(on: On): void {
 												el.Box({
 													flexDirection: 'row',
 													columnGap: 1,
-													children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
+													children: [el.Text({ weight: 'semibold', children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
 												}),
 											],
 										}),
@@ -1080,7 +1080,7 @@ export function registerCommand(on: On): void {
 										flexDirection: 'row',
 										columnGap: 1,
 										children: [
-											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ bold: true, children: hit.name })]),
+											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ weight: 'semibold', children: hit.name })]),
 											place(where(hit)),
 											fixed([
 												el.Button({
@@ -1162,7 +1162,7 @@ export function registerCommand(on: On): void {
 												const tree = callTree(result['calls']);
 												return tree.length === 0
 													? [el.Text({ dimColor: true, children: 'No callers or callees found' })]
-													: tree.map((l) => el.Text({ ...(l.depth === 0 ? { bold: true } : {}), children: `${'  '.repeat(l.depth)}${l.text}` }));
+													: tree.map((l) => el.Text({ ...(l.depth === 0 ? { weight: 'semibold' } : {}), children: `${'  '.repeat(l.depth)}${l.text}` }));
 											})(),
 										}),
 						],
@@ -1231,7 +1231,7 @@ export function registerCommand(on: On): void {
 				} else if (item.badge?.kind === 'kind') {
 					body.push(badge(el, item.text, forTheme(kind(item.badge.value), tint)));
 				} else if (item.heading) {
-					body.push(el.Text({ bold: true, children: item.text }));
+					body.push(el.Text({ weight: 'semibold', children: item.text }));
 				} else {
 					body.push(el.Text(item.dim ? { dimColor: true, children: item.text } : { children: item.text }));
 				}
@@ -1300,7 +1300,7 @@ export function registerCommand(on: On): void {
 								flexDirection: 'row',
 								columnGap: 1,
 								children: [
-									...(project === undefined ? [] : [el.Text({ bold: true, children: project })]),
+									...(project === undefined ? [] : [el.Text({ weight: 'semibold', children: project })]),
 									...(project !== undefined && meta !== undefined ? [el.Text({ dimColor: true, children: '·' })] : []),
 									...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
 									...((project !== undefined || meta !== undefined) && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),

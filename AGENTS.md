@@ -7,12 +7,12 @@ Claude Code plugin (and its own marketplace) for Constellation. **Public repo.**
 | Task | Command |
 |------|---------|
 | Mod tests | `claude plugin test .` |
-| Validate marketplace manifest | `claude plugin validate --strict .` |
-| Validate plugin manifest + hooks module | `claude plugin validate --strict .claude-plugin/plugin.json` |
+| Validate marketplace, plugin and hooks module | `claude plugin validate --strict .` |
+| Validate as a directory submission | `claude plugin validate --profile directory --strict .` (latest Claude Code only; the floor has no `--profile`) |
 | Type-check | `tsc -p .` (load the plugin once first so the engine writes its tsconfig: `claude -p --plugin-dir . "ok"`) |
 | Run locally | `claude --plugin-dir .` |
 
-CI (`.github/workflows/test.yml`) runs the tests and both validates on the latest Claude Code, plus a grep that fails on any hex color literal outside `hooks/theme.ts`. CI does not run `tsc`: run all checks locally before pushing.
+CI (`.github/workflows/test.yml`) runs the tests and the validate on the floor (2.1.304) and the latest Claude Code (the directory profile on latest only), plus a grep that fails on any hex color literal outside `hooks/theme.ts`. CI does not run `tsc`: run all checks locally before pushing.
 
 Validate on the plugin manifest prints every event the module hooks and every `$.*` call. The README Data Handling row must list exactly those `calls:`.
 

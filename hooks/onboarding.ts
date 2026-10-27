@@ -673,7 +673,7 @@ export function band(el: ElementTable, view: BandView): RenderElement {
 	const headline =
 		view.state === 'working' ? (view.task === 'index' ? 'Indexing this project' : 'Signing in') : HEADLINE[view.state];
 	const rows: RenderElement[] = [
-		el.Text({ wrap: 'truncate', children: [brandMark(el, view.tint), ' · ', badge(el, '', tone), ' ', el.Text({ bold: true, children: headline })] }),
+		el.Text({ wrap: 'truncate', children: [brandMark(el, view.tint), ' · ', badge(el, '', tone), ' ', el.Text({ weight: 'semibold', children: headline })] }),
 	];
 	if (view.state === 'no-project') {
 		rows.push(el.Text({ children: 'Run const init in a terminal, with the project ID from the web app:' }), el.Link({ href: WEB_APP }));

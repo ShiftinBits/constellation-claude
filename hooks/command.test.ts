@@ -489,7 +489,7 @@ describe('the pane', () => {
 			// The terminal draws the CLI banner, starting in galactic; Desktop the same banner as an SVG.
 			if (surface === 'terminal') expect((await exact(ui, '╭──'))?.props['color']).toBe(palette.galactic);
 			else expect(String((await ui.find({ type: 'Svg' }))?.props['source'])).toContain(palette.galactic);
-			expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
+			expect((await exact(ui, 'app'))?.props['weight']).toBe('semibold');
 			expect(await ui.find({ type: 'Text', text: TAB_HINT_STATUS })).toBeDefined();
 			await expectKeys(ui, surface, /1-6 switch tabs · r refresh · esc close/);
 			expect(await ui.find({ type: 'Text', text: /as of 0123456 · indexed/ })).toBeDefined();
@@ -775,9 +775,9 @@ describe('the pane', () => {
 		const ui = await mountPane($, 'terminal');
 		await settle();
 		expect(await ui.find({ type: 'Text', text: '✗ error' })).toBeDefined();
-		expect((await exact(ui, "This project hasn't been indexed yet"))?.props['bold']).toBe(true);
+		expect((await exact(ui, "This project hasn't been indexed yet"))?.props['weight']).toBe('semibold');
 		expect((await exact(ui, 'Not indexed'))?.props['dimColor']).toBe(true);
-		expect((await exact(ui, 'const index'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'const index'))?.props['weight']).toBe('semibold');
 		expect((await exact(ui, 'PROJECT_NOT_INDEXED'))?.props['dimColor']).toBe(true);
 		expect(await ui.find({ type: 'Button', key: 'dep:x' })).toBeUndefined();
 	});
@@ -1080,7 +1080,7 @@ describe('the pane', () => {
 		await ui.press({ key: 'project:/work/app/core' });
 		await settle();
 		expect(store.get('project:/work/app')).toBe('/work/app/core');
-		expect((await exact(ui, 'core'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'core'))?.props['weight']).toBe('semibold');
 		expect(await ui.find({ key: 'switch-project' })).toBeDefined();
 
 		await ui.press({ key: 'switch-project' });
@@ -1132,7 +1132,7 @@ describe('the pane', () => {
 		await run($);
 		const ui = await mountPane($, 'terminal');
 		await settle();
-		expect((await exact(ui, 'app'))?.props['bold']).toBe(true);
+		expect((await exact(ui, 'app'))?.props['weight']).toBe('semibold');
 		expect(await ui.find({ key: 'switch-project' })).toBeUndefined();
 	});
 
@@ -1491,8 +1491,8 @@ describe('the stats tab', () => {
 		expect((await exact(ui, '4 code_intel calls (1.5 s)'))?.props).toEqual({});
 		expect((await exact(ui, '1 symbol-like search'))?.props).toEqual({});
 		expect((await exact(ui, '1 literal search'))?.props['dimColor']).toBe(true);
-		expect((await exact(ui, '80%'))?.props['bold']).toBe(true);
-		expect((await exact(ui, 'n/a'))?.props['bold']).toBe(true);
+		expect((await exact(ui, '80%'))?.props['weight']).toBe('semibold');
+		expect((await exact(ui, 'n/a'))?.props['weight']).toBe('semibold');
 	});
 
 	test('refresh reads the store again and still sends no query', async ($, on) => {

@@ -246,7 +246,7 @@ describe('result row', () => {
 	test('counts are bold and the risk badge is colored', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'bold', reply(IMPACT));
-		expect((await exact(ui, '8'))?.props['bold']).toBe(true);
+		expect((await exact(ui, '8'))?.props['weight']).toBe('semibold');
 		expect((await exact(ui, '✗ HIGH'))?.props['color']).toBe(palette.stellar);
 	});
 

@@ -38,7 +38,8 @@ let permissionMode: string | undefined;
 
 /**
  * Files the user chose not to be asked about again, by absolute path. Session
- * wide, not per agent: `tool.check` carries no `agentId`.
+ * wide, not per agent. `tool.check` has carried `agentId` since 2.1.290, but
+ * the choice is about the file, not who edits it.
  */
 const remembered = new Set<string>();
 
