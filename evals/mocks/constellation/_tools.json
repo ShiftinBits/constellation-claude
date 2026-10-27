@@ -1,0 +1,16 @@
+{
+  "tools": [
+    {
+      "name": "code_intel",
+      "description": "Query the Constellation code intelligence graph by running JavaScript against the `api` object. If the search pattern is a symbol name (function, method, class, variable), use code_intel instead of Grep, even when the file is already known: it resolves cross-file relationships, transitive dependencies and indirect usages that text search cannot detect. Use Grep only for literal strings such as error messages, config values, log text and comments. Example: `const {symbols} = await api.searchSymbols({ query: \"UserService\" }); return symbols[0];`",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "code": { "type": "string", "description": "JavaScript that calls api.* methods and returns a result." },
+          "cwd": { "type": "string", "description": "Path of the indexed project root." }
+        },
+        "required": ["code", "cwd"]
+      }
+    }
+  ]
+}
