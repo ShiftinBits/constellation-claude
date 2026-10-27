@@ -1,6 +1,6 @@
 import { atom, update } from 'claude-code';
 import type { On } from 'claude-code';
-import { ADOPTION_SHAPE, background, counted, NO_COUNTS, noteSearch, save } from './adoption';
+import { ADOPTION_SHAPE, background, counter, NO_COUNTS, noteSearch, save } from './adoption';
 import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
@@ -29,11 +29,12 @@ export function registerNudges(on: On): void {
 		// It runs in the background, so the search's answer waits on neither the walk nor the store.
 		if (isSearch && next.origin.plugin === 'engine') {
 			const isMain = agentKey(e) === MAIN;
+			const count = counter();
 			background(async () => {
 				if (!(await inProject())) return;
 				const note = noteSearch(isMain, symbolLike);
 				// The state write redraws the spinner and the Stats tab; the store keeps the day's counts, whatever the write did.
-				await update($, ADOPTION, (b) => counted(b, note)).catch(() => undefined);
+				await update($, ADOPTION, (b) => count(b, note)).catch(() => undefined);
 				await save(note, {
 					now: () => $.clock.now(),
 					sessionId: () => $.session.id(),

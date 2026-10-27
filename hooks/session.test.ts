@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code';
 import type { On, StateDollar } from 'claude-code';
 import { describe, expect, test } from 'claude-code/testing';
-import { ADOPTION_SHAPE, NO_COUNTS } from './adoption';
+import { ADOPTION_SHAPE, counter, NO_COUNTS, noteCodeIntelCall } from './adoption';
 import { hasNudgeLeft, registerBudget, spendNudge } from './budget';
 import { NO_PANE, PANE_SHAPE } from './command';
 import { FRESHNESS_SHAPE } from './freshness';
@@ -87,7 +87,13 @@ async function spentSession(band: { state?: 'sign-in-again' | 'not-set-up'; deta
 			};
 		return step(0)(e);
 	};
-	return { end, held };
+	/** A count made now and saved once `land` is called, as a code_intel call's count saves in the background. */
+	const pendingCount = () => {
+		const count = counter();
+		const note = noteCodeIntelCall(true, 5);
+		return { land: () => update(state$, ADOPTION, (b) => count(b, note)) };
+	};
+	return { end, held, pendingCount };
 }
 
 describe('session end', () => {
@@ -104,6 +110,22 @@ describe('session end', () => {
 			expect(await held()).toEqual({ adoption: NO_COUNTS, band: NO_BAND, freshness: BEHIND, pane: NO_PANE });
 		});
 	}
+
+	test('a count still being saved when the conversation ends with clear does not reach the next one', async () => {
+		const { end, held, pendingCount } = await spentSession();
+		const late = pendingCount();
+		await end('clear');
+		await late.land();
+		expect((await held()).adoption).toEqual(NO_COUNTS);
+	});
+
+	test('a count saved after a session end that keeps the state still counts', async () => {
+		const { end, held, pendingCount } = await spentSession();
+		const late = pendingCount();
+		await end('other');
+		await late.land();
+		expect((await held()).adoption.main.codeIntel).toBe(COUNTED.main.codeIntel + 1);
+	});
 
 	test('a session ending with clear keeps a not set up band, which describes the process, not the conversation', async () => {
 		const { end, held } = await spentSession({ state: 'not-set-up' });

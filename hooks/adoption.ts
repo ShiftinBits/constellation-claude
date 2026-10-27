@@ -321,6 +321,24 @@ export async function save(counted: Note, store: StorePort): Promise<void> {
 	}
 }
 
+/** Which conversation of the session counts are made in; `session.end` (`/clear`, `/resume`, `/branch`) starts the next. */
+let conversation = 0;
+
+/** Ends the conversation counts are made in, so a count still being saved from it lands in no later one. */
+export function endConversation(): void {
+	conversation += 1;
+}
+
+/**
+ * Taken when a count is made: adds a note to the session's counts while the
+ * conversation it was made in goes on, and leaves them as they are once it has
+ * ended. The stored day totals take the count either way.
+ */
+export function counter(): (buckets: Buckets, note: Note) => Buckets {
+	const made = conversation;
+	return (buckets, note) => (made === conversation ? counted(buckets, note) : buckets);
+}
+
 /**
  * Starts `work` and returns at once, so a tool's answer never waits on the
  * store. A failure is dropped. `settled()` waits for it.

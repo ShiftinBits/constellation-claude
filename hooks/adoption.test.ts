@@ -8,6 +8,7 @@ import {
 	type Counts,
 	counted,
 	dayKey,
+	endConversation,
 	figures,
 	forgetDays,
 	loadStats,
@@ -237,6 +238,28 @@ describe('adoption counting through the hooks', () => {
 		await m.codeIntel(took(5));
 		await m.grep('AuthService');
 		await settled();
+		expect(await stored(m.store, m.key)).toEqual({ main: counts(1, 5, 1, 0), subagents: NONE });
+	});
+
+	test('counts still being saved when the conversation ends reach the day totals but not the next conversation', async () => {
+		const state = fakeState();
+		const get = state.get;
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		// Only the counts' reads wait: the code_intel call itself reads the band.
+		state.get = async (ref) => {
+			if (ref.key === 'adoption') await held;
+			return get(ref);
+		};
+		const m = load(fakeStore(), {}, state);
+		await m.codeIntel(took(5));
+		await m.grep('AuthService');
+		endConversation();
+		release();
+		await settled();
+		expect(await m.counts()).toEqual(NO_COUNTS);
 		expect(await stored(m.store, m.key)).toEqual({ main: counts(1, 5, 1, 0), subagents: NONE });
 	});
 

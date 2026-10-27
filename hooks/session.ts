@@ -1,6 +1,6 @@
 import { atom, update } from 'claude-code';
 import type { On } from 'claude-code';
-import { ADOPTION_SHAPE, NO_COUNTS } from './adoption';
+import { ADOPTION_SHAPE, endConversation, NO_COUNTS } from './adoption';
 import { forgetAgentLines, resetAugment } from './augment';
 import { forgetAgentBudget, resetBudgets } from './budget';
 import { forgetPane, NO_PANE, PANE_SHAPE } from './command';
@@ -26,6 +26,7 @@ const PANE_STATE = atom({ plugin: 'constellation', key: 'pane' } as const, NO_PA
  */
 export function registerSession(on: On): void {
 	on('session.end', { reason: ['clear', 'resume'] }, async ($, e, next) => {
+		endConversation();
 		resetBudgets();
 		resetAugment();
 		resetRiskCache();

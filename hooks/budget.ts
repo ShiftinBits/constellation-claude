@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code';
 import type { On, PluginOptions } from 'claude-code';
-import { ADOPTION_SHAPE, background, counted, NO_COUNTS, noteCodeIntelCall, save } from './adoption';
+import { ADOPTION_SHAPE, background, counter, NO_COUNTS, noteCodeIntelCall, save } from './adoption';
 import { FRESHNESS_SHAPE, observeEnvelope } from './freshness';
 import { absolute, canDraw, isConfigured, parseToolText, projectRoot, stringArg } from './lib';
 import { BAND_SHAPE, NO_BAND, observeCodeIntel } from './onboarding';
@@ -112,9 +112,10 @@ export function registerBudget(on: On, options: PluginOptions): void {
 			// A refused call never ran; an errored one is still the agent reaching for code_intel.
 			if (r.deny === undefined) {
 				const note = noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time);
+				const count = counter();
 				// Counted and saved in the background: the agent's answer never waits on the state or the store.
 				background(async () => {
-					await update($, ADOPTION, (b) => counted(b, note));
+					await update($, ADOPTION, (b) => count(b, note));
 				});
 				background(() =>
 					save(note, {
