@@ -108,6 +108,35 @@ describe('tool description guidance', () => {
 		expect((await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER })).description).toBe(BASE + GUIDANCE);
 	});
 
+	test('a lookup that fails at the turn after a cd is tried again at the next main-loop turn', async ($, on) => {
+		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		let cwd = '/elsewhere';
+		let failing = false;
+		on('session.cwd', () => ({ value: cwd }));
+		on('fs.exists', (_, e) => {
+			if (failing) throw new Error('busy');
+			return { value: e.path === '/repo/constellation.json' };
+		});
+		on('tool.describe', (_, e) => ({ description: e.description }));
+		on('turn.start', (_, e) => ({ turnId: e.turnId }));
+		const invalidated: string[] = [];
+		on('ui.invalidate', (_, e) => {
+			invalidated.push(e.event);
+			return { value: undefined };
+		});
+
+		await $.tool.describe({ tool: 'Bash', description: BASE, provider: PROVIDER });
+		await $.turn.start({ text: '', turnId: 't1' });
+		cwd = '/repo/app';
+		failing = true;
+		await $.turn.start({ text: '', turnId: 't2' });
+		expect(invalidated).toEqual([]);
+
+		failing = false;
+		await $.turn.start({ text: '', turnId: 't3' });
+		expect(invalidated).toEqual(['tool.describe']);
+	});
+
 	test('a cd into a project before the first main-loop turn opens the gate at that turn', async ($, on) => {
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
 		let cwd = '/elsewhere';

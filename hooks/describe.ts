@@ -52,6 +52,7 @@ export function registerDescribe(on: On): void {
 		if (e.agentId !== undefined) return next(e);
 		startMainTurn(e.turnId);
 		const r = await next(e);
+		const before = lastCwd;
 		try {
 			const cwd = await $.session.cwd();
 			if (lastCwd === undefined) {
@@ -95,7 +96,8 @@ export function registerDescribe(on: On): void {
 				$.ui.invalidate('tool.describe');
 			}
 		} catch {
-			// Fails open: the turn goes on untouched, and a later turn reads the working directory again.
+			// Fails open: the turn goes on untouched, and the next main-loop turn tries this directory again.
+			lastCwd = before;
 		}
 		return r;
 	});
