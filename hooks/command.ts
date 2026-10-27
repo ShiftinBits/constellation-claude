@@ -1,23 +1,23 @@
+import { atom, read, update } from 'claude-code';
 import type { ButtonProps, ElementTable, EngineInterface, On, RenderElement } from 'claude-code';
-import { SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, sessionCounts, settled, statRows, statsCells, statsLines } from './adoption';
-import type { Buckets, Stats } from './adoption';
+import type { ConstellationDirection, ConstellationPane, ConstellationQueryTab, ConstellationSection, ConstellationTab } from '../types';
+import { ADOPTION_SHAPE, NO_COUNTS, SHARE_LABEL, SHARE_NOTE, UNREAD_NOTE, figures, loadStats, settled, statRows, statsCells, statsLines } from './adoption';
 import { canDraw, codeIntel, isConfigured, isRecord, projectName, projectRoot, withinDeadline } from './lib';
 import type { CodeIntelEnvelope, CodeIntelError } from './lib';
 import { explain, explainLines } from './explain';
 import { askText, callTree, detailLines, detailRows, drillCode, hasCallGraph, hits, impactView, rankExact, searchCode, usageLines, usageRows, usageTotal, where } from './explore';
-import type { Hit } from './explore';
 import { byFile, orphanCode, orphanPage, removalPrompt } from './unused';
-import type { OrphanRow } from './unused';
 import type { Explanation } from './explain';
-import { observeEnvelope, recheck, showsFreshness, startTicks, track } from './freshness';
-import { checkConnection, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
+import { FRESHNESS_SHAPE, observeEnvelope, recheck, showsFreshness, startTicks, track } from './freshness';
+import type { Publish } from './freshness';
+import { BAND_SHAPE, checkConnection, NO_BAND, pingProject, readStoredKeyAtStart, rememberRepo } from './onboarding';
 import type { FoundKey, OnboardingPorts } from './onboarding';
 import { BANNER_WIDTH, badge, branded, buttonRow, forTheme, header, kind, paint, palette, risk, scheme, status } from './theme';
 import type { Scheme } from './theme';
 
 /**
  * The command's name. Mod commands allow letters, digits, `_` and `-`, so the
- * bare name sits beside the Markdown `/constellation:*` commands, and a name
+ * bare name sits beside the `/constellation:*` skills, and a name
  * a built-in owns is refused.
  */
 export const COMMAND = 'constellation';
@@ -25,11 +25,14 @@ export const COMMAND = 'constellation';
 /** The id of the pane the command opens; the `requestId` its tree is drawn under. */
 const PANE = 'constellation';
 
-const TABS = ['status', 'diagnose', 'deps', 'unused', 'explore', 'stats'] as const;
-export type Tab = (typeof TABS)[number];
+export type Tab = ConstellationTab;
+const TABS: readonly Tab[] = ['status', 'diagnose', 'deps', 'unused', 'explore', 'stats'];
 /** A tab that shows a code_intel query's answer. Stats shows counts kept on this machine and never queries. */
-type QueryTab = Exclude<Tab, 'stats'>;
-type Direction = 'dependencies' | 'dependents';
+type QueryTab = ConstellationQueryTab;
+type Direction = ConstellationDirection;
+type Section = ConstellationSection;
+/** What the pane draws: its tab, each tab's answer and what the person selected. */
+type Pane = ConstellationPane;
 
 const TAB_LABEL: Readonly<Record<Tab, string>> = {
 	status: 'Status',
@@ -329,68 +332,75 @@ const UNUSED_KINDS: readonly string[] = ['function', 'class', 'interface', 'type
 /** The Unused kind choice that sends no filter. */
 const ALL_KINDS = 'all';
 
-/** The `findOrphanedCode` filter for the kind the command named, if any. */
-function unusedFilter(): { filterByKind?: string[] } {
-	return unusedKind === undefined ? {} : { filterByKind: [unusedKind] };
+/** The `findOrphanedCode` filter for `kind`, the kind the Unused tab lists, if any. */
+function unusedFilter(kind: string | undefined): { filterByKind?: string[] } {
+	return kind === undefined ? {} : { filterByKind: [kind] };
 }
 
-function codeFor(tab: QueryTab, direction: Direction, path: string): string {
+/** What a tab's query reads from the pane: the Deps file and direction, the Unused kind and the Explore search. */
+type QueryInput = Pick<Pane, 'depsPath' | 'direction' | 'unusedKind' | 'query'>;
+
+function codeFor(tab: QueryTab, input: QueryInput): string {
 	switch (tab) {
 		case 'status':
 			return 'return await api.ping()';
 		case 'diagnose':
 			return 'const [ping, caps] = await Promise.all([api.ping(), api.getCapabilities()]); return { ping, caps }';
 		case 'deps':
-			return `return await api.${direction === 'dependencies' ? 'getDependencies' : 'getDependents'}({ filePath: ${JSON.stringify(path)} })`;
+			return `return await api.${input.direction === 'dependencies' ? 'getDependencies' : 'getDependents'}({ filePath: ${JSON.stringify(input.depsPath)} })`;
 		case 'unused':
-			return orphanCode(unusedFilter());
+			return orphanCode(unusedFilter(input.unusedKind));
 		case 'explore':
-			return searchCode(exploreQuery);
+			return searchCode(input.query);
 	}
 }
 
-// The pane's state: module variables, lost on a hot reload, so every read has a default.
-let selected: Tab = 'status';
-let tint: Scheme = 'brand';
-let depsPath = '';
-let depsDirection: Direction = 'dependencies';
-let sessionCwd: string | undefined;
-let launchCwd: string | undefined;
+/** The shape tag of the `pane` state key; `session.ts` builds its atom with it. */
+export const PANE_SHAPE = 'pane-1';
+
+/** The pane as it opens on the status tab, with nothing read or selected. */
+export const NO_PANE: Pane = {
+	tab: 'status',
+	tint: 'brand',
+	results: {},
+	details: {},
+	depsPath: '',
+	direction: 'dependencies',
+	picked: [],
+	morePages: [],
+	query: '',
+	section: 'details',
+	drill: {},
+};
+
+/**
+ * What the pane draws, kept in `$.state`: a write redraws it, a reload keeps
+ * it, and the drawing reads nothing else that changes. Handlers write it with
+ * `update`; a drawing never does.
+ */
+const PANE_STATE = atom({ plugin: 'constellation', key: 'pane' } as const, NO_PANE, { shape: PANE_SHAPE });
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+const BAND = atom({ plugin: 'constellation', key: 'band' } as const, NO_BAND, { shape: BAND_SHAPE });
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
+
+// This load's own, which a reload starts over: the work in flight, which the reload ends, and the project pick.
 /**
  * The project picked when the session's working directory is not a project
  * (a workspace root above several). Kept across pane opens, unlike the rest,
  * and used only while the session is still in `from`.
  */
 let chosen: { from: string; root: string } | undefined;
-const cache = new Map<QueryTab, CodeIntelEnvelope>();
 const pending = new Set<QueryTab>();
 const generations = new Map<QueryTab, number>();
-/** The picker's per-project `getCapabilities` envelopes, by project root. */
-const details = new Map<string, CodeIntelEnvelope>();
 const detailsPending = new Set<string>();
-/** The kind `/constellation unused <kind>` asked for. Cleared by `reset()` only. */
-let unusedKind: string | undefined;
-// The unused picker's state, cleared with the tab by `drop('unused')`.
-const picked = new Set<string>();
-let morePages: OrphanRow[] = [];
-let nextOffset: number | undefined;
-let loadingMore = false;
-let handoffNote: string | undefined;
-/** The symbol the explorer searches for. Cleared by `reset()` only, since the search field sets it and then drops the tab. */
-let exploreQuery = '';
-// The explorer's state, cleared with the tab by `drop('explore')`.
-let focusHit: Hit | undefined;
-type Section = 'details' | 'usages' | 'impact' | 'calls';
-let section: Section = 'details';
-const drill = new Map<string, CodeIntelEnvelope>();
 const drillPending = new Set<string>();
-let exploreNote: string | undefined;
+let loadingMore = false;
 /** How long a read of the stored counts waits for counts still being saved. */
 const SETTLE_MS = 1000;
-/** The session's counts and the stored ones, read together so the rows agree; `stored` is unset when the store cannot be read. */
-type Snapshot = { session: Buckets; stored: Stats | undefined };
-/** The Stats tab's counts: unset until the tab shows, then being read, then read. Cleared by `drop('stats')`. */
-let history: Snapshot | 'reading' | undefined;
+/** The Stats tab's counts, the session's and the stored ones read together so the rows agree. */
+type Snapshot = NonNullable<Pane['stats']>;
+/** Whether the Stats tab's read of the stored counts is running, and a count that tells a read a later one replaced. */
+let historyReading = false;
 let historyRead = 0;
 
 /** The `$.store` key that remembers the project picked in `from`, across sessions. */
@@ -398,42 +408,32 @@ function pickKey(from: string): string {
 	return `project:${from}`;
 }
 
-function drop(tab: Tab): void {
+/** Ends what is in flight for `tab`: an answer still on its way is dropped. */
+function forget(tab: Tab): void {
 	if (tab === 'stats') {
-		history = undefined;
+		historyReading = false;
 		historyRead += 1;
 		return;
 	}
-	cache.delete(tab);
 	pending.delete(tab);
 	generations.set(tab, (generations.get(tab) ?? 0) + 1);
-	if (tab === 'unused') {
-		picked.clear();
-		morePages = [];
-		nextOffset = undefined;
-		loadingMore = false;
-		handoffNote = undefined;
-	}
-	if (tab === 'explore') {
-		focusHit = undefined;
-		section = 'details';
-		drill.clear();
-		drillPending.clear();
-		exploreNote = undefined;
-	}
+	if (tab === 'unused') loadingMore = false;
+	if (tab === 'explore') drillPending.clear();
 }
 
-function reset(): void {
-	for (const tab of TABS) drop(tab);
-	unusedKind = undefined;
-	exploreQuery = '';
-	selected = 'status';
-	depsPath = '';
-	depsDirection = 'dependencies';
-	sessionCwd = undefined;
-	launchCwd = undefined;
-	details.clear();
+/** Ends everything in flight, as the pane closing or a new conversation does. */
+export function forgetPane(): void {
+	for (const tab of TABS) forget(tab);
 	detailsPending.clear();
+}
+
+/** The pane without `tab`'s answer and what was selected in it. */
+function dropped(pane: Pane, tab: Tab): Pane {
+	if (tab === 'stats') return { ...pane, stats: undefined };
+	const next: Pane = { ...pane, results: { ...pane.results, [tab]: undefined } };
+	if (tab === 'unused') return { ...next, picked: [], morePages: [], nextOffset: undefined, handoffNote: undefined };
+	if (tab === 'explore') return { ...next, focus: undefined, section: 'details', drill: {}, exploreNote: undefined };
+	return next;
 }
 
 /** The directory queries run in: the picked project while the session stays where it was picked. */
@@ -442,29 +442,56 @@ function target(cwd: string): string {
 }
 
 /**
- * Runs the tab's query and caches the envelope. A result that lands after its
- * tab was dropped (refresh, a new path, the pane closing) is discarded. The
- * redraw is asked for once the envelope is cached.
+ * Starts what `pane`'s tab shows and does not hold yet: its query, or on
+ * Stats the stored counts. Called by the handler that wrote `pane`, with that
+ * write as `written`, before the write lands, so the redraw it brings already
+ * shows the tab pending; the answer is written only after it. A drawing never
+ * starts work: what it started could not write state.
  */
-async function runQuery($: EngineInterface, tab: QueryTab): Promise<void> {
-	const generation = generations.get(tab) ?? 0;
-	pending.add(tab);
-	let envelope: CodeIntelEnvelope;
-	try {
-		const cwd = sessionCwd ?? target(await $.session.cwd());
-		envelope = await codeIntel(
-			{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
-			codeFor(tab, depsDirection, depsPath),
-			{ cwd },
-		);
-	} catch (error) {
-		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+function launch($: EngineInterface, pane: Pane, written: Promise<unknown>): void {
+	const tab = pane.tab;
+	if (tab === 'stats') {
+		if (pane.stats === undefined && !historyReading) void readHistory($, written);
+		return;
 	}
-	if ((generations.get(tab) ?? 0) !== generation) return;
-	pending.delete(tab);
-	cache.set(tab, envelope);
-	if (tab === 'unused' && envelope.success) nextOffset = orphanPage(envelope.result).nextOffset;
-	$.ui.invalidate('ui.render');
+	if (pane.results[tab] !== undefined || pending.has(tab)) return;
+	if ((tab === 'deps' && pane.depsPath === '') || (tab === 'explore' && pane.query === '')) return;
+	void runQuery($, tab, pane, written);
+}
+
+/**
+ * Runs the tab's query and writes the envelope into the pane. A result that
+ * lands after its tab was dropped (refresh, a new path, the pane closing) is
+ * discarded. An error that lists project roots starts each one's picker read.
+ * Never rejects: an answer the state refuses leaves the tab without one, and
+ * a redraw takes its pending badge down, so Refresh asks again.
+ */
+async function runQuery($: EngineInterface, tab: QueryTab, pane: Pane, written: Promise<unknown>): Promise<void> {
+	const generation = generations.get(tab) ?? 0;
+	const current = (): boolean => (generations.get(tab) ?? 0) === generation;
+	pending.add(tab);
+	try {
+		let envelope: CodeIntelEnvelope;
+		try {
+			const cwd = pane.cwd ?? target(await $.session.cwd());
+			envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, codeFor(tab, pane), { cwd });
+		} catch (error) {
+			envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
+		}
+		await written;
+		if (!current()) return;
+		pending.delete(tab);
+		const nextOffset = tab === 'unused' && envelope.success ? { nextOffset: orphanPage(envelope.result).nextOffset } : {};
+		const next = await update($, PANE_STATE, (s) => (current() ? { ...s, results: { ...s.results, [tab]: envelope }, ...nextOffset } : s));
+		for (const root of envelope.error?.candidates ?? []) {
+			if (next.details[root] === undefined && !detailsPending.has(root)) void runDetail($, root);
+		}
+	} catch {
+		if (!current()) return;
+		pending.delete(tab);
+		// `pending` is this load's, not state: only a redraw shows the tab no longer waits.
+		$.ui.invalidate('ui.render');
+	}
 }
 
 /**
@@ -479,63 +506,82 @@ async function readStats($: EngineInterface): Promise<Snapshot> {
 	} catch {
 		// No timer: the stored counts are read as they are.
 	}
-	const session = sessionCounts();
+	// Unreadable, the session's counts show as none rather than holding the tab.
+	const session = await read($, ADOPTION).catch(() => NO_COUNTS);
 	try {
 		return { session, stored: await loadStats(await $.clock.now(), await $.store.keys(), (k) => $.store.get(k), (k) => $.store.delete(k)) };
 	} catch {
-		return { session, stored: undefined };
+		return { session };
 	}
 }
 
-/** Reads the Stats tab's counts; a read that lands after the tab was dropped is discarded. */
-async function readHistory($: EngineInterface): Promise<void> {
-	const read = (historyRead += 1);
-	history = 'reading';
+/**
+ * Reads the Stats tab's counts into the pane; a read that lands after the tab
+ * was dropped is discarded. Never rejects: counts the state refuses leave the
+ * tab showing the session's, and the next visit reads again.
+ */
+async function readHistory($: EngineInterface, written: Promise<unknown>): Promise<void> {
+	const mine = (historyRead += 1);
+	historyReading = true;
 	const snapshot = await readStats($);
-	if (historyRead !== read) return;
-	history = snapshot;
-	$.ui.invalidate('ui.render');
+	await written;
+	if (historyRead !== mine) return;
+	historyReading = false;
+	await update($, PANE_STATE, (s) => (historyRead === mine ? { ...s, stats: snapshot } : s)).catch(() => {
+		// `historyReading` is this load's, not state: only a redraw takes its badge down.
+		$.ui.invalidate('ui.render');
+	});
 }
 
-/** Reads one symbol's details, usages, impact and call graph; a result that lands after the explorer was dropped is discarded. */
-async function runDrill($: EngineInterface, id: string, symbolKind: string): Promise<void> {
+/**
+ * Reads one symbol's details, usages, impact and call graph; a result that
+ * lands after the explorer was dropped is discarded. Never rejects: a result
+ * the state refuses is dropped, and pressing the symbol again reads it again.
+ */
+async function runDrill($: EngineInterface, id: string, symbolKind: string, cwd: string | undefined, written: Promise<unknown>): Promise<void> {
 	drillPending.add(id);
 	let envelope: CodeIntelEnvelope;
 	try {
-		const cwd = sessionCwd ?? target(await $.session.cwd());
-		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, drillCode(id, symbolKind), { cwd });
+		const dir = cwd ?? target(await $.session.cwd());
+		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, drillCode(id, symbolKind), { cwd: dir });
 	} catch (error) {
 		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
 	}
+	await written;
 	if (!drillPending.delete(id)) return;
-	drill.set(id, envelope);
-	$.ui.invalidate('ui.render');
+	await update($, PANE_STATE, (s) => ({ ...s, drill: { ...s.drill, [id]: envelope } })).catch(() => undefined);
 }
 
-/** Reads the next page of unused exports; a page that lands after the tab was dropped is discarded. */
-async function loadMore($: EngineInterface): Promise<void> {
-	if (loadingMore || nextOffset === undefined) return;
+/**
+ * Reads the next page of unused exports; a page that lands after the tab was
+ * dropped is discarded. `loadingMore` is this load's, not state (a reload ends
+ * the read it stands for), so showing it takes a redraw of its own.
+ */
+async function loadMore($: EngineInterface, pane: Pane): Promise<void> {
+	if (loadingMore || pane.nextOffset === undefined) return;
 	const generation = generations.get('unused') ?? 0;
-	const code = orphanCode({ ...unusedFilter(), limit: 50, offset: nextOffset });
+	const code = orphanCode({ ...unusedFilter(pane.unusedKind), limit: 50, offset: pane.nextOffset });
 	loadingMore = true;
 	$.ui.invalidate('ui.render');
 	let envelope: CodeIntelEnvelope;
 	try {
-		const cwd = sessionCwd ?? target(await $.session.cwd());
+		const cwd = pane.cwd ?? target(await $.session.cwd());
 		envelope = await codeIntel({ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) }, code, { cwd });
 	} catch (error) {
 		envelope = { success: false, error: { code: 'MCP_CALL_FAILED', message: error instanceof Error ? error.message : String(error) } };
 	}
-	if ((generations.get('unused') ?? 0) !== generation) return;
+	const current = (): boolean => (generations.get('unused') ?? 0) === generation;
+	if (!current()) return;
 	loadingMore = false;
-	if (envelope.success) {
-		const page = orphanPage(envelope.result);
-		morePages = [...morePages, ...page.rows];
-		nextOffset = page.nextOffset;
-	} else {
-		handoffNote = 'Could not load more. Try again.';
-	}
-	$.ui.invalidate('ui.render');
+	const page = envelope.success ? orphanPage(envelope.result) : undefined;
+	await update($, PANE_STATE, (s) => {
+		if (!current()) return s;
+		if (page === undefined) return { ...s, handoffNote: 'Could not load more. Try again.' };
+		return { ...s, morePages: [...s.morePages, ...page.rows], nextOffset: page.nextOffset };
+	}).catch(() => {
+		// A page the state refuses is dropped; the redraw brings Load more back.
+		$.ui.invalidate('ui.render');
+	});
 }
 
 /**
@@ -560,9 +606,9 @@ function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderEleme
 			el.Box({
 				flexDirection: 'column',
 				children: [
-					el.Text({ bold: true, children: 'Next steps' }),
+					el.Text({ weight: 'semibold', children: 'Next steps' }),
 					...ex.steps.map((step, i) =>
-						el.Box({ flexDirection: 'row', columnGap: 1, children: [el.Text({ dimColor: true, children: `${i + 1}.` }), el.Text({ bold: true, children: step })] }),
+						el.Box({ flexDirection: 'row', columnGap: 1, children: [el.Text({ dimColor: true, children: `${i + 1}.` }), el.Text({ weight: 'semibold', children: step })] }),
 					),
 				],
 			}),
@@ -581,13 +627,17 @@ function errorView(el: ElementTable, ex: Explanation, tint: Scheme): RenderEleme
 		flexDirection: 'column',
 		gap: 1,
 		children: [
-			el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', forTheme(status('error'), tint)), el.Text({ bold: true, children: ex.title })] }),
+			el.Box({ flexDirection: 'row', columnGap: 1, children: [badge(el, '', forTheme(status('error'), tint)), el.Text({ weight: 'semibold', children: ex.title })] }),
 			el.Box({ flexDirection: 'column', gap: 1, paddingLeft: 2, children: under }),
 		],
 	});
 }
 
-/** Reads one project's capabilities for the picker; a result that lands after the pane closed is dropped. */
+/**
+ * Reads one project's capabilities for the picker; a result that lands after
+ * the pane closed is dropped. Never rejects: a result the state refuses is
+ * dropped, and the tab's Refresh reads it again.
+ */
 async function runDetail($: EngineInterface, root: string): Promise<void> {
 	detailsPending.add(root);
 	const envelope = await codeIntel(
@@ -596,11 +646,37 @@ async function runDetail($: EngineInterface, root: string): Promise<void> {
 		{ cwd: root },
 	);
 	if (!detailsPending.delete(root)) return;
-	details.set(root, envelope);
+	await update($, PANE_STATE, (s) => ({ ...s, details: { ...s.details, [root]: envelope } })).catch(() => undefined);
+}
+
+/**
+ * Starts again what an open pane still waits for, after a reload ended the
+ * work in flight: its tab's query or Stats read, each project the picker lists
+ * without its details, and the symbol the explorer drilled into without its answer.
+ */
+function resume($: EngineInterface, pane: Pane): void {
+	const written = Promise.resolve();
+	launch($, pane, written);
+	for (const envelope of Object.values(pane.results)) {
+		for (const root of envelope?.error?.candidates ?? []) {
+			if (pane.details[root] === undefined && !detailsPending.has(root)) void runDetail($, root);
+		}
+	}
+	const focus = pane.focus;
+	if (focus !== undefined && pane.drill[focus.id] === undefined && !drillPending.has(focus.id)) void runDrill($, focus.id, focus.kind, pane.cwd, written);
+	// What is in flight is this load's, not state: only a redraw shows it pending.
 	$.ui.invalidate('ui.render');
 }
 
+/**
+ * The `/constellation` command and its pane. A load starts the work in flight
+ * over; what the pane shows is in `$.state`, so a reload keeps it, and the
+ * load's `session.start` starts again what an open pane still waits for.
+ */
 export function registerCommand(on: On): void {
+	forgetPane();
+	chosen = undefined;
+
 	on('session.start', async ($, e, next) => {
 		const ports: OnboardingPorts = {
 			run: (argv, init) => $.process.run(argv, init),
@@ -613,11 +689,13 @@ export function registerCommand(on: On): void {
 			mcp: { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
 			reload: () => $.command.run({ command: 'reload-plugins' }),
 			toast: (text) => $.ui.toast(text),
-			invalidate: () => $.ui.invalidate('ui.render'),
+			band: () => read($, BAND),
+			setBand: (change) => update($, BAND, change),
 			log: async (text) => {
 				if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 			},
 		};
+		const publish: Publish = (view) => update($, FRESHNESS, () => view);
 		// A key the CLI stored is set before the session goes on, so the MCP server can start with it.
 		// A `-p` or SDK run skips the read-back: no one is at the prompt, and a login shell can take seconds.
 		let found: FoundKey | undefined;
@@ -633,6 +711,13 @@ export function registerCommand(on: On): void {
 			found = undefined;
 		}
 		const r = await next(e);
+		// A load starts the freshness indicator over (`registerFreshness` drops what it knew), so the line in
+		// `$.state`, the last load's or the last project's, goes; the ping below draws this project's again.
+		try {
+			if ((await read($, FRESHNESS)) !== null) await publish(null);
+		} catch {
+			// The line stays until the next comparison changes it.
+		}
 		// The project to ping and watch: the stored key's, else the session's when its key is set.
 		let root: string | null = null;
 		try {
@@ -644,13 +729,13 @@ export function registerCommand(on: On): void {
 		// With showFreshness off, a stored key's connection check still runs; nothing else does.
 		if (root !== null && (found !== undefined || showsFreshness())) {
 			const at = root;
-			const again = () => recheck(ports.run, ports.invalidate, ports.log);
+			const again = () => recheck(ports.run, publish, ports.log);
 			track(at);
 			try {
 				// Never await code_intel in session.start: the ping runs on a timer. Only a stored key's ping acts on
 				// AUTH_ERROR and the index button; either answer tells the freshness indicator what is indexed.
 				$.clock.after(0, () => {
-					const observe = (envelope: CodeIntelEnvelope) => void observeEnvelope(envelope, at, ports.run, ports.invalidate, ports.log).catch(() => undefined);
+					const observe = (envelope: CodeIntelEnvelope) => void observeEnvelope(envelope, at, ports.run, publish, ports.log).catch(() => undefined);
 					const pinged =
 						found !== undefined
 							? checkConnection(at, ports, observe)
@@ -670,6 +755,12 @@ export function registerCommand(on: On): void {
 			}
 		}
 		try {
+			// A reload keeps the pane up (`$.ui.panes` is the engine's record) but ended its work in flight.
+			if ((await $.ui.panes()).some((pane) => pane.id === PANE)) resume($, await read($, PANE_STATE));
+		} catch {
+			// The pane shows what it holds; Refresh asks again.
+		}
+		try {
 			await $.command.register({
 				name: COMMAND,
 				description: 'Constellation status, diagnose, deps, unused code, symbol explorer and code_intel usage stats',
@@ -677,7 +768,7 @@ export function registerCommand(on: On): void {
 				immediate: true,
 			});
 		} catch {
-			// Registration refused: the Markdown commands still work.
+			// Registration refused: the `/constellation:*` skills still work.
 		}
 		return r;
 	});
@@ -699,14 +790,12 @@ export function registerCommand(on: On): void {
 			}
 		}
 		const dir = target(cwd);
-		unusedKind = kind;
-		exploreQuery = query ?? '';
 		if (!draws && tab !== 'stats') {
 			if (tab === 'deps' && path === undefined) return { text: branded('Usage: /constellation deps <file>') };
 			if (tab === 'explore' && query === undefined) return { text: branded('Usage: /constellation explore <query>') };
 			const envelope = await codeIntel(
 				{ connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) },
-				codeFor(tab, 'dependencies', path ?? ''),
+				codeFor(tab, { direction: 'dependencies', depsPath: path ?? '', unusedKind: kind, query: query ?? '' }),
 				{ cwd: dir },
 			);
 			const summary = summarize(tab, envelope, { path, project: projectName(dir), query });
@@ -715,35 +804,43 @@ export function registerCommand(on: On): void {
 			const body = [...textLines(summary.lines), ...(meta === undefined ? [] : [meta])];
 			return { text: [branded(TAB_LABEL[tab]), ...body.map((l) => `- ${l.trim()}`)].join('\n') };
 		}
-		reset();
-		unusedKind = kind;
-		exploreQuery = query ?? '';
-		selected = tab;
-		depsPath = path ?? '';
-		sessionCwd = dir;
-		launchCwd = cwd;
+		let tint: Scheme;
 		try {
 			tint = scheme((await $.config.list()).find((r) => r.key === 'theme')?.value);
 		} catch {
 			tint = scheme(undefined);
 		}
+		const opened: Pane = { ...NO_PANE, tab, tint, depsPath: path ?? '', cwd: dir, launchCwd: cwd, unusedKind: kind, query: query ?? '' };
+		forgetPane();
+		const written = update($, PANE_STATE, () => opened).catch(() => undefined);
+		launch($, opened, written);
+		// The pane opens on what was written; an open pane redraws with the write.
+		await written;
 		await $.ui.open({ id: PANE, title: 'Constellation', focus: true, closeOnEscape: true });
-		$.ui.invalidate('ui.render');
 		return {};
 	});
 
 	on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e, next) => {
 		if (e.surface !== 'terminal' && e.surface !== 'desktop') return next(e);
 		const el = $.ui.resolve(e);
-		const envelope = selected === 'stats' ? undefined : cache.get(selected);
+		// Reading the pane and the counts while drawing subscribes this drawing: a later write draws it again.
+		const [p, counts] = await Promise.all([read($, PANE_STATE), read($, ADOPTION)]);
+		const { tab: selected, tint, depsPath, direction: depsDirection, cwd: sessionCwd, launchCwd, unusedKind, query: exploreQuery, section, handoffNote, exploreNote, nextOffset } = p;
+		const picked = new Set(p.picked);
+		const envelope = selected === 'stats' ? undefined : p.results[selected];
 		const needsPath = selected === 'deps' && depsPath === '';
 		const needsQuery = selected === 'explore' && exploreQuery === '';
-		if (selected === 'stats') {
-			if (history === undefined) void readHistory($);
-		} else if (envelope === undefined && !pending.has(selected) && !needsPath && !needsQuery) void runQuery($, selected);
 		const isPending = selected !== 'stats' && pending.has(selected);
 
-		const redraw = (): void => $.ui.invalidate('ui.render');
+		/**
+		 * Writes `change` into the pane's state, which draws it again. With `launches`, first starts what the
+		 * changed pane needs (as this drawing saw it), so the redraw already shows it pending.
+		 */
+		const act = (change: (pane: Pane) => Pane, launches = false): Promise<unknown> => {
+			const written = update($, PANE_STATE, change).catch(() => undefined);
+			if (launches) launch($, change(p), written);
+			return written;
+		};
 		// In a row that may be wider than the pane, the name and kind keep their width and a long location
 		// shortens in the middle, instead of every item shrinking and wrapping onto a second line.
 		const fixed = (children: RenderElement[]): RenderElement => el.Box({ flexDirection: 'row', columnGap: 1, flexShrink: 0, children });
@@ -762,24 +859,22 @@ export function registerCommand(on: On): void {
 				el.Box({ ...(key === undefined ? {} : { key }), flexDirection: 'row', children: cells.map((cell, i) => el.Box({ width: widths[i] ?? 'auto', children: [cell] })) });
 			return el.Box({
 				flexDirection: 'column',
-				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ bold: true, children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
+				children: [...(head === undefined ? [] : [line(head.map((h) => el.Text({ weight: 'semibold', children: h })))]), ...rows.map((r) => line(r.cells, r.key))],
 			});
 		};
 		// Label and value rows, the label dim: the Desktop form of rows padded into a label column.
 		const factTable = (rows: readonly (readonly [string, string])[]): RenderElement =>
 			boxTable(['25%', '75%'], rows.map(([label, value]) => ({ cells: [el.Text({ dimColor: true, children: label }), el.Text({ children: value })] })));
-		const showDeps = (path: string): void => {
-			depsPath = path;
-			drop('deps');
-			redraw();
+		const showDeps = (path: string): Promise<unknown> => {
+			forget('deps');
+			return act((s) => dropped({ ...s, depsPath: path }, 'deps'), true);
 		};
 		const accent = paint(palette.nebula, tint);
 		const pick = async (project: string): Promise<void> => {
 			const from = launchCwd ?? (await $.session.cwd());
 			chosen = { from, root: project };
-			sessionCwd = project;
-			for (const tab of TABS) drop(tab);
-			redraw();
+			for (const tab of TABS) forget(tab);
+			await act((s) => TABS.reduce(dropped, { ...s, cwd: project }), true);
 			try {
 				await $.store.set(pickKey(from), project);
 			} catch {
@@ -789,9 +884,8 @@ export function registerCommand(on: On): void {
 		const switchProject = async (): Promise<void> => {
 			const from = launchCwd ?? (await $.session.cwd());
 			chosen = undefined;
-			sessionCwd = from;
-			for (const tab of TABS) drop(tab);
-			redraw();
+			for (const tab of TABS) forget(tab);
+			await act((s) => TABS.reduce(dropped, { ...s, cwd: from }), true);
 			try {
 				await $.store.delete(pickKey(from));
 			} catch {
@@ -821,12 +915,11 @@ export function registerCommand(on: On): void {
 						{ value: 'dependents', label: 'Dependents (what imports this file)' },
 					],
 					value: depsDirection,
-					onSelect: (value) => {
+					onSelect: async (value) => {
 						if (value !== 'dependencies' && value !== 'dependents') return;
 						if (value === depsDirection) return;
-						depsDirection = value;
-						drop('deps');
-						redraw();
+						forget('deps');
+						await act((s) => dropped({ ...s, direction: value }, 'deps'), true);
 					},
 				}),
 			);
@@ -841,17 +934,16 @@ export function registerCommand(on: On): void {
 						...[...UNUSED_KINDS, ...(unusedKind === undefined || UNUSED_KINDS.includes(unusedKind) ? [] : [unusedKind])].map((k) => ({ value: k, label: k })),
 					],
 					value: unusedKind ?? ALL_KINDS,
-					onSelect: (value) => {
+					onSelect: async (value) => {
 						const chosenKind = value === ALL_KINDS ? undefined : value;
 						if (chosenKind === unusedKind) return;
-						unusedKind = chosenKind;
-						drop('unused');
-						redraw();
+						forget('unused');
+						await act((s) => dropped({ ...s, unusedKind: chosenKind }, 'unused'), true);
 					},
 				}),
 			);
 		}
-		const hit = focusHit;
+		const hit = p.focus;
 		if (selected === 'explore' && hit === undefined) {
 			body.push(
 				el.Input({
@@ -861,24 +953,18 @@ export function registerCommand(on: On): void {
 					placeholder: 'name',
 					submitLabel: 'search',
 					autoFocus: true,
-					onSubmit: (value) => {
-						exploreQuery = value.trim();
-						drop('explore');
-						redraw();
+					onSubmit: async (value) => {
+						forget('explore');
+						await act((s) => dropped({ ...s, query: value.trim() }, 'explore'), true);
 					},
 				}),
 			);
 		}
 		const firstPage = selected === 'unused' && envelope?.success === true ? orphanPage(envelope.result) : undefined;
-		const loaded = firstPage === undefined ? [] : [...firstPage.rows, ...morePages];
+		const loaded = firstPage === undefined ? [] : [...firstPage.rows, ...p.morePages];
 		const pickedRows = loaded.filter((r) => picked.has(r.symbolId));
-		const toggle = (ids: readonly string[], select: boolean): void => {
-			for (const id of ids) {
-				if (select) picked.add(id);
-				else picked.delete(id);
-			}
-			redraw();
-		};
+		const toggle = (ids: readonly string[], select: boolean): Promise<unknown> =>
+			act((s) => ({ ...s, picked: select ? [...new Set([...s.picked, ...ids])] : s.picked.filter((id) => !ids.includes(id)) }));
 		if (firstPage !== undefined) {
 			if (loaded.length === 0) {
 				body.push(el.Text({ dimColor: true, children: 'No unused exports found' }));
@@ -891,7 +977,7 @@ export function registerCommand(on: On): void {
 								flexDirection: 'row',
 								columnGap: 2,
 								children: [
-									el.Text({ bold: true, children: `${picked.size} selected` }),
+									el.Text({ weight: 'semibold', children: `${picked.size} selected` }),
 									el.Text({ dimColor: true, children: `of ${grouped(firstPage.total ?? loaded.length)} unused exports` }),
 									el.Button({ key: 'select-all', label: 'Select all', hotkey: 'a', plain: true, onPress: () => toggle(loaded.map((r) => r.symbolId), true) }),
 								],
@@ -955,32 +1041,32 @@ export function registerCommand(on: On): void {
 					);
 				}
 				if (nextOffset !== undefined && !loadingMore) {
-					body.push(el.Button({ key: 'load-more', label: 'Load more', plain: true, onPress: () => loadMore($) }));
+					body.push(el.Button({ key: 'load-more', label: 'Load more', plain: true, onPress: () => loadMore($, p) }));
 				}
 				if (loadingMore) body.push(badge(el, 'loading more', forTheme(status('pending'), tint)));
 			}
 		} else if (selected === 'stats') {
 			// Every row from one snapshot; while it is being read, the session's counts as they stand.
-			const snapshot = typeof history === 'object' ? history : undefined;
+			const snapshot = p.stats;
 			if (!grid) {
 				body.push(
 					boxTable(
 						['24%', '19%', '19%', '19%', '19%'],
-						statsCells(snapshot?.session ?? sessionCounts(), snapshot?.stored).map(({ label, figures: f }) => ({
+						statsCells(snapshot?.session ?? counts, snapshot?.stored).map(({ label, figures: f }) => ({
 							key: `stats:${label}`,
 							cells: [
 								el.Text({ dimColor: true, children: label }),
 								el.Text({ children: f.calls }),
 								el.Text({ children: f.symbol }),
 								el.Text({ dimColor: true, children: f.literal }),
-								el.Text({ bold: true, children: f.share }),
+								el.Text({ weight: 'semibold', children: f.share }),
 							],
 						})),
 						['', 'code_intel calls', 'Symbol-like', 'Literal', SHARE_LABEL],
 					),
 				);
 			} else {
-				for (const row of statRows(snapshot?.session ?? sessionCounts(), snapshot?.stored)) {
+				for (const row of statRows(snapshot?.session ?? counts, snapshot?.stored)) {
 					const f = figures(row.counts);
 					body.push(
 						el.Box({
@@ -1002,7 +1088,7 @@ export function registerCommand(on: On): void {
 												el.Box({
 													flexDirection: 'row',
 													columnGap: 1,
-													children: [el.Text({ bold: true, children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
+													children: [el.Text({ weight: 'semibold', children: f.share }), el.Text({ dimColor: true, children: SHARE_LABEL })],
 												}),
 											],
 										}),
@@ -1014,7 +1100,9 @@ export function registerCommand(on: On): void {
 					);
 				}
 			}
-			if (snapshot === undefined) body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			if (snapshot === undefined) {
+				if (historyReading) body.push(badge(el, 'reading the stored counts', forTheme(status('pending'), tint)));
+			}
 			else if (snapshot.stored === undefined) body.push(el.Text({ dimColor: true, children: UNREAD_NOTE }));
 			body.push(el.Text({ dimColor: true, children: SHARE_NOTE }));
 		} else if (selected === 'explore' && summary !== undefined && summary.explanation === undefined) {
@@ -1041,11 +1129,10 @@ export function registerCommand(on: On): void {
 										key: `hit:${h.id}`,
 										label: h.name,
 										plain: true,
-										onPress: () => {
-											focusHit = h;
-											section = 'details';
-											if (!drill.has(h.id) && !drillPending.has(h.id)) void runDrill($, h.id, h.kind);
-											redraw();
+										onPress: async () => {
+											const written = act((s) => ({ ...s, focus: h, section: 'details' }));
+											if (p.drill[h.id] === undefined && !drillPending.has(h.id)) void runDrill($, h.id, h.kind, sessionCwd, written);
+											await written;
 										},
 									}),
 									badge(el, '', forTheme(kind(h.kind), tint)),
@@ -1057,7 +1144,7 @@ export function registerCommand(on: On): void {
 				}
 				body.push(...stamp(envelope));
 			} else {
-				const drilled = drill.get(hit.id);
+				const drilled = p.drill[hit.id];
 				const result = isRecord(drilled?.result) ? drilled.result : {};
 				const aliasNote = el.Text({ dimColor: true, children: 'Callers importing through path aliases or export * barrels may be missing.' });
 				const sections: [Section, string][] = [
@@ -1080,7 +1167,7 @@ export function registerCommand(on: On): void {
 										flexDirection: 'row',
 										columnGap: 1,
 										children: [
-											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ bold: true, children: hit.name })]),
+											fixed([badge(el, '', forTheme(kind(hit.kind), tint)), el.Text({ weight: 'semibold', children: hit.name })]),
 											place(where(hit)),
 											fixed([
 												el.Button({
@@ -1090,8 +1177,7 @@ export function registerCommand(on: On): void {
 													dimColor: true,
 													onPress: async (press) => {
 														const { isCopied } = await $.ui.copy({ text: where(hit), surface: press.surface });
-														exploreNote = isCopied ? 'Copied' : 'Could not copy';
-														redraw();
+														await act((s) => ({ ...s, exploreNote: isCopied ? 'Copied' : 'Could not copy' }));
 													},
 												}),
 											]),
@@ -1107,10 +1193,7 @@ export function registerCommand(on: On): void {
 									el.Button({
 										key: `section-${name}`,
 										...choice(name === section, label),
-										onPress: () => {
-											section = name;
-											redraw();
-										},
+										onPress: () => act((s) => ({ ...s, section: name })),
 									}),
 								),
 							}),
@@ -1162,7 +1245,7 @@ export function registerCommand(on: On): void {
 												const tree = callTree(result['calls']);
 												return tree.length === 0
 													? [el.Text({ dimColor: true, children: 'No callers or callees found' })]
-													: tree.map((l) => el.Text({ ...(l.depth === 0 ? { bold: true } : {}), children: `${'  '.repeat(l.depth)}${l.text}` }));
+													: tree.map((l) => el.Text({ ...(l.depth === 0 ? { weight: 'semibold' } : {}), children: `${'  '.repeat(l.depth)}${l.text}` }));
 											})(),
 										}),
 						],
@@ -1192,7 +1275,6 @@ export function registerCommand(on: On): void {
 				if (project !== undefined) {
 					// The tabs are hidden while picking, so the digits are free for the rows.
 					const n = row++;
-					if (!details.has(project) && !detailsPending.has(project)) void runDetail($, project);
 					body.push(
 						el.Box({
 							key: `row:${project}`,
@@ -1208,7 +1290,7 @@ export function registerCommand(on: On): void {
 									hover: accent === undefined ? { bold: true } : { bold: true, color: accent },
 									onPress: () => pick(project),
 								}),
-								el.Text({ dimColor: true, children: projectDetail(details.get(project)) }),
+								el.Text({ dimColor: true, children: projectDetail(p.details[project]) }),
 							],
 						}),
 					);
@@ -1231,7 +1313,7 @@ export function registerCommand(on: On): void {
 				} else if (item.badge?.kind === 'kind') {
 					body.push(badge(el, item.text, forTheme(kind(item.badge.value), tint)));
 				} else if (item.heading) {
-					body.push(el.Text({ bold: true, children: item.text }));
+					body.push(el.Text({ weight: 'semibold', children: item.text }));
 				} else {
 					body.push(el.Text(item.dim ? { dimColor: true, children: item.text } : { children: item.text }));
 				}
@@ -1255,10 +1337,11 @@ export function registerCommand(on: On): void {
 			label: 'Close',
 			role: 'dismiss' as const,
 			onPress: async () => {
-				// The ui.close hook below sees Esc and unload, not this plugin's own
-				// close from a callback, so the button clears the state itself.
+				// The ui.close hook below sees the person's close (Esc), not this plugin's
+				// own close from a callback, so the button clears the state itself.
 				await $.ui.close({ id: PANE });
-				reset();
+				forgetPane();
+				await act(() => NO_PANE);
 			},
 		};
 		const tabs = TABS.map((tab, index) =>
@@ -1266,10 +1349,7 @@ export function registerCommand(on: On): void {
 				key: `tab-${tab}`,
 				...choice(tab === selected, TAB_LABEL[tab]),
 				hotkey: String(index + 1),
-				onPress: () => {
-					selected = tab;
-					redraw();
-				},
+				onPress: () => act((s) => ({ ...s, tab }), true),
 			}),
 		);
 
@@ -1300,7 +1380,7 @@ export function registerCommand(on: On): void {
 								flexDirection: 'row',
 								columnGap: 1,
 								children: [
-									...(project === undefined ? [] : [el.Text({ bold: true, children: project })]),
+									...(project === undefined ? [] : [el.Text({ weight: 'semibold', children: project })]),
 									...(project !== undefined && meta !== undefined ? [el.Text({ dimColor: true, children: '·' })] : []),
 									...(meta === undefined ? [] : [el.Text({ dimColor: true, children: meta })]),
 									...((project !== undefined || meta !== undefined) && canSwitch ? [el.Text({ dimColor: true, children: '·' })] : []),
@@ -1330,11 +1410,7 @@ export function registerCommand(on: On): void {
 										{
 											key: 'clear',
 											label: 'Clear',
-											onPress: () => {
-												picked.clear();
-												handoffNote = undefined;
-												redraw();
-											},
+											onPress: () => act((s) => ({ ...s, picked: [], handoffNote: undefined })),
 										},
 										{
 											key: 'handoff',
@@ -1345,10 +1421,10 @@ export function registerCommand(on: On): void {
 												const { isFilled } = await $.prompt.fill({ text });
 												if (isFilled) {
 													await $.ui.close({ id: PANE });
-													reset();
+													forgetPane();
+													await act(() => NO_PANE);
 												} else {
-													handoffNote = 'Could not fill the prompt box (a dialog may be open). Close it and try again.';
-													redraw();
+													await act((s) => ({ ...s, handoffNote: 'Could not fill the prompt box (a dialog may be open). Close it and try again.' }));
 												}
 											},
 										},
@@ -1362,12 +1438,7 @@ export function registerCommand(on: On): void {
 											key: 'back',
 											label: 'Back',
 											hotkey: 'b',
-											onPress: () => {
-												focusHit = undefined;
-												section = 'details';
-												exploreNote = undefined;
-												redraw();
-											},
+											onPress: () => act((s) => ({ ...s, focus: undefined, section: 'details', exploreNote: undefined })),
 										},
 										{
 											key: 'ask-claude',
@@ -1376,10 +1447,10 @@ export function registerCommand(on: On): void {
 												const { isFilled } = await $.prompt.fill({ text: askText(hit) });
 												if (isFilled) {
 													await $.ui.close({ id: PANE });
-													reset();
+													forgetPane();
+													await act(() => NO_PANE);
 												} else {
-													exploreNote = 'Could not fill the prompt box (a dialog may be open). Close it and try again.';
-													redraw();
+													await act((s) => ({ ...s, exploreNote: 'Could not fill the prompt box (a dialog may be open). Close it and try again.' }));
 												}
 											},
 										},
@@ -1393,8 +1464,8 @@ export function registerCommand(on: On): void {
 									label: 'Refresh',
 									hotkey: 'r',
 									onPress: () => {
-										drop(selected);
-										redraw();
+										forget(selected);
+										return act((s) => dropped(s, s.tab), true);
 									},
 								}),
 						...(grid ? [el.Text({ dimColor: true, children: keys })] : []),
@@ -1404,9 +1475,12 @@ export function registerCommand(on: On): void {
 		});
 	});
 
-	on('ui.close', { id: PANE }, async (_$, e, next) => {
+	// A close other than an unload. An unload never runs this: the engine drops the pane before hooks hear of it and
+	// skips its opener's, and a reload keeps an open pane up, with its state.
+	on('ui.close', { id: PANE }, async ($, e, next) => {
 		const r = await next(e);
-		reset();
+		forgetPane();
+		await update($, PANE_STATE, () => NO_PANE).catch(() => undefined);
 		return r;
 	});
 }

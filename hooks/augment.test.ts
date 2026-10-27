@@ -66,6 +66,7 @@ function world(
 		return { value: await answer() };
 	});
 	on('turn.start', (_, e) => ({ turnId: e.turnId }));
+	on('session.end', (_, e) => ({ sessionId: e.sessionId }));
 	on('classic.PreToolUse', () => ({}));
 	on('tool.call', () => beneath);
 	return { clock, codes };
@@ -168,9 +169,8 @@ describe('search result augment', () => {
 		const { clock, codes } = world(on, {
 			answer: () => envelope(fail ? { success: false, error: { code: 'API_UNREACHABLE' } } : { success: true, result: FOUND }),
 		});
-		on('classic.SessionStart', () => ({}));
 		expect(await $.tool.call(SEARCH)).toEqual(BENEATH);
-		await $.classic.SessionStart({ source: 'clear' });
+		await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } });
 		fail = false;
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 		await clock.advance(FAILURE_BACKOFF_MS);
@@ -199,9 +199,8 @@ describe('search result augment', () => {
 
 	test('/clear lets a symbol be shown again', QUIET, async ($, on) => {
 		world(on);
-		on('classic.SessionStart', () => ({}));
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
-		await $.classic.SessionStart({ source: 'clear' });
+		await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } });
 		expect((await $.tool.call(SEARCH)).context).toEqual([LINE]);
 	});
 

@@ -1,7 +1,10 @@
 ---
 description: Analyze dependencies for a file or symbol
 argument-hint: "<file-path> [--reverse]"
+arguments: path flag
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
+disable-model-invocation: true
+disallowed-tools: Skill
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**
@@ -9,19 +12,19 @@ allowed-tools: mcp__plugin_constellation_constellation__code_intel
 Analyze dependencies for the specified file.
 
 **Arguments:**
-- $1: File path (required)
-- $2: Optional "--reverse" or "-r" flag to show what depends ON this file
+- $path: File path (required)
+- $flag: Optional "--reverse" or "-r" flag to show what depends ON this file
 
 If no file path is provided, ask the user what file they want to analyze.
 
-**For dependencies (default, no --reverse flag):**
+**For dependencies (default, when $flag is not "--reverse" or "-r"):**
 
 Call the `mcp__plugin_constellation_constellation__code_intel` tool with this code parameter:
 
 ```javascript
 const [deps, circles] = await Promise.all([
-  api.getDependencies({ filePath: "$1", depth: 2, includePackages: true }),
-  api.findCircularDependencies({ filePath: "$1" })
+  api.getDependencies({ filePath: "$path", depth: 2, includePackages: true }),
+  api.findCircularDependencies({ filePath: "$path" })
 ]);
 return { dependencies: deps, circularDependencies: circles };
 ```
@@ -43,12 +46,12 @@ Cycles       ✓ none
 3. **External**: the packages used
 4. **Cycles**: `✓ none`, or for each cycle found `✗ <severity> · a.ts ▸ b.ts ▸ a.ts` (the severity and the cycle path)
 
-**For dependents (with --reverse flag):**
+**For dependents (when $flag is "--reverse" or "-r"):**
 
 Call the `mcp__plugin_constellation_constellation__code_intel` tool with this code parameter:
 
 ```javascript
-const result = await api.getDependents({ filePath: "$1", depth: 2 });
+const result = await api.getDependents({ filePath: "$path", depth: 2 });
 return result;
 ```
 

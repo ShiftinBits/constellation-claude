@@ -1,13 +1,8 @@
+import type { ConstellationHit } from '../types';
 import { isRecord, num } from './lib';
 
 /** One symbol a search found, as the explorer lists and drills into it. */
-export type Hit = {
-	id: string;
-	name: string;
-	kind: string;
-	filePath: string;
-	line?: number;
-};
+export type Hit = ConstellationHit;
 
 /** What the impact section shows, narrowed from an `impactAnalysis` result. */
 export type ImpactView = {

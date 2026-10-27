@@ -1,13 +1,14 @@
 {
 	"name": "constellation",
 	"displayName": "Constellation",
-	"version": "1.3.3",
+	"version": "1.4.0",
 	"description": "Upgrade Claude from text search to code understanding.",
 	"author": {
 		"name": "ShiftinBits Inc.",
 		"email": "hello@shiftinbits.com",
 		"url": "https://shiftinbits.com"
 	},
+	"types": "./types/index.d.ts",
 	"homepage": "https://constellationdev.io",
 	"repository": "https://github.com/ShiftinBits/constellation-claude",
 	"license": "AGPL-3.0",
@@ -43,14 +44,16 @@
 		"impactGate": {
 			"type": "string",
 			"title": "Impact gate",
-			"description": "What happens before Claude edits a high-impact file. off does nothing; dialog asks you before an auto-approved edit to a high-impact file; native sends that edit to Claude Code's own permission prompt; require-analysis refuses Claude's first edit to such a file once, with the impact report, unless it already analyzed the file's impact with code_intel; the retry goes through (works headless and in CI).",
-			"default": "off"
+			"description": "What happens before Claude edits a high-impact file. off does nothing; ask sends the first edit to each such file to Claude Code's permission prompt with the impact as the reason, and once you approve one, later edits to that file are Claude Code's own decision (dialog and native are earlier names for ask); require-analysis refuses Claude's first edit to such a file once, with the impact report, unless it already analyzed the file's impact with code_intel; the retry goes through (works headless and in CI).",
+			"default": "off",
+			"options": ["off", "ask", "require-analysis", "dialog", "native"]
 		},
 		"impactThreshold": {
 			"type": "string",
 			"title": "Impact gate threshold",
 			"description": "The lowest impact level the gate acts on: high, or only critical.",
-			"default": "high"
+			"default": "high",
+			"options": ["high", "critical"]
 		},
 		"turnSummary": {
 			"type": "boolean",
@@ -80,7 +83,8 @@
 			"type": "string",
 			"title": "PR impact section",
 			"description": "Before Claude runs gh pr create, compute the branch's impact (changed files, downstream dependents, affected tests, exported symbols in changed files). require refuses the first attempt per branch once, with the section, until the PR body has an ## Impact heading; inform lets the command run and logs the section; off does nothing.",
-			"default": "inform"
+			"default": "inform",
+			"options": ["require", "inform", "off"]
 		}
 	}
 }

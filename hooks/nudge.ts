@@ -1,39 +1,19 @@
+import { atom, update } from 'claude-code';
 import type { On } from 'claude-code';
-import { background, noteSearch, save, showsAdoption } from './adoption';
+import { ADOPTION_SHAPE, background, counter, NO_COUNTS, noteSearch, save } from './adoption';
 import { agentKey, hasNudgeLeft, MAIN, spendNudge, usedCodeIntelThisTurn } from './budget';
 import { searchTarget } from './classify';
 import { isConfigured, projectRoot } from './lib';
 import { branded } from './theme';
 
-/** Added to the model's context when a session or a subagent starts. */
-export const SESSION_TEXT =
-	'You have access to the code_intel source code intelligence tool, this should be your preferred tool for searching or navigating the code base (finding definitions or references, impact analysis, architecture details, etc.). Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.';
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
 
 /** Added to the model's context with a search tool call's result. */
 export const REMINDER_TEXT = branded(
 	'Use the code_intel tool before other tools for searching or navigating the codebase. Other search tools (e.g. grep, glob, awk, rg) should be used for literal text search or as a fallback.',
 );
 
-type WithContext = { additionalContext?: string[] };
-
-/** `result` with `text` appended to its context, whatever decision it already carries. */
-function withContext<R extends WithContext>(result: R, text: string): R {
-	return { ...result, additionalContext: [...(result.additionalContext ?? []), text] };
-}
-
 export function registerNudges(on: On): void {
-	on('classic.SessionStart', async ($, e, next) => {
-		const r = await next(e);
-		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
-		return withContext(r, SESSION_TEXT);
-	});
-
-	on('classic.SubagentStart', async ($, e, next) => {
-		const r = await next(e);
-		if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return r;
-		return withContext(r, SESSION_TEXT);
-	});
-
 	// On `tool.call`, not `classic.PreToolUse`: adding context means reading what `next` resolved to,
 	// and a hook on a permission event has to return that unread.
 	on('tool.call', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
@@ -49,12 +29,13 @@ export function registerNudges(on: On): void {
 		// It runs in the background, so the search's answer waits on neither the walk nor the store.
 		if (isSearch && next.origin.plugin === 'engine') {
 			const isMain = agentKey(e) === MAIN;
+			const count = counter();
 			background(async () => {
 				if (!(await inProject())) return;
-				const counted = noteSearch(isMain, symbolLike);
-				// A literal search changes nothing the spinner shows.
-				if (symbolLike && showsAdoption()) $.ui.invalidate('ui.render');
-				await save(counted, {
+				const note = noteSearch(isMain, symbolLike);
+				// The state write redraws the spinner and the Stats tab; the store keeps the day's counts, whatever the write did.
+				await update($, ADOPTION, (b) => count(b, note)).catch(() => undefined);
+				await save(note, {
 					now: () => $.clock.now(),
 					sessionId: () => $.session.id(),
 					get: (k) => $.store.get(k),

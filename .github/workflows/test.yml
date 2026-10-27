@@ -18,14 +18,18 @@ concurrency:
 
 jobs:
   test:
-    name: Build, test and validate
+    name: Build, test and validate (Claude Code ${{ matrix.CLAUDE_CODE_VERSION }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor, which the plugin needs (2.1.304 or later), and the latest
+        # release, the one users run: a change in the mods runtime, its test
+        # kit or its types shows up there first.
+        CLAUDE_CODE_VERSION: ["2.1.304", "latest"]
     env:
-      # The latest release, the one users run: a change in the mods runtime,
-      # its test kit or its types shows up here first. The plugin needs
-      # 2.1.287 or later.
-      CLAUDE_CODE_VERSION: "latest"
+      CLAUDE_CODE_VERSION: ${{ matrix.CLAUDE_CODE_VERSION }}
       DISABLE_AUTOUPDATER: "1"
     steps:
       - name: Checkout
@@ -44,14 +48,17 @@ jobs:
       - name: "Test: run the mod tests"
         run: claude plugin test .
 
-      # Validate. The repository is a marketplace and a plugin, and validate
-      # reads one manifest per run: the root resolves to the marketplace
-      # manifest, and the plugin manifest run also checks the hooks module.
-      - name: "Validate: marketplace manifest (strict)"
+      # Validate. The repository is a marketplace and a plugin. Since 2.1.289,
+      # validating a directory that holds both manifests also validates the
+      # plugin and its components, the hooks module included.
+      - name: "Validate: marketplace, plugin and hooks module (strict)"
         run: claude plugin validate --strict .
 
-      - name: "Validate: plugin manifest and hooks module (strict)"
-        run: claude plugin validate --strict .claude-plugin/plugin.json
+      # The directory profile is newer than the floor, so only the latest leg
+      # runs it.
+      - name: "Validate: directory profile (strict)"
+        if: matrix.CLAUDE_CODE_VERSION == 'latest'
+        run: claude plugin validate --profile directory --strict .
 
       - name: "Validate: no color literals outside hooks/theme.ts"
         run: |

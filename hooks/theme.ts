@@ -42,7 +42,7 @@ export const rgb = {
 export type Tone = {
 	color?: string;
 	dimColor?: boolean;
-	bold?: boolean;
+	weight?: 'semibold';
 	word: string;
 	glyph: string;
 };
@@ -78,7 +78,7 @@ const RISK: Readonly<Record<string, Tone>> = {
 	low: { ...OK, word: 'LOW' },
 	medium: { ...WARNING, word: 'MEDIUM' },
 	high: { ...ERROR, word: 'HIGH' },
-	critical: { ...ERROR, bold: true, word: 'CRITICAL' },
+	critical: { ...ERROR, weight: 'semibold', word: 'CRITICAL' },
 };
 
 const KIND: Readonly<Record<string, string>> = {
@@ -200,7 +200,7 @@ function textProps(tone: Tone): TextProps {
 	const props: TextProps = {};
 	if (tone.color !== undefined) props.color = tone.color;
 	if (tone.dimColor) props.dimColor = true;
-	if (tone.bold) props.bold = true;
+	if (tone.weight) props.weight = tone.weight;
 	return props;
 }
 
@@ -308,7 +308,7 @@ function gradientLine(el: ElementTable, text: string, width: number, to: Scheme,
 		for (let i = start; i < end; i += RUN) {
 			const color = gradientAt(i / (width - 1), to);
 			const chunk = chars.slice(i, Math.min(i + RUN, end)).join('');
-			runs.push(el.Text({ ...(color === undefined ? {} : { color }), ...(strong ? { bold: true } : {}), children: chunk }));
+			runs.push(el.Text({ ...(color === undefined ? {} : { color }), ...(strong ? { weight: 'semibold' } : {}), children: chunk }));
 		}
 	}
 	return el.Text({ wrap: 'truncate', children: runs });
@@ -417,5 +417,5 @@ export function compactBanner(el: ElementTable, to: Scheme): RenderElement {
 		const color = gradientAt(i / (chars.length - 1), to);
 		return el.Text(color === undefined ? { children: ch } : { color, children: ch });
 	});
-	return el.Text({ bold: true, children: runs });
+	return el.Text({ weight: 'semibold', children: runs });
 }

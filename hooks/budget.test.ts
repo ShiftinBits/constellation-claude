@@ -1,10 +1,12 @@
-import type { On, PluginOptions } from 'claude-code';
+import { atom, read, update } from 'claude-code';
+import type { On, PluginOptions, StateDollar } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
-import { registerAdoption, sessionCounts, settled, total } from './adoption';
+import { ADOPTION_SHAPE, NO_COUNTS, registerAdoption, settled, total } from './adoption';
 import { registerBudget } from './budget';
-import { freshnessLine, registerFreshness, track } from './freshness';
+import { registerDescribe } from './describe';
+import { FRESHNESS_SHAPE, freshnessText, registerFreshness, track } from './freshness';
 import { collectEvidence, fileRisk, hasEvidence, resetRiskCache, type RiskPort } from './risk';
-import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { REMINDER_TEXT, registerNudges } from './nudge';
 import { registerOnboarding } from './onboarding';
 import { registerSession } from './session';
 import { BRAND } from './theme';
@@ -56,11 +58,40 @@ function shown(tree: unknown): string {
 	return shown(Reflect.get(Reflect.get(tree, 'props') ?? {}, 'children'));
 }
 
-/** How many times a handler asked for a redraw. */
-let invalidations = 0;
+/** `$.state` over a `Map`, as the host keeps it: each value with a version, a write that misses on a stale `ifVersion`, and the keys written. */
+function fakeState() {
+	const values = new Map<string, { value: unknown; version: number }>();
+	const written: string[] = [];
+	const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
+	return {
+		written,
+		clear: () => {
+			values.clear();
+			written.length = 0;
+		},
+		get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
+		set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+			const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
+			if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
+			values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
+			written.push(ref.key);
+			return { isSet: true, version: held.version + 1 };
+		},
+	};
+}
+
+/** The values the handlers keep in `$.state`; each write redraws what reads it. */
+const state = fakeState();
+/** How many times the handlers wrote the state key `key`, each a redraw of what draws it. */
+const writes = (key: string): number => state.written.filter((k) => k === key).length;
+
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /** The session's access key as `$.env.get` answers it. */
 let sessionKey: string | undefined = KEY;
+/** Whether `$.session.cwd` rejects, as a host that cannot answer it does. */
+let cwdFails = false;
 
 /** The git commands the handlers ran, and the commit HEAD is at. */
 const gitRuns: string[][] = [];
@@ -72,11 +103,16 @@ const HEAD = '0123456789abcdef0123456789abcdef01234567';
 
 const $ = {
 	env: { get: async () => sessionKey },
-	session: { cwd: async () => PROJECT, surfaces: async () => surfaces, id: async () => 'session-1' },
-	ui: {
-		invalidate: () => {
-			invalidations += 1;
+	session: {
+		cwd: async () => {
+			if (cwdFails) throw new Error('session.cwd unavailable');
+			return PROJECT;
 		},
+		surfaces: async () => surfaces,
+		id: async () => 'session-1',
+	},
+	state,
+	ui: {
 		resolve: () => EL,
 		log: (text: string) => void logLines.push(text),
 	},
@@ -104,7 +140,8 @@ const $ = {
 };
 
 /**
- * The budget and nudge handlers as one hooks module registers them, raised
+ * The budget, nudge and describe handlers (the main loop's `turn.start` is
+ * describe's) as one hooks module registers them, raised
  * directly, so each test starts from a budget this module instance can read.
  */
 function load(options: PluginOptions) {
@@ -118,10 +155,12 @@ function load(options: PluginOptions) {
 	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
+	registerDescribe(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerOnboarding(capture as unknown as On);
 	registerFreshness(capture as unknown as On, options);
-	invalidations = 0;
+	state.clear();
+	cwdFails = false;
 	gitRuns.length = 0;
 	configReads = 0;
 	surfaces = ['terminal'];
@@ -147,12 +186,13 @@ function load(options: PluginOptions) {
 
 	let calls = 0;
 	return {
-		turn: (turnId: string) => raise('turn.start', { text: '', turnId }),
+		turn: (turnId: string, agentId?: string) => raise('turn.start', { text: '', turnId, agentId }),
 		codeIntel: (agentId?: string) => raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId }),
 		/** A code_intel call running `code` for `agentId` in `cwd` (the session's when absent), raised by `origin`, over a bottom that answers `answer`. */
 		program: (agentId: string, code: string, answer: Answer, origin = ENGINE, cwd?: string) =>
 			raise('tool.call', { tool: CODE_INTEL, tool_use_id: 'u', agentId, code, ...(cwd === undefined ? {} : { cwd }) }, async () => answer, origin),
-		sessionStart: (source: string) => raise('classic.SessionStart', { source }),
+		/** The session ending for `reason`, as `/clear` (`clear`) or `/resume` and `/branch` (`resume`) raise it. */
+		sessionEnd: (reason: string) => raise('session.end', { reason, sessionId: 'session-1', resume: { id: 'session-1' } }),
 		/** The band above the prompt as drawn, or the marker beneath when it passes. */
 		/** The raw tree the band returns over a `bottom` that draws `beneath`, with the survey flag as given. */
 		draw: (beneath: object = { type: 'Text', props: { children: 'beneath' } }, hasSurvey = false) =>
@@ -225,6 +265,26 @@ describe('nudge budget', () => {
 		expect(await m.search()).toBeUndefined();
 	});
 
+	test('a subagent turn start does not replace the main conversation turn', async () => {
+		const m = load({ nudgeLimit: 2 });
+		await m.turn('t1');
+		await m.turn('sub-turn', 'sub');
+		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+		await m.turn('sub-turn-2', 'sub');
+		expect(await m.search()).toBeUndefined();
+	});
+
+	test('a main turn whose working directory cannot be read is still recorded', async () => {
+		const m = load({ nudgeLimit: 2 });
+		cwdFails = true;
+		expect(await m.turn('t1')).toEqual({});
+		cwdFails = false;
+		expect(await m.search()).toEqual(REMINDER);
+		await m.codeIntel();
+		expect(await m.search()).toBeUndefined();
+	});
+
 	test('a code_intel call outside any turn silences nothing', async () => {
 		const m = load({ nudgeLimit: 2 });
 		await m.codeIntel();
@@ -232,23 +292,23 @@ describe('nudge budget', () => {
 		expect(await m.search()).toEqual(REMINDER);
 	});
 
-	for (const source of ['clear', 'resume', 'fork']) {
-		test(`SessionStart from ${source} resets the budget`, async () => {
+	for (const reason of ['clear', 'resume']) {
+		test(`a session ending with ${reason} resets the budget`, async () => {
 			const m = load({ nudgeLimit: 1 });
 			await m.turn('t1');
 			expect(await m.search()).toEqual(REMINDER);
 			expect(await m.search()).toBeUndefined();
-			await m.sessionStart(source);
+			await m.sessionEnd(reason);
 			expect(await m.search()).toEqual(REMINDER);
 		});
 	}
 
-	for (const source of ['startup', 'compact']) {
-		test(`SessionStart from ${source} keeps the budget`, async () => {
+	for (const reason of ['prompt_input_exit', 'other']) {
+		test(`a session ending with ${reason} keeps the budget`, async () => {
 			const m = load({ nudgeLimit: 1 });
 			await m.turn('t1');
 			expect(await m.search()).toEqual(REMINDER);
-			await m.sessionStart(source);
+			await m.sessionEnd(reason);
 			expect(await m.search()).toBeUndefined();
 		});
 	}
@@ -308,7 +368,7 @@ describe('nudge budget', () => {
 		expect(existsCalls).toBe(1);
 	});
 
-	test('a SessionStart clear empties the risk cache', async () => {
+	test('a /clear empties the risk cache', async () => {
 		let calls = 0;
 		const mcp: RiskPort = {
 			after: () => {},
@@ -322,7 +382,7 @@ describe('nudge budget', () => {
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		expect(calls).toBe(1);
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		await fileRisk(mcp, PROJECT, `${PROJECT}/a.ts`);
 		expect(calls).toBe(2);
 	});
@@ -366,7 +426,7 @@ describe('nudge budget', () => {
 	test('an AUTH_ERROR from the agent\'s code_intel call reaches the onboarding band', async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
-		expect(invalidations).toBe(1);
+		expect(writes('band')).toBe(1);
 		expect(await m.band()).toContain('Sign-in failed');
 	});
 
@@ -381,28 +441,28 @@ describe('nudge budget', () => {
 		expect(await m.band()).toContain("Not signed in");
 	});
 
-	test('a SessionStart clear takes the onboarding band down', async () => {
+	test('a /clear takes the onboarding band down', async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL);
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(await m.band()).toBe('');
 	});
 
 	test("a plugin's own code_intel error leaves the onboarding band alone", async () => {
 		const m = load({});
 		await m.program('main', 'return await api.ping()', AUTH_ERROR_CALL, { plugin: 'constellation', tier: 'user' });
-		expect(invalidations).toBe(0);
+		expect(writes('band')).toBe(0);
 		expect(await m.band()).toBe('');
 	});
 
-	test('a SessionStart clear starts the adoption session counts over', async () => {
+	test('a /clear starts the adoption session counts over', async () => {
 		const m = load({});
 		await m.search();
 		await m.search('agent-1');
 		await settled();
-		expect(total(sessionCounts()).symbol).toBe(2);
-		await m.sessionStart('clear');
-		expect(total(sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
+		expect(total(await sessionCounts()).symbol).toBe(2);
+		await m.sessionEnd('clear');
+		expect(total(await sessionCounts())).toEqual({ codeIntel: 0, codeIntelMs: 0, symbol: 0, literal: 0 });
 	});
 
 	test('a subagent run ending keeps its adoption counts', async () => {
@@ -410,7 +470,7 @@ describe('nudge budget', () => {
 		await m.search('agent-1');
 		await m.runEnds('agent-1');
 		await settled();
-		expect(sessionCounts().subagents.symbol).toBe(1);
+		expect((await sessionCounts()).subagents.symbol).toBe(1);
 	});
 
 	test("an agent's code_intel answer with a newer index commit updates the freshness indicator", async () => {
@@ -420,8 +480,8 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', { text: JSON.stringify({ success: true, result: {}, asOfCommit: old }) });
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(0)?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind');
-		expect(invalidations).toBe(1);
+		expect(await freshnessLine(0)).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind');
+		expect(writes('freshness')).toBe(1);
 	});
 
 	test("a plugin's own code_intel answer and a denied call leave the freshness indicator alone", async () => {
@@ -432,15 +492,15 @@ describe('nudge budget', () => {
 		await m.program('main', 'return await api.ping()', { deny: 'no', text });
 		for (let i = 0; i < 50; i++) await Promise.resolve();
 		expect(gitRuns).toEqual([]);
-		expect(freshnessLine(0)).toBeUndefined();
-		expect(invalidations).toBe(0);
+		expect(await freshnessLine(0)).toBeUndefined();
+		expect(writes('freshness')).toBe(0);
 	});
 
-	test('a SessionStart reset clears subagent budgets too', async () => {
+	test('a /clear resets subagent budgets too', async () => {
 		const m = load({ nudgeLimit: 1 });
 		await m.turn('t1');
 		await m.search('agent-1');
-		await m.sessionStart('clear');
+		await m.sessionEnd('clear');
 		expect(await m.search('agent-1')).toEqual(REMINDER);
 	});
 });
@@ -500,6 +560,13 @@ describe('freshness band above the prompt', () => {
 		expect(text).toContain('API_UNREACHABLE');
 	});
 
+	test('with showFreshness off, a line the state still holds is not drawn', async () => {
+		const m = load({ showFreshness: false });
+		await update($ as unknown as StateDollar, FRESHNESS, () => ({ kind: 'behind' as const, behind: 3 }));
+		expect(await m.draw(BENEATH)).toBe(BENEATH);
+		expect(configReads).toBe(0);
+	});
+
 	test('yields to a survey', async () => {
 		const m = await behind();
 		const before = configReads;
@@ -517,12 +584,12 @@ describe('freshness band above the prompt', () => {
 
 	test("an agent's call in another project runs no git and leaves the indicator alone", async () => {
 		const m = await behind();
-		const before = { runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations };
+		const before = { runs: gitRuns.length, line: await freshnessLine(Date.now()), writes: writes('freshness') };
 		projectFiles.push(`${OTHER}/constellation.json`);
 		const newer = { text: JSON.stringify({ success: true, result: {}, asOfCommit: 'ab' + OLD.slice(2), lastIndexedAt: new Date().toISOString() }) };
 		await m.program('main', 'return await api.ping()', newer, ENGINE, OTHER);
 		await settle();
-		expect({ runs: gitRuns.length, line: freshnessLine(Date.now())?.text, invalidations }).toEqual(before);
+		expect({ runs: gitRuns.length, line: await freshnessLine(Date.now()), writes: writes('freshness') }).toEqual(before);
 	});
 
 	test("an agent's call with a relative cwd resolves under the session's and updates the indicator", async () => {
@@ -531,7 +598,7 @@ describe('freshness band above the prompt', () => {
 		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, 'src/lib');
 		await settle();
 		expect(gitRuns.some((argv) => argv.includes('rev-parse'))).toBe(true);
-		expect(freshnessLine(Date.now())?.text).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
+		expect(await freshnessLine(Date.now())).toBe('✦ >_CONSTELLATION://CODE_INTEL · index 3 commits behind · indexed 2h ago');
 	});
 
 	test("an agent's call outside any project runs no git", async () => {
@@ -540,8 +607,8 @@ describe('freshness band above the prompt', () => {
 		await m.program('main', 'return await api.ping()', staleAnswer(), ENGINE, '/elsewhere/app');
 		await settle();
 		expect(gitRuns).toEqual([]);
-		expect(freshnessLine(0)).toBeUndefined();
-		expect(invalidations).toBe(0);
+		expect(await freshnessLine(0)).toBeUndefined();
+		expect(writes('freshness')).toBe(0);
 	});
 
 	test('a surface that cannot draw gets one log line when behind, and none on a second recheck', async () => {
@@ -554,16 +621,27 @@ describe('freshness band above the prompt', () => {
 });
 
 describe('budget hooks as a loaded plugin', () => {
-	test('turn.start, a code_intel call and SessionStart pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
+	test('turn.start, a code_intel call and session.end pass through', { options: { nudgeLimit: 2 } }, async ($, on) => {
 		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
+		on('session.cwd', () => ({ value: PROJECT }));
 		on('turn.start', (_$, e) => ({ turnId: e.turnId }));
 		on('tool.call', () => ({ result: 'beneath' }));
-		on('classic.SessionStart', () => ({ additionalContext: ['beneath'] }));
+		on('session.end', (_$, e) => ({ sessionId: e.sessionId }));
 		expect(await $.turn.start({ text: 'hi', turnId: 't1' })).toEqual({ turnId: 't1' });
 		const call = await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u1' });
 		expect(call).toEqual({ result: 'beneath' });
 		expect(await $.tool.call({ tool: CODE_INTEL, tool_use_id: 'u2' })).toEqual({ result: 'beneath' });
-		const start = await $.classic.SessionStart({ source: 'clear' });
-		expect(start.additionalContext).toEqual(['beneath', SESSION_TEXT]);
+		expect(await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } })).toEqual({ sessionId: 's1' });
 	});
 });
+
+/** The session's adoption counts, as the handlers keep them in `$.state`. */
+function sessionCounts() {
+	return read($ as unknown as StateDollar, ADOPTION);
+}
+
+/** The freshness line as the band shows it at `now`, from `$.state`; undefined when there is none. */
+async function freshnessLine(now: number): Promise<string | undefined> {
+	const view = await read($ as unknown as StateDollar, FRESHNESS);
+	return view === null ? undefined : freshnessText(view, now);
+}

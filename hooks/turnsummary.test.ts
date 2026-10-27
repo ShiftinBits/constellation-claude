@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing';
 import { registerAdoption } from './adoption';
 import { probe } from './blast';
 import { registerBudget, usedCodeIntelThisTurn } from './budget';
+import { registerDescribe } from './describe';
 import { collectEvidence, hasEvidence } from './risk';
 import { registerSession } from './session';
 import { registerTurnSummary, TURN_SUMMARY_DEADLINE_MS } from './turnsummary';
@@ -70,9 +71,10 @@ function probeArgs(code: string): { files: string[]; exports: boolean; page: num
 }
 
 /**
- * The budget, session and turn summary handlers as one hooks module registers
- * them, raised directly with a fake `$`: the test kit has no `$.mcp`, `$.fs`
- * or `$.env.get`. code_intel runs the real `probe` against the world's graph.
+ * The budget, describe (the main loop's `turn.start`), session and turn summary
+ * handlers as one hooks module registers them, raised directly with a fake `$`:
+ * the test kit has no `$.mcp`, `$.fs` or `$.env.get`. code_intel runs the real
+ * `probe` against the world's graph.
  */
 function load(options: PluginOptions = {}, world: World = {}) {
 	const registered: Registered[] = [];
@@ -83,6 +85,7 @@ function load(options: PluginOptions = {}, world: World = {}) {
 	};
 	registerAdoption(capture as unknown as On, options);
 	registerBudget(capture as unknown as On, options);
+	registerDescribe(capture as unknown as On);
 	registerSession(capture as unknown as On);
 	registerTurnSummary(capture as unknown as On, options);
 
@@ -414,10 +417,11 @@ describe('turn summary line', () => {
 		const m = load();
 		await m.turn();
 		await m.edit(`${PROJECT}/src/a.ts`);
-		const registered = m.registered.filter((r) => r.event === 'classic.SessionStart');
+		const registered = m.registered.filter((r) => r.event === 'session.end');
+		expect(registered.length).toBeGreaterThan(0);
 		for (const r of registered) {
 			const next = Object.assign(async () => ({}), { origin: ENGINE, signal: new AbortController().signal });
-			await r.handler({}, { source: 'clear' }, next);
+			await r.handler({}, { reason: 'clear', sessionId: 'session-1', resume: { id: 'session-1' } }, next);
 		}
 		expect(await m.complete()).toBe(ANSWER);
 	});

@@ -1,6 +1,8 @@
+import { atom, read, update } from 'claude-code';
 import type { EngineInterface, On } from 'claude-code';
-import { freshnessLine, observeEnvelope, recheck, track } from './freshness';
-import type { Run } from './freshness';
+import { startMainTurn } from './budget';
+import { FRESHNESS_SHAPE, observeEnvelope, recheck, track } from './freshness';
+import type { Publish, Run } from './freshness';
 import { canDraw, isConfigured, projectRoot } from './lib';
 import type { McpPort } from './lib';
 import { pingProject } from './onboarding';
@@ -10,7 +12,9 @@ import { pingProject } from './onboarding';
  * the cached description keeps the prompt cache valid.
  */
 export const GUIDANCE =
-	'\n\nFor symbol definitions, references, dependents, call graphs or impact, use the code_intel tool. Grep, Glob and grep or rg in the shell are for literal text such as error messages, config values, log strings and comments.';
+	'\n\nPrefer the code_intel tool for searching and navigating the codebase: symbol definitions, references, dependents, call graphs and impact. Grep, Glob and grep or rg in the shell are for literal text such as error messages, config values, log strings and comments.';
+
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /**
  * The last gate result a description was built under; undefined until one is.
@@ -20,6 +24,13 @@ export const GUIDANCE =
  */
 let lastGate: boolean | undefined;
 
+/**
+ * The working directory the main loop's last turn started in; undefined until
+ * the first. A change between two turns (a `cd` included), or since session
+ * start, is noticed here, at the start of the next main-loop turn.
+ */
+let lastCwd: string | undefined;
+
 /** True when the access key starts with `ak:` and `cwd` sits inside an indexed project. */
 async function gateOpen($: EngineInterface, cwd: string): Promise<boolean> {
 	if (!isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))) return false;
@@ -27,6 +38,8 @@ async function gateOpen($: EngineInterface, cwd: string): Promise<boolean> {
 }
 
 export function registerDescribe(on: On): void {
+	lastCwd = undefined;
+
 	on('tool.describe', { tool: /^(Grep|Glob|Bash)$/ }, async ($, e, next) => {
 		const r = await next(e);
 		const open = lastGate === true || (await gateOpen($, await $.session.cwd()));
@@ -35,37 +48,50 @@ export function registerDescribe(on: On): void {
 		return { ...r, description: r.description + GUIDANCE };
 	});
 
-	on('classic.CwdChanged', async ($, e, next) => {
+	on('turn.start', async ($, e, next) => {
+		if (e.agentId !== undefined) return next(e);
+		startMainTurn(e.turnId);
 		const r = await next(e);
-		// The freshness indicator follows the project: a new one is pinged for what is indexed, the same one compared again.
+		const before = lastCwd;
 		try {
-			const root = isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')) ? await projectRoot(e.new_cwd, (p) => $.fs.exists(p)) : null;
-			if (root !== null) {
-				const run: Run = (argv, init) => $.process.run(argv, init);
-				const invalidate = () => $.ui.invalidate('ui.render');
-				const log = async (text: string) => {
-					if (!canDraw(await $.session.surfaces())) $.ui.log(text);
-				};
-				const showing = freshnessLine(Date.now()) !== undefined;
-				if (track(root)) {
-					// The last project's line goes.
-					if (showing) invalidate();
-					const mcp: McpPort = { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) };
-					void pingProject(root, { read: (p) => $.fs.read(p), mcp })
-						.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, invalidate, log)))
-						.then(() => recheck(run, invalidate, log))
-						.catch(() => undefined);
-				} else {
-					void recheck(run, invalidate, log).catch(() => undefined);
+			const cwd = await $.session.cwd();
+			// The session's first turn checks like a change: the directory may have moved since session start.
+			const first = lastCwd === undefined;
+			if (!first && cwd === lastCwd) return r;
+			lastCwd = cwd;
+			// The freshness indicator follows the project: a new one is pinged for what is indexed, the same one compared again.
+			try {
+				const root = isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')) ? await projectRoot(cwd, (p) => $.fs.exists(p)) : null;
+				if (root !== null) {
+					const run: Run = (argv, init) => $.process.run(argv, init);
+					const publish: Publish = (view) => update($, FRESHNESS, () => view);
+					const log = async (text: string) => {
+						if (!canDraw(await $.session.surfaces())) $.ui.log(text);
+					};
+					if (track(root)) {
+						// The last project's line goes.
+						if ((await read($, FRESHNESS)) !== null) await publish(null).catch(() => undefined);
+						const mcp: McpPort = { connect: (s) => $.mcp.connect(s), call: (s, t, a) => $.mcp.call(s, t, a) };
+						void pingProject(root, { read: (p) => $.fs.read(p), mcp })
+							.then((envelope) => (envelope === undefined ? undefined : observeEnvelope(envelope, root, run, publish, log)))
+							.then(() => recheck(run, publish, log))
+							.catch(() => undefined);
+					} else if (!first) {
+						// The same project as before. At the first turn that is the one session start just pinged.
+						void recheck(run, publish, log).catch(() => undefined);
+					}
 				}
+			} catch {
+				// The indicator stays as it was; the gate below still runs.
+			}
+			if (lastGate !== false) return r;
+			if (await gateOpen($, cwd)) {
+				lastGate = true;
+				$.ui.invalidate('tool.describe');
 			}
 		} catch {
-			// The indicator stays as it was; the gate below still runs.
-		}
-		if (lastGate !== false) return r;
-		if (await gateOpen($, e.new_cwd)) {
-			lastGate = true;
-			$.ui.invalidate('tool.describe');
+			// Fails open: the turn goes on untouched, and the next main-loop turn tries this directory again.
+			lastCwd = before;
 		}
 		return r;
 	});

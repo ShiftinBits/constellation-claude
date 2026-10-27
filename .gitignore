@@ -38,3 +38,6 @@ node_modules/
 
 # Logs
 *.log
+
+# Plugin eval results
+evals/results/

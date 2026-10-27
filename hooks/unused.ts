@@ -1,14 +1,8 @@
+import type { ConstellationOrphanRow } from '../types';
 import { isRecord, num } from './lib';
 
 /** One unused export as the pane lists it and the removal prompt names it. */
-export type OrphanRow = {
-	symbolId: string;
-	name: string;
-	kind: string;
-	filePath: string;
-	/** The graph holds no start line, only the end line, and not for every symbol. */
-	lineEnd?: number;
-};
+export type OrphanRow = ConstellationOrphanRow;
 
 function str(value: unknown): string | undefined {
 	return typeof value === 'string' && value !== '' ? value : undefined;

@@ -19,6 +19,7 @@
 | Code | Message | Cause | Fix | Recoverable |
 |------|---------|-------|-----|-------------|
 | `NOT_CONFIGURED` | Project not configured | Missing or invalid `constellation.json` | Run `const init` | No |
+| `CWD_NOT_INDEXED` | cwd is not an indexed project | `cwd` resolves to a git root with no `constellation.json` | Read `error.context.candidates` and re-run with `cwd` set to a listed project root | Yes |
 | `API_UNREACHABLE` | Cannot reach API | Network error, server down, wrong URL | Check network, verify API URL in `constellation.json` | Yes |
 
 ## Project Errors

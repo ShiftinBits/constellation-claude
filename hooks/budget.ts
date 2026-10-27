@@ -1,9 +1,14 @@
+import { atom, read, update } from 'claude-code';
 import type { On, PluginOptions } from 'claude-code';
-import { background, noteCodeIntelCall, save, showsAdoption } from './adoption';
-import { observeEnvelope } from './freshness';
+import { ADOPTION_SHAPE, background, counter, NO_COUNTS, noteCodeIntelCall, save } from './adoption';
+import { FRESHNESS_SHAPE, observeEnvelope } from './freshness';
 import { absolute, canDraw, isConfigured, parseToolText, projectRoot, stringArg } from './lib';
-import { observeCodeIntel } from './onboarding';
+import { BAND_SHAPE, NO_BAND, observeCodeIntel } from './onboarding';
 import { noteCodeIntel } from './risk';
+
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+const BAND = atom({ plugin: 'constellation', key: 'band' } as const, NO_BAND, { shape: BAND_SHAPE });
+const FRESHNESS = atom({ plugin: 'constellation', key: 'freshness' } as const, null, { shape: FRESHNESS_SHAPE });
 
 /** How many nudges one agent gets when the option is unset. */
 const DEFAULT_NUDGE_LIMIT = 3;
@@ -25,9 +30,10 @@ type AgentBudget = {
 const budgets = new Map<string, AgentBudget>();
 
 /**
- * The main conversation's current turn, from `turn.start`. A subagent's run is
- * one turn (its loop's `turn.complete` closes the run, and `forgetAgentBudget`
- * then drops its state), so its turn is its `agentId`.
+ * The main conversation's current turn, set through `startMainTurn` by the
+ * `turn.start` hook in `describe.ts`. A subagent's run is one turn (its loop's
+ * `turn.complete` closes the run, and `forgetAgentBudget` then drops its
+ * state), so its turn is its `agentId`.
  */
 let mainTurn: string | undefined;
 
@@ -50,6 +56,11 @@ function budgetOf(key: string): AgentBudget {
 /** The turn the agent `key` is in, or undefined before the main conversation's first turn. */
 function turnOf(key: string): string | undefined {
 	return key === MAIN ? mainTurn : key;
+}
+
+/** Records `turnId` as the main conversation's current turn. */
+export function startMainTurn(turnId: string): void {
+	mainTurn = turnId;
 }
 
 /** True when the agent that made the tool call `e` already called code_intel in its current turn. */
@@ -78,11 +89,6 @@ export function registerBudget(on: On, options: PluginOptions): void {
 	budgets.clear();
 	mainTurn = undefined;
 
-	on('turn.start', async (_$, e, next) => {
-		mainTurn = e.turnId;
-		return next(e);
-	});
-
 	on('tool.call', { tool: /code_intel$/ }, async ($, e, next) => {
 		const key = agentKey(e);
 		const turn = turnOf(key);
@@ -93,24 +99,26 @@ export function registerBudget(on: On, options: PluginOptions): void {
 		if (next.origin.plugin === 'engine') {
 			noteCodeIntel(key, e, r);
 			try {
-				observeCodeIntel(
-					r,
-					isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')),
-					() => $.ui.invalidate('ui.render'),
-					async (text) => {
+				await observeCodeIntel(r, isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY')), {
+					band: () => read($, BAND),
+					setBand: (change) => update($, BAND, change),
+					log: async (text) => {
 						if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 					},
-				);
+				});
 			} catch {
 				// The band stays as it was; the agent's answer goes back untouched.
 			}
 			// A refused call never ran; an errored one is still the agent reaching for code_intel.
 			if (r.deny === undefined) {
-				const counted = noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time);
-				if (showsAdoption()) $.ui.invalidate('ui.render');
-				// Saved in the background: the agent's answer never waits on the store.
+				const note = noteCodeIntelCall(key === MAIN, parseToolText(r.text, r.isError === true).time);
+				const count = counter();
+				// Counted and saved in the background: the agent's answer never waits on the state or the store.
+				background(async () => {
+					await update($, ADOPTION, (b) => count(b, note));
+				});
 				background(() =>
-					save(counted, {
+					save(note, {
 						now: () => $.clock.now(),
 						sessionId: () => $.session.id(),
 						get: (k) => $.store.get(k),
@@ -129,7 +137,7 @@ export function registerBudget(on: On, options: PluginOptions): void {
 							parseToolText(r.text, r.isError === true),
 							root,
 							(argv, init) => $.process.run(argv, init),
-							() => $.ui.invalidate('ui.render'),
+							(view) => update($, FRESHNESS, () => view),
 							async (text) => {
 								if (!canDraw(await $.session.surfaces())) $.ui.log(text);
 							},

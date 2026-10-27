@@ -1,20 +1,23 @@
-import type { On, PluginOptions, ToolCallArgs } from 'claude-code';
+import { atom, read } from 'claude-code';
+import type { On, PluginOptions, StateDollar, ToolCallArgs } from 'claude-code';
 import { describe, expect, mock, test } from 'claude-code/testing';
 import type { Engine } from 'claude-code/testing';
 import {
+	ADOPTION_SHAPE,
 	type Buckets,
 	type Counts,
+	counted,
 	dayKey,
+	endConversation,
 	figures,
 	forgetDays,
 	loadStats,
+	NO_COUNTS,
 	noteCodeIntelCall,
 	noteSearch,
 	persist,
 	ratio,
 	registerAdoption,
-	resetAdoption,
-	sessionCounts,
 	settled,
 	statRows,
 	statsLines,
@@ -70,6 +73,24 @@ function fakeStore() {
 
 type Store = ReturnType<typeof fakeStore>;
 
+/** `$.state` over a `Map`, as the host keeps it: each value with a version, and a write that misses on a stale `ifVersion`. */
+function fakeState() {
+	const values = new Map<string, { value: unknown; version: number }>();
+	const id = (ref: { plugin: string; key: string }) => `${ref.plugin}:${ref.key}`;
+	return {
+		get: async (ref: { plugin: string; key: string }) => values.get(id(ref)) ?? { value: undefined, version: 0 },
+		set: async (ref: { plugin: string; key: string }, value: unknown, options: { ifVersion?: number } = {}) => {
+			const held = values.get(id(ref)) ?? { value: undefined, version: 0 };
+			if (options.ifVersion !== undefined && options.ifVersion !== held.version) return { isSet: false, version: held.version };
+			values.set(id(ref), { value: JSON.parse(JSON.stringify(value)), version: held.version + 1 });
+			return { isSet: true, version: held.version + 1 };
+		},
+	};
+}
+
+/** The session's counts as the hooks keep them in `$.state`. */
+const ADOPTION = atom({ plugin: 'constellation', key: 'adoption' } as const, NO_COUNTS, { shape: ADOPTION_SHAPE });
+
 /** What the store holds under `key`, read as an entry. */
 async function stored(store: Store, key: string): Promise<Buckets> {
 	return (await store.get(key)) as Buckets;
@@ -95,7 +116,7 @@ const SPINNER = { word: 'Sauteing', message: null, suffix: '…', mode: 'thinkin
  * raised directly over `store`, with the session totals and the day entries in
  * memory started over.
  */
-function load(store: Store = fakeStore(), options: PluginOptions = {}) {
+function load(store: Store = fakeStore(), options: PluginOptions = {}, state = fakeState()) {
 	const registered: Registered[] = [];
 	const capture = (event: string, ...rest: unknown[]) => {
 		const handler = rest[rest.length - 1] as Handler;
@@ -106,18 +127,13 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 	registerBudget(capture as unknown as On, options);
 	registerNudges(capture as unknown as On);
 
-	let invalidations = 0;
 	/** What the session answers with; a test changes it between calls. */
 	const session: { key: string | undefined; cwd: string; now: number } = { key: KEY, cwd: PROJECT, now: NOON };
 	const $ = {
 		env: { get: async () => session.key },
 		session: { cwd: async () => session.cwd, surfaces: async () => ['terminal'], id: async () => 'session-1' },
-		ui: {
-			invalidate: () => {
-				invalidations += 1;
-			},
-			log: () => undefined,
-		},
+		ui: { log: () => undefined },
+		state,
 		store,
 		clock: { now: async () => session.now },
 		fs: { exists: async (path: string) => path === `${PROJECT}/constellation.json` },
@@ -144,7 +160,8 @@ function load(store: Store = fakeStore(), options: PluginOptions = {}) {
 		store,
 		session,
 		key: dayKey(NOON, 'session-1'),
-		invalidations: () => invalidations,
+		/** The session's counts, as `$.state` holds them. */
+		counts: () => read($ as unknown as StateDollar, ADOPTION),
 		hasSpinnerHook: spinner !== undefined,
 		/** The spinner's props after the hook, over a bottom that answers with the props it was given. */
 		spinner: async () => {
@@ -176,7 +193,7 @@ describe('adoption counting through the hooks', () => {
 		await m.grep('TODO', 'agent-2');
 		await settled();
 
-		const session = sessionCounts();
+		const session = await m.counts();
 		expect(session).toEqual({ main: counts(1, 42, 2, 1), subagents: counts(1, 8, 1, 1) });
 		expect(ratio(session.main)).toBe(1 / 3);
 		expect(ratio(session.subagents)).toBe(0.5);
@@ -188,14 +205,15 @@ describe('adoption counting through the hooks', () => {
 	test('an errored code_intel call counts, with no time to add', async () => {
 		const m = load();
 		await m.codeIntel(AUTH_ERROR_CALL);
-		expect(sessionCounts().main).toEqual(counts(1, 0, 0, 0));
+		await settled();
+		expect((await m.counts()).main).toEqual(counts(1, 0, 0, 0));
 	});
 
 	test('a refused code_intel call is not counted', async () => {
 		const m = load();
 		await m.codeIntel({ deny: 'no' });
 		await settled();
-		expect(sessionCounts().main).toEqual(NONE);
+		expect((await m.counts()).main).toEqual(NONE);
 		expect(m.store.data.size).toBe(0);
 	});
 
@@ -208,7 +226,41 @@ describe('adoption counting through the hooks', () => {
 		expect(await m.codeIntel(took(5))).toEqual(took(5));
 		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
 		await settled();
-		expect(sessionCounts().main).toEqual(counts(1, 5, 0, 1));
+		expect((await m.counts()).main).toEqual(counts(1, 5, 0, 1));
+	});
+
+	test('a refused state write still saves the count to the store', async () => {
+		const state = fakeState();
+		state.set = async () => {
+			throw new Error('refused');
+		};
+		const m = load(fakeStore(), {}, state);
+		await m.codeIntel(took(5));
+		await m.grep('AuthService');
+		await settled();
+		expect(await stored(m.store, m.key)).toEqual({ main: counts(1, 5, 1, 0), subagents: NONE });
+	});
+
+	test('counts still being saved when the conversation ends reach the day totals but not the next conversation', async () => {
+		const state = fakeState();
+		const get = state.get;
+		let release = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		// Only the counts' reads wait: the code_intel call itself reads the band.
+		state.get = async (ref) => {
+			if (ref.key === 'adoption') await held;
+			return get(ref);
+		};
+		const m = load(fakeStore(), {}, state);
+		await m.codeIntel(took(5));
+		await m.grep('AuthService');
+		endConversation();
+		release();
+		await settled();
+		expect(await m.counts()).toEqual(NO_COUNTS);
+		expect(await stored(m.store, m.key)).toEqual({ main: counts(1, 5, 1, 0), subagents: NONE });
 	});
 
 	test('the answers come back without waiting for a store write that never settles', async () => {
@@ -217,7 +269,8 @@ describe('adoption counting through the hooks', () => {
 		const m = load(store);
 		expect(await m.codeIntel(took(5))).toEqual(took(5));
 		expect(await m.grep('connection refused', undefined, { result: 'ran' })).toEqual({ result: 'ran' });
-		expect(sessionCounts().main.codeIntel).toBe(1);
+		await ticks();
+		expect((await m.counts()).main.codeIntel).toBe(1);
 		expect(store.data.size).toBe(0);
 	});
 
@@ -228,7 +281,7 @@ describe('adoption counting through the hooks', () => {
 		await m.grep('connection refused');
 		await m.bash('rg AuthService');
 		await settled();
-		expect(sessionCounts().main).toEqual(NONE);
+		expect((await m.counts()).main).toEqual(NONE);
 		expect(m.store.data.size).toBe(0);
 	});
 
@@ -238,7 +291,7 @@ describe('adoption counting through the hooks', () => {
 		await m.grep('AuthService');
 		await m.grep('connection refused');
 		await settled();
-		expect(sessionCounts().main).toEqual(NONE);
+		expect((await m.counts()).main).toEqual(NONE);
 		expect(m.store.data.size).toBe(0);
 	});
 
@@ -247,7 +300,7 @@ describe('adoption counting through the hooks', () => {
 		await m.grep('AuthService', undefined, {}, PLUGIN);
 		await m.grep('connection refused', undefined, {}, PLUGIN);
 		await settled();
-		expect(sessionCounts().main).toEqual(NONE);
+		expect((await m.counts()).main).toEqual(NONE);
 		expect(m.store.data.size).toBe(0);
 	});
 
@@ -302,14 +355,13 @@ describe('adoption counting through the hooks', () => {
 
 describe('the spinner suffix', () => {
 	for (const options of [{}, { showAdoption: false }, { showAdoption: 'true' }] as PluginOptions[]) {
-		test(`showAdoption ${JSON.stringify(options.showAdoption)} registers no spinner hook and asks for no redraw`, async () => {
+		test(`showAdoption ${JSON.stringify(options.showAdoption)} registers no spinner hook, and the counting goes on`, async () => {
 			const m = load(fakeStore(), options);
 			await m.grep('AuthService');
 			await m.codeIntel(took(5));
 			await settled();
 			expect(m.hasSpinnerHook).toBe(false);
-			expect(m.invalidations()).toBe(0);
-			expect(sessionCounts().main).toEqual(counts(1, 5, 1, 0));
+			expect((await m.counts()).main).toEqual(counts(1, 5, 1, 0));
 		});
 	}
 
@@ -333,30 +385,31 @@ describe('the spinner suffix', () => {
 		const m = load(fakeStore(), { showAdoption: true });
 		await m.grep('connection refused');
 		await settled();
-		expect(sessionCounts().main.literal).toBe(1);
-		expect(suffixText()).toBe('');
+		expect((await m.counts()).main.literal).toBe(1);
+		expect(suffixText(await m.counts())).toBe('');
 		expect(await m.spinner()).toBe(SPINNER);
 	});
 
-	test('with the option on, each count the spinner shows asks for a redraw, and a literal search or an uncounted call asks for none', async () => {
+	test('with the option on, each count reaches the spinner, and a literal search or an uncounted call leaves its figures alone', async () => {
 		const m = load(fakeStore(), { showAdoption: true });
+		const suffix = async () => Reflect.get((await m.spinner()) ?? {}, 'suffix');
 		await m.grep('AuthService');
 		await settled();
-		expect(m.invalidations()).toBe(1);
+		expect(await suffix()).toBe(' · ✦ 0 code_intel / 1 grep…');
 		await m.codeIntel(took(5));
 		await settled();
-		expect(m.invalidations()).toBe(2);
+		expect(await suffix()).toBe(' · ✦ 1 code_intel / 1 grep…');
 		await m.grep('connection refused');
 		await m.bash('ls -la');
 		await m.grep('UserService', undefined, { deny: 'no' });
 		await m.codeIntel({ deny: 'no' });
 		await m.codeIntel(took(5), undefined, PLUGIN);
 		await settled();
-		expect(sessionCounts().main).toEqual(counts(1, 5, 1, 1));
-		expect(m.invalidations()).toBe(2);
+		expect((await m.counts()).main).toEqual(counts(1, 5, 1, 1));
+		expect(await suffix()).toBe(' · ✦ 1 code_intel / 1 grep…');
 	});
 
-	test('a store that fails still asks for the redraw', async () => {
+	test('a store that fails still reaches the spinner', async () => {
 		const store = fakeStore();
 		store.set = async () => {
 			throw new Error('store full');
@@ -364,7 +417,7 @@ describe('the spinner suffix', () => {
 		const m = load(store, { showAdoption: true });
 		await m.grep('AuthService');
 		await settled();
-		expect(m.invalidations()).toBe(1);
+		expect(Reflect.get((await m.spinner()) ?? {}, 'suffix')).toBe(' · ✦ 0 code_intel / 1 grep…');
 	});
 });
 
@@ -473,7 +526,6 @@ describe('dayKey', () => {
 
 describe('stored day totals', () => {
 	test('two sessions writing in turn over one store lose nothing', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const [a, b] = [dayKey(NOON, 'session-a'), dayKey(NOON, 'session-b')];
@@ -493,7 +545,6 @@ describe('stored day totals', () => {
 	});
 
 	test('two counts arriving together for a new key read the store once and both land', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
@@ -512,7 +563,6 @@ describe('stored day totals', () => {
 	});
 
 	test('after a reload the next count adds to the stored entry', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
@@ -525,7 +575,6 @@ describe('stored day totals', () => {
 	});
 
 	test('a stored value that is not an entry is counted from zero', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
@@ -535,7 +584,6 @@ describe('stored day totals', () => {
 	});
 
 	test('a read that fails is tried again by the next count', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
@@ -549,7 +597,6 @@ describe('stored day totals', () => {
 	});
 
 	test('a save waits for the one before it, so the last to land carries every count', async () => {
-		resetAdoption();
 		forgetDays();
 		const key = dayKey(NOON, 'session-a');
 		const landed: unknown[] = [];
@@ -584,7 +631,6 @@ describe('stored day totals', () => {
 	});
 
 	test('a save that fails does not hold back the next one', async () => {
-		resetAdoption();
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
@@ -596,21 +642,18 @@ describe('stored day totals', () => {
 		expect(await stored(store, key)).toEqual({ main: counts(1, 10, 1, 0), subagents: NONE });
 	});
 
-	test('resetAdoption zeroes the session totals and leaves the stored day totals', async () => {
-		resetAdoption();
+	test('counted adds a note to the bucket it belongs to, as a new value, and leaves the stored day totals alone', async () => {
 		forgetDays();
 		const store = fakeStore();
 		const key = dayKey(NOON, 'session-a');
 		await persist(noteCodeIntelCall(true, 10), key, store.get, store.set);
-		await persist(noteSearch(false, true), key, store.get, store.set);
-
-		resetAdoption();
-		expect(sessionCounts()).toEqual({ main: NONE, subagents: NONE });
-		expect(await stored(store, key)).toEqual({ main: counts(1, 10, 0, 0), subagents: counts(0, 0, 1, 0) });
-
-		await persist(noteCodeIntelCall(true, 10), key, store.get, store.set);
-		expect(sessionCounts().main).toEqual(counts(1, 10, 0, 0));
-		expect((await stored(store, key)).main).toEqual(counts(2, 20, 0, 0));
+		const start = { main: NONE, subagents: NONE };
+		const once = counted(start, noteCodeIntelCall(true, 10));
+		const twice = counted(once, noteSearch(false, true));
+		expect(start).toEqual({ main: NONE, subagents: NONE });
+		expect(once).toEqual({ main: counts(1, 10, 0, 0), subagents: NONE });
+		expect(twice).toEqual({ main: counts(1, 10, 0, 0), subagents: counts(0, 0, 1, 0) });
+		expect(await stored(store, key)).toEqual({ main: counts(1, 10, 0, 0), subagents: NONE });
 	});
 });
 

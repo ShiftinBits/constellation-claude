@@ -1,8 +1,8 @@
 import type { On } from 'claude-code';
-import { describe, expect, mock, test } from 'claude-code/testing';
+import { describe, expect, test } from 'claude-code/testing';
 import { registerAdoption } from './adoption';
 import { registerBudget } from './budget';
-import { REMINDER_TEXT, registerNudges, SESSION_TEXT } from './nudge';
+import { REMINDER_TEXT, registerNudges } from './nudge';
 
 const KEY = 'ak:test-key';
 
@@ -91,50 +91,6 @@ const QUIET_CASES: ReadonlyArray<readonly [string, object]> = [
 	['Glob of a symbol in a path outside any project', { tool: 'Glob', pattern: '**/UserService.ts', path: OUTSIDE }],
 	['another tool', { tool: 'Read', pattern: 'AuthService' }],
 ];
-
-describe('session and subagent awareness', () => {
-	test('SessionStart adds exactly the session text with an ak: key', async ($, on) => {
-		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
-		on('classic.SessionStart', () => ({}));
-		const r = await $.classic.SessionStart({ source: 'startup' });
-		expect(r.additionalContext).toEqual([SESSION_TEXT]);
-	});
-
-	test('SubagentStart adds exactly the session text with an ak: key', async ($, on) => {
-		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
-		on('classic.SubagentStart', () => ({}));
-		const r = await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'Explore' });
-		expect(r.additionalContext).toEqual([SESSION_TEXT]);
-	});
-
-	test('SessionStart keeps the context the chain beneath produced', async ($, on) => {
-		mock.env(on, { CONSTELLATION_ACCESS_KEY: KEY });
-		on('classic.SessionStart', () => ({ additionalContext: ['earlier'] }));
-		const r = await $.classic.SessionStart({ source: 'resume' });
-		expect(r.additionalContext).toEqual(['earlier', SESSION_TEXT]);
-	});
-
-	test('SessionStart adds nothing without a key', async ($, on) => {
-		mock.env(on, {});
-		on('classic.SessionStart', () => ({}));
-		const r = await $.classic.SessionStart({ source: 'startup' });
-		expect(r.additionalContext).toBeUndefined();
-	});
-
-	test('SessionStart adds nothing when the key does not start with ak:', async ($, on) => {
-		mock.env(on, { CONSTELLATION_ACCESS_KEY: 'sk:other' });
-		on('classic.SessionStart', () => ({}));
-		const r = await $.classic.SessionStart({ source: 'startup' });
-		expect(r.additionalContext).toBeUndefined();
-	});
-
-	test('SubagentStart adds nothing without a key', async ($, on) => {
-		mock.env(on, {});
-		on('classic.SubagentStart', () => ({}));
-		const r = await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'Explore' });
-		expect(r.additionalContext).toBeUndefined();
-	});
-});
 
 describe('search nudge', () => {
 	for (const [name, e] of CASES) {

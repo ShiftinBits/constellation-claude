@@ -246,7 +246,7 @@ describe('result row', () => {
 	test('counts are bold and the risk badge is colored', async ($, on) => {
 		world(on);
 		const ui = await mountResult($, 'terminal', 'bold', reply(IMPACT));
-		expect((await exact(ui, '8'))?.props['bold']).toBe(true);
+		expect((await exact(ui, '8'))?.props['weight']).toBe('semibold');
 		expect((await exact(ui, '✗ HIGH'))?.props['color']).toBe(palette.stellar);
 	});
 
@@ -527,7 +527,8 @@ function direct({ el = TABLE, list = async () => [], now = () => 0 }: { el?: obj
 		result: async (id: string) => flat(await draw('ToolResult', id, resultProps(id, reply(PING)))),
 		/** The result row's drawn tree, not flattened. */
 		drawn: (id: string) => draw('ToolResult', id, resultProps(id, reply(PING))),
-		sessionStart: (source: string) => raise('classic.SessionStart', { source }, async () => ({})),
+		/** The session ending for `reason`, as `/clear` (`clear`) or `/resume` and `/branch` (`resume`) raise it. */
+		sessionEnd: (reason: string) => raise('session.end', { reason, sessionId: 'session-1', resume: { id: 'session-1' } }, async () => ({})),
 		configSet: (key: string) => raise('config.set', { key }, async () => ({})),
 	};
 }
@@ -548,23 +549,23 @@ describe('cache', () => {
 		expect(await rows.result('reset')).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 	});
 
-	for (const source of ['clear', 'resume', 'fork']) {
-		test(`SessionStart from ${source} forgets the project`, async () => {
+	for (const reason of ['clear', 'resume']) {
+		test(`a session ending with ${reason} forgets the project`, async () => {
 			resetToolRows();
 			const rows = direct();
-			await rows.use(`session-${source}`, '/x/app');
-			await rows.sessionStart(source);
-			expect(await rows.result(`session-${source}`)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
+			await rows.use(`session-${reason}`, '/x/app');
+			await rows.sessionEnd(reason);
+			expect(await rows.result(`session-${reason}`)).toBe(`${MARK}✓ connected · 140 ms · as of 0123456`);
 		});
 	}
 
-	for (const source of ['startup', 'compact']) {
-		test(`SessionStart from ${source} keeps the project`, async () => {
+	for (const reason of ['prompt_input_exit', 'other']) {
+		test(`a session ending with ${reason} keeps the project`, async () => {
 			resetToolRows();
 			const rows = direct();
-			await rows.use(`session-${source}`, '/x/app');
-			await rows.sessionStart(source);
-			expect(await rows.result(`session-${source}`)).toBe('✓ connected · app · 140 ms · as of 0123456');
+			await rows.use(`session-${reason}`, '/x/app');
+			await rows.sessionEnd(reason);
+			expect(await rows.result(`session-${reason}`)).toBe('✓ connected · app · 140 ms · as of 0123456');
 		});
 	}
 

@@ -1,6 +1,8 @@
 ---
 name: constellation-troubleshooting
-description: This skill should be used when the user asks about "Constellation errors", "fix Constellation", "debug Constellation", "Constellation not working", "API connection issues", "indexing problems", "MCP server", "Failed to reconnect", mentions any Constellation error codes (AUTH_ERROR, PROJECT_NOT_INDEXED, etc.), or when Constellation commands fail.
+description: Diagnose and fix Constellation plugin problems such as API connection failures, authentication errors, indexing problems and MCP server startup issues.
+when_to_use: Trigger when the user asks about "Constellation errors", "fix Constellation", "debug Constellation", "Constellation not working", "API connection issues", "indexing problems", "MCP server", "Failed to reconnect", mentions any Constellation error codes (AUTH_ERROR, PROJECT_NOT_INDEXED, etc.), or when Constellation commands fail.
+allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
 # Constellation Troubleshooting
@@ -27,6 +29,7 @@ Check error.code:
 - PROJECT_NOT_INDEXED --> Indexing section
 - SYMBOL_NOT_FOUND --> Query Issues section
 - API_UNREACHABLE --> Connectivity section
+- CWD_NOT_INDEXED --> Multi-project cwd section
 ```
 
 When you report an error to the user, start with `✦ >_CONSTELLATION://CODE_INTEL · <topic>` and put the error on one line as `✗ CODE · headline · next step`, for example `✗ PROJECT_NOT_INDEXED · This project hasn't been indexed yet · const index`. Write every CLI command with its `const` shorthand (`const auth`, `const index`), even where the error guidance spells out `constellation`.
@@ -45,7 +48,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 
 2. **Verify MCP configuration:**
 
-   Note, the tool is built into the Constellation plugin, but should accurately reflect the following:
+   The server is built into the Constellation plugin. Its plugin-level `.mcp.json` is the one place the `@constellationdev/mcp` version is set; the entry should look like this, with `<version>` standing for that pinned version:
 
    ```json
    {
@@ -53,7 +56,7 @@ In the terminal and the desktop app, the Constellation onboarding band above the
        "constellation": {
          "type": "stdio",
          "command": "npx",
-         "args": ["-y", "@constellationdev/mcp@1.3.0"],
+         "args": ["-y", "@constellationdev/mcp@<version>"],
          "env": {
            "CONSTELLATION_ACCESS_KEY": "${CONSTELLATION_ACCESS_KEY}"
          }
@@ -108,6 +111,14 @@ In the terminal and the desktop app, the Constellation onboarding band above the
 1. **Check network connectivity**
 
 2. **Check Constellation status at https://status.constellationdev.io/**
+
+## Multi-project cwd (CWD_NOT_INDEXED)
+
+**Symptom:** `CWD_NOT_INDEXED` before any query runs.
+
+**Cause:** `cwd` resolves to a git root with no `constellation.json`, typically a monorepo root.
+
+**Fix:** Read `error.context.candidates` for the discovered project roots and re-run `code_intel` with `cwd` set to one of them.
 
 ## Query Issues (SYMBOL_NOT_FOUND, FILE_NOT_FOUND)
 

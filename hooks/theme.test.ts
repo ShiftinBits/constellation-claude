@@ -75,7 +75,7 @@ describe('status and risk', () => {
 		expect(risk('low')).toMatchObject({ color: palette.cosmic, word: 'LOW' });
 		expect(risk('medium')).toMatchObject({ color: palette.solar, word: 'MEDIUM' });
 		expect(risk('high')).toMatchObject({ color: palette.stellar, word: 'HIGH' });
-		expect(risk('critical')).toMatchObject({ color: palette.stellar, bold: true, word: 'CRITICAL' });
+		expect(risk('critical')).toMatchObject({ color: palette.stellar, weight: 'semibold', word: 'CRITICAL' });
 	});
 
 	test('every colored tone carries a word and a glyph', () => {
@@ -148,7 +148,7 @@ describe('forTheme', () => {
 		expect(forTheme(kind('class'), 'theme').color).toBe('merged');
 		expect(forTheme(status('stale'), 'theme').color).toBe('warning');
 		expect(forTheme(status('healthy'), 'theme').color).toBe('success');
-		expect(forTheme(risk('critical'), 'theme')).toMatchObject({ color: 'error', bold: true, word: 'CRITICAL' });
+		expect(forTheme(risk('critical'), 'theme')).toMatchObject({ color: 'error', weight: 'semibold', word: 'CRITICAL' });
 	});
 
 	test('paint maps a bare palette color the same way', () => {
@@ -225,7 +225,7 @@ describe('banner', () => {
 	test('the compact header is >_CONSTELLATION:// in bold along the gradient', async ($, on) => {
 		const ui = await draw($, on, 'desktop', (el) => compactBanner(el, 'brand'));
 		const line = await ui.find({ type: 'Text', text: '>_CONSTELLATION://' });
-		expect(line?.props['bold']).toBe(true);
+		expect(line?.props['weight']).toBe('semibold');
 		const runs = (await ui.findAll({ type: 'Text' })).filter((t) => t.children.length === 1 && typeof t.children[0] === 'string');
 		expect(runs.map((r) => r.children[0]).join('')).toBe('>_CONSTELLATION://');
 		expect(runs[0]?.props['color']).toBe(palette.galactic);
@@ -287,8 +287,8 @@ describe('banner', () => {
 		const isRun = (c: unknown): c is Run => typeof c === 'object' && c !== null && 'props' in c && 'children' in c;
 		const runs = ((line?.children ?? []) as unknown[]).filter(isRun);
 		const textOf = (rs: Run[]) => rs.map((r) => r.children.join('')).join('');
-		expect(textOf(runs.filter((r) => r.props['bold'] === true))).toBe('>_CONSTELLATION://');
-		expect(textOf(runs.filter((r) => r.props['bold'] !== true))).toBe('│   │');
+		expect(textOf(runs.filter((r) => r.props['weight'] === 'semibold'))).toBe('>_CONSTELLATION://');
+		expect(textOf(runs.filter((r) => r.props['weight'] !== 'semibold'))).toBe('│   │');
 		expect(runs.every((r) => typeof r.props['color'] === 'string')).toBe(true);
 	});
 });

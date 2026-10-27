@@ -5,12 +5,10 @@ import { atLeast, collectEvidence, type FileRisk, fileRisk, forgetAgentEvidence,
 import { branded, risk as tone } from './theme';
 
 /** What the gate does before an edit to a file at or above the threshold. */
-type Mode = 'off' | 'dialog' | 'native' | 'require-analysis';
+type Mode = 'off' | 'ask' | 'require-analysis';
 
-const MODES: readonly Mode[] = ['off', 'dialog', 'native', 'require-analysis'];
-
-/** How long the toast for an edit already headed to the permission prompt stays. */
-const TOAST_MS = 10_000;
+/** The edit tools the gate watches. */
+const EDIT_TOOLS = /^(Edit|Write|MultiEdit|NotebookEdit)$/;
 
 /**
  * How long an edit waits for its file's risk before it goes ahead ungated. The
@@ -20,33 +18,24 @@ const TOAST_MS = 10_000;
  */
 export const RISK_DEADLINE_MS = 3000;
 
-const PROCEED = 'Proceed';
-const PROCEED_REMEMBER = "Proceed, and don't ask again for this file";
-const CANCEL = 'Cancel';
-
 let mode: Mode = 'off';
 let threshold: RiskLevel = 'high';
 
 /**
- * The session's permission mode as of the last prompt. In `auto` an `ask` goes
- * to the classifier, not a person, so the gate treats it as auto-approved.
- * Read from `classic.UserPromptSubmit`, because `tool.check` and the
- * `classic.PreToolUse` envelope carry no mode; a mode switched mid-turn is seen
- * at the next prompt.
- */
-let permissionMode: string | undefined;
-
-/**
- * Files the user chose not to be asked about again, by absolute path. Session
- * wide, not per agent: `tool.check` carries no `agentId`.
+ * Files whose impact the person has seen and approved an edit of, by absolute
+ * path: later edits to them are left to core. Session wide, not per agent: the
+ * impact is about the file, not who edits it.
  */
 const remembered = new Set<string>();
+
+/** The file each pending ask was about, by the call's `tool_use_id`, until that call resolves. */
+const asked = new Map<string, string>();
 
 /** Per agent, the files require-analysis mode has already refused once, by absolute path. */
 const assessed = new Map<string, Set<string>>();
 
 /**
- * The risk word first, so a narrow toast that cuts the end keeps it, then how
+ * The risk word first, so a narrow line that cuts the end keeps it, then how
  * many files depend on the file, the file, and the indexed commit when known.
  */
 export function impactLine(risk: FileRisk): string {
@@ -54,23 +43,15 @@ export function impactLine(risk: FileRisk): string {
 	return `${tone(risk.level).word} risk · ${plural(risk.dependents, 'dependent')} · ${risk.path}${commit}`;
 }
 
-/** `impactLine` after the brand, for a log or dialog. A toast is already titled with the plugin's name. */
+/** `impactLine` after the brand. */
 export function headline(risk: FileRisk): string {
 	return branded(impactLine(risk));
 }
 
-/** The dialog's question: the headline, the top dependents when there are any, and the question itself. */
-function question(risk: FileRisk): string {
-	const lines = [headline(risk)];
-	if (risk.topDependents.length > 0) lines.push(`Top dependents: ${risk.topDependents.join(', ')}`);
-	lines.push('Edit it anyway?');
-	return lines.join('\n');
-}
-
-/** The refusal the model reads when the user declines or dismisses the dialog, with what they typed under "Other". */
-function declined(risk: FileRisk, said?: string): string {
-	const words = said === undefined ? '' : ` The user said: "${said}"`;
-	return branded(`The user declined this edit to ${risk.path} (${impactLine(risk)}). Ask before trying a different approach.${words}`);
+/** The permission prompt's reason: the headline, then the top dependents when there are any. */
+export function promptReason(risk: FileRisk): string {
+	const top = risk.topDependents.length > 0 ? ` · top dependents: ${risk.topDependents.join(', ')}` : '';
+	return `${headline(risk)}${top}`;
 }
 
 /** The refusal the model reads before its first edit to a file it has not looked into. */
@@ -82,7 +63,9 @@ function refusal(risk: FileRisk): string {
 }
 
 function modeOf(value: unknown): Mode {
-	return MODES.find((m) => m === value) ?? 'off';
+	// `dialog` and `native` are the option's earlier values for what is now `ask`.
+	if (value === 'ask' || value === 'dialog' || value === 'native') return 'ask';
+	return value === 'require-analysis' ? 'require-analysis' : 'off';
 }
 
 /**
@@ -113,7 +96,7 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 	collectEvidence(mode === 'require-analysis');
 
 	if (mode === 'require-analysis') {
-		on('tool.call', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+		on('tool.call', { tool: EDIT_TOOLS }, async ($, e, next) => {
 			const raw = stringArg(e, 'file_path') ?? stringArg(e, 'notebook_path');
 			if (raw === undefined) return next(e);
 			const path = absolute(raw, await $.session.cwd());
@@ -130,68 +113,47 @@ export function registerImpactGate(on: On, options: PluginOptions): void {
 		});
 		return;
 	}
-	if (mode !== 'dialog' && mode !== 'native') return;
+	if (mode !== 'ask') return;
 
-	on('classic.UserPromptSubmit', async (_$, e, next) => {
-		permissionMode = e.permission_mode;
-		return next(e);
-	});
-
-	// Every return is `next(e)` or a fixed `ask` or `deny`: core's decision is read from a
-	// `$.tool.check` query, never from what `next` resolves to, so the gate cannot turn it into an allow.
-	on('tool.check', { tool: /^(Edit|Write|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-		// A query (another plugin's `$.tool.check`) has no call id and never opens a dialog or toast.
+	// Every return is `next(e)` or a fixed `ask`: core's decision is read from a `$.tool.check`
+	// query, never from what `next` resolves to, so the gate cannot turn it into an allow.
+	on('tool.check', { tool: EDIT_TOOLS }, async ($, e, next) => {
+		// A query (another plugin's `$.tool.check`) has no call id and is never asked about.
 		if (e.tool_use_id === undefined) return next(e);
+		// With no one to answer, a hook's ask would turn the edit into a refusal.
+		if (e.approver === undefined) return next(e);
 		const input = typeof e.input === 'object' && e.input !== null ? e.input : undefined;
 		const raw = input === undefined ? undefined : (stringArg(input, 'file_path') ?? stringArg(input, 'notebook_path'));
 		if (raw === undefined) return next(e);
 		// The query skips this hook and asks no settings PreToolUse hook, so it is the rules' and the mode's decision.
 		const { decision } = await $.tool.check({ tool: e.tool, input: e.input });
 		if (decision === 'deny') return next(e);
-		// In auto mode an ask goes to the classifier: no one would see it, so the gate asks itself.
-		const classified = decision === 'ask' && permissionMode === 'auto';
-		// An edit headed to the permission prompt needs no downgrade (native) and gets only a toast (dialog).
-		if (mode === 'native' && decision === 'ask' && !classified) return next(e);
-		// A -p or SDK run has no one to answer: a downgrade there would turn the edit into a refusal.
-		if (mode === 'native' && decision === 'allow' && (await $.session.surfaces()).length === 0) return next(e);
 		const path = absolute(raw, await $.session.cwd());
-		const asks = (mode === 'dialog' && decision === 'allow') || classified;
-		if (asks && remembered.has(path)) return next(e);
+		if (remembered.has(path)) return next(e);
 		const risk = await gatedRisk($, String(e.tool), path, next.signal);
 		if (risk === undefined) return next(e);
+		asked.set(e.tool_use_id, path);
+		// A hook's ask goes to the approver (a person, or the host's callback), never to the auto-mode classifier.
+		return { decision: 'ask', reason: promptReason(risk) };
+	});
 
-		const line = headline(risk);
-		if (!asks) {
-			$.ui.toast(impactLine(risk), { timeoutMs: TOAST_MS });
-			// Dialog mode leaves a prompted edit at its prompt; native mode sends an auto-approved one there.
-			if (mode !== 'native') return next(e);
-			return { decision: 'ask', reason: line };
-		}
-		// A -p or SDK run has no one to ask: no one would see the dialog, so fail open.
-		if ((await $.session.surfaces()).length === 0) {
-			$.ui.log(`${line} · could not ask, edit allowed`);
-			return next(e);
-		}
-		let answer = CANCEL;
-		try {
-			answer = await $.ui.ask(question(risk), [PROCEED, PROCEED_REMEMBER, CANCEL]);
-		} catch {
-			// With someone to ask, a rejection is the dialog dismissed (Esc), which refuses.
-		}
-		// Proceed keeps core's decision, so in auto mode the classifier still decides: the gate only adds a check.
-		if (answer === PROCEED) return next(e);
-		if (answer === PROCEED_REMEMBER) {
-			remembered.add(path);
-			return next(e);
-		}
-		return { decision: 'deny', reason: declined(risk, answer === CANCEL ? undefined : answer) };
+	// An asked edit that ran was approved with the impact in view: later edits to the file are left to core.
+	// A refused or failed edit (its tool reported an error) leaves the file to be asked about again.
+	on('tool.call', { tool: EDIT_TOOLS }, async (_$, e, next) => {
+		const r = await next(e);
+		const id = e.tool_use_id;
+		const path = id === undefined ? undefined : asked.get(id);
+		if (id === undefined || path === undefined) return r;
+		asked.delete(id);
+		if (r.deny === undefined && r.isError !== true) remembered.add(path);
+		return r;
 	});
 }
 
-/** Forgets every file the user chose not to be asked about, for a new conversation (`/clear`, `/resume`, `/branch`). */
+/** Forgets the files already asked about, for a new conversation (`/clear`, `/resume`, `/branch`). */
 export function resetImpact(): void {
-	permissionMode = undefined;
 	remembered.clear();
+	asked.clear();
 	assessed.clear();
 }
 

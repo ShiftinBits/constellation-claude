@@ -72,7 +72,7 @@ export function outputText(output: unknown): string | undefined {
 /** `count` in bold and `word`, plural unless the count is one. */
 function counted(el: ElementTable, count: number, word: string): RenderElement {
 	const digits = String(count);
-	return el.Text({ children: [el.Text({ bold: true, children: digits }), plural(count, word).slice(digits.length)] });
+	return el.Text({ children: [el.Text({ weight: 'semibold', children: digits }), plural(count, word).slice(digits.length)] });
 }
 
 function dim(el: ElementTable, text: string): RenderElement {
@@ -147,7 +147,7 @@ function shape(el: ElementTable, result: unknown, to: Scheme, project: string | 
 			const callers = Array.isArray(result.callers) ? result.callers : [];
 			const callees = Array.isArray(result.callees) ? result.callees : [];
 			const depth = Math.max(depthOf(callers), depthOf(callees));
-			return [counted(el, callers.length + callees.length, 'node'), el.Text({ children: ['depth ', el.Text({ bold: true, children: String(depth) })] })];
+			return [counted(el, callers.length + callees.length, 'node'), el.Text({ children: ['depth ', el.Text({ weight: 'semibold', children: String(depth) })] })];
 		}
 		if (result.pong === true) {
 			const parts: RenderNode[] = [badge(el, '', forTheme({ ...status('success'), word: 'connected' }, to))];
