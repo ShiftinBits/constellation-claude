@@ -15,7 +15,7 @@ Analyze dependencies for the specified file.
 
 If no file path is provided, ask the user what file they want to analyze.
 
-**For dependencies (default, no --reverse flag):**
+**For dependencies (default, when $flag is not "--reverse" or "-r"):**
 
 Call the `mcp__plugin_constellation_constellation__code_intel` tool with this code parameter:
 
@@ -44,7 +44,7 @@ Cycles       ✓ none
 3. **External**: the packages used
 4. **Cycles**: `✓ none`, or for each cycle found `✗ <severity> · a.ts ▸ b.ts ▸ a.ts` (the severity and the cycle path)
 
-**For dependents (with --reverse flag):**
+**For dependents (when $flag is "--reverse" or "-r"):**
 
 Call the `mcp__plugin_constellation_constellation__code_intel` tool with this code parameter:
 
