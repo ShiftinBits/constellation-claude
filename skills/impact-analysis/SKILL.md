@@ -1,6 +1,8 @@
 ---
 name: impact-analysis
-description: This skill should be used before any non-trivial code modification to assess the blast radius and risk of the change. Trigger when the user discusses renaming, refactoring, deleting, moving, restructuring, or modifying code. Also trigger when the user asks "what would break if...", "is X safe to remove", or wants to estimate risk before a refactor.
+description: Assess the blast radius and risk of a code change (rename, refactor, delete, move, restructure) before making it, listing affected files, dependents and public API exposure.
+when_to_use: Trigger before any non-trivial code modification, when the user discusses renaming, refactoring, deleting, moving, restructuring, or modifying code, or asks "what would break if...", "is X safe to remove", or wants to estimate risk before a refactor.
+allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
 # Impact Analysis

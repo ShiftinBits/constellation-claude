@@ -1,6 +1,8 @@
 ---
 description: Quick health check for Constellation connectivity and authentication
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
+disable-model-invocation: true
+disallowed-tools: Skill
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**

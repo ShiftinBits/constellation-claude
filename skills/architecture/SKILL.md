@@ -1,6 +1,8 @@
 ---
 description: Get a high-level overview of the codebase architecture
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
+disable-model-invocation: true
+disallowed-tools: Skill
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**

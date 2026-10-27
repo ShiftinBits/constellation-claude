@@ -23,8 +23,7 @@ Validate on the plugin manifest prints every event the module hooks and every `$
 | `.claude-plugin/plugin.json` | Manifest; `userConfig` options: `nudgeLimit`, `augmentGrep`, `impactGate`, `impactThreshold`, `turnSummary`, `showFreshness`, `compactToolRows`, `showAdoption`, `prImpact` |
 | `.claude-plugin/marketplace.json` | Marketplace listing (`source: ./`) |
 | `.mcp.json` | MCP server keyed `constellation` (`npx @constellationdev/mcp`, stdio) |
-| `commands/*.md` | Markdown slash commands: `status`, `diagnose`, `impact`, `deps`, `unused`, `architecture` |
-| `skills/` | `constellation-troubleshooting` (+ `references/error-codes.md`), `impact-analysis` |
+| `skills/` | Eight skills: user-only `status`, `diagnose`, `impact`, `deps`, `unused`, `architecture` (invoked as `/constellation:<name>`), plus model-invocable `constellation-troubleshooting` (+ `references/error-codes.md`) and `impact-analysis` |
 | `output-styles/code-intelligence.md` | Opt-in "Code Intelligence" output style |
 | `hooks/hooks.json` | Empty `"hooks"` block beside `"modules": ["./register.ts"]` |
 | `hooks/register.ts` | Module entry: one `registerX(on[, options])` call per handler file |
@@ -58,7 +57,7 @@ Design constraints and live-verified engine behavior for `hooks/`: `.claude/rule
 
 - **No package.json, no build.** Commands, skills, output style are Markdown + YAML frontmatter, validated by running them in Claude Code.
 - **Single MCP tool.** Everything goes through `mcp__plugin_constellation_constellation__code_intel`. Don't restate its API here; the MCP server instructions document it.
-- **Commands:** `allowed-tools: mcp__plugin_constellation_constellation__code_intel` only, no `model:` override, and every command body includes `IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.`
+- **Commands:** user-only skills under `skills/<name>/SKILL.md` (no `name:` key, so the directory keeps `/constellation:<name>`) with `disable-model-invocation: true` and `disallowed-tools: Skill`. `allowed-tools: mcp__plugin_constellation_constellation__code_intel` only, no `model:` override, and every body includes `IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.`
 - **Hooks module:** TypeScript ESM, static `import` only (no dynamic `import()`), types from `claude-code`, tab indentation. A new handler file exports `registerX(on, options?)` and gets one line in `register.ts`.
 - **Gating:** every hook is `($, e, next)` and awaits `next(e)` first; features act only when `isConfigured(await $.env.get('CONSTELLATION_ACCESS_KEY'))` (key starts with `ak:`) and, where relevant, a `constellation.json` sits at or above the path (`projectRoot`).
 - **Fail open.** A code_intel, git or store failure never blocks a tool call or edit; slow lookups race a deadline (`withinDeadline`).
@@ -75,6 +74,8 @@ Design constraints and live-verified engine behavior for `hooks/`: `.claude/rule
 /constellation:unused [kind]
 /constellation:architecture
 ```
+
+Live checks to confirm interactively (`claude --plugin-dir .`): all six `/constellation:*` invocations work as before; Claude cannot invoke them itself (`disable-model-invocation: true`); `disallowed-tools: Skill` blocks the Skill tool while a user-invoked skill runs; whether bare `/diagnose`, `/impact`, `/deps`, `/unused` and `/architecture` resolve (bare `/status` stays built in). Headless `claude -p` does not load the plugin from `--plugin-dir` for slash input, and bare `/diagnose` and `/impact` did not resolve there, so these remain unconfirmed interactively.
 
 ## Environment
 

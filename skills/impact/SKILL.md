@@ -3,6 +3,8 @@ description: Analyze the impact of changing a symbol or file
 argument-hint: "<symbol-name> [file-path]"
 arguments: symbol path
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
+disable-model-invocation: true
+disallowed-tools: Skill
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**

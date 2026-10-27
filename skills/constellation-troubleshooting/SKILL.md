@@ -1,6 +1,8 @@
 ---
 name: constellation-troubleshooting
-description: This skill should be used when the user asks about "Constellation errors", "fix Constellation", "debug Constellation", "Constellation not working", "API connection issues", "indexing problems", "MCP server", "Failed to reconnect", mentions any Constellation error codes (AUTH_ERROR, PROJECT_NOT_INDEXED, etc.), or when Constellation commands fail.
+description: Diagnose and fix Constellation plugin problems such as API connection failures, authentication errors, indexing problems and MCP server startup issues.
+when_to_use: Trigger when the user asks about "Constellation errors", "fix Constellation", "debug Constellation", "Constellation not working", "API connection issues", "indexing problems", "MCP server", "Failed to reconnect", mentions any Constellation error codes (AUTH_ERROR, PROJECT_NOT_INDEXED, etc.), or when Constellation commands fail.
+allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
 # Constellation Troubleshooting

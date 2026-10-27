@@ -3,6 +3,8 @@ description: Analyze dependencies for a file or symbol
 argument-hint: "<file-path> [--reverse]"
 arguments: path flag
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
+disable-model-invocation: true
+disallowed-tools: Skill
 ---
 
 **IMPORTANT: Do NOT invoke any skills or other commands. Directly call the MCP tool specified below.**
