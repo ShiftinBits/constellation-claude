@@ -29,7 +29,8 @@ Version floor: Claude Code 2.1.304 (the least version with every event, field an
 | `turn.complete` | `session.ts` | `forget*` for an ended subagent run; main-loop turn summary line |
 | `session.start` | `command.ts` | registers `/constellation`, onboarding key read-back + `$.env.set`, clears the stored freshness line (a load starts the indicator over), freshness ping + 5 min git timer, and, when `$.ui.panes()` lists the pane (a reload keeps it up), starts again what it still waits for |
 | `command.run`, `ui.render` Pane, `ui.close` | `command.ts` | `ui.close` writes the initial pane on the person's close; an unload drops the pane before hooks hear of it and runs none of its opener's |
-| `tool.check` edit tools | `impact.ts` (`dialog`/`native` only) | real calls with an `approver` only; reads core's decision from a `$.tool.check` query |
+| `tool.check` edit tools | `impact.ts` (`ask` only; `dialog`/`native` alias it) | real calls with an `approver` only; reads core's decision from a `$.tool.check` query; a fixed `ask` with the impact as the reason, once per file |
+| `tool.call` edit tools | `impact.ts` (`ask` only) | remembers a file once an edit it asked about ran without an error (a rejected prompt or failed edit asks again) |
 | `tool.call` edit tools | `impact.ts` (require-analysis only), `turnsummary.ts` | |
 | `tool.call` `'Bash'` | `primpact.ts` | registered unless `prImpact` is `off` |
 | `tool.call` `/^Bash$/` | `freshness.ts` | rechecks after git commit/pull/checkout/merge/rebase |
@@ -67,12 +68,12 @@ Every boolean option except `showAdoption` treats unset as on; an unknown string
 - The `/theme` picker raises neither `config.set` nor `classic.ConfigChange` (the `/config` menu does), so cached theme reads also expire after one second.
 - `theme` row of `$.config.list()` options: `auto`, `dark`, `light`, `light-daltonized`, `dark-daltonized`, `light-ansi`, `dark-ansi`; `auto` reads as dark.
 - A real Edit raises `tool.call` with `tool.check` inside it, both with the same `tool_use_id`; a `$.tool.check` query has none.
-- `$.ui.ask` rejects on Esc and in `-p`; never read the error text. `tool.check`'s `approver` is known before any hook runs: `person` (a dialog or card), `host` (a host's permission callback), absent where nobody can be asked. A hook `ask` with no one to answer becomes a refusal, so the impact gate leaves such a call to core. Only core's own `ask` goes to the auto-mode classifier; a hook's `ask` goes to the approver, in auto mode too. `bypassPermissions` still honors a hook `ask`.
+- `tool.check`'s `approver` is known before any hook runs: `person` (a dialog or card), `host` (a host's permission callback), absent where nobody can be asked. A hook `ask` with no one to answer becomes a refusal, so the impact gate leaves such a call to core. Only core's own `ask` goes to the auto-mode classifier; a hook's `ask` goes to the approver, in auto mode too. `bypassPermissions` still honors a hook `ask`.
 - `tool.check` deny reaches the model as `Permission to use Edit denied by plugin <name>: <reason>`; `tool.call` `{ deny }` reaches it verbatim in `<tool_use_error>`.
 - `turn.complete` `text` shows as a system informational line and never enters the model's transcript.
 - `session.end` (checked on 2.1.311): `/clear` raises it with `clear` before the next prompt, under the ending session's id; the next `turn.start` runs under a new one. `/branch` and `/resume` raise it with `resume` for the session being left. No `session.start` follows any of them.
 - `$.state` (checked in the test kit on 2.1.311 and 2.1.304): a `ui.render` hook's `$` refuses `state.set` while its drawing is dispatched, even after awaits (`denied: it was made while ui.render is being dispatched`); a callback the drawing handed out (`onPress`) writes once that drawing has ended. A write that lands while a drawing that read the value is still being dispatched does not draw it again, so the pane reads its values together first thing. `session.end` with `clear` leaves `$.state` as it was, so `session.ts` writes the drawn values back itself.
-- Not live-verified: `$.prompt.fill`, `$.ui.copy`, spinner redraw, the impact gate's hook `ask` in each permission mode, whether the live engine itself starts `$.state` over at `/clear` or `/resume` (the writes in `session.ts` hold either way).
+- Not live-verified: `$.prompt.fill`, `$.ui.copy`, spinner redraw, the impact gate's hook `ask` in each permission mode and how a rejected prompt reaches `tool.call` (assumed `isError`), whether the live engine itself starts `$.state` over at `/clear` or `/resume` (the writes in `session.ts` hold either way).
 
 ## Tests (`claude-code/testing`)
 

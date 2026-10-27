@@ -44,9 +44,9 @@
 		"impactGate": {
 			"type": "string",
 			"title": "Impact gate",
-			"description": "What happens before Claude edits a high-impact file. off does nothing; dialog asks you before an auto-approved edit to a high-impact file; native sends that edit to Claude Code's own permission prompt; require-analysis refuses Claude's first edit to such a file once, with the impact report, unless it already analyzed the file's impact with code_intel; the retry goes through (works headless and in CI).",
+			"description": "What happens before Claude edits a high-impact file. off does nothing; ask sends the first edit to each such file to Claude Code's permission prompt with the impact as the reason, and once you approve one, later edits to that file are Claude Code's own decision (dialog and native are earlier names for ask); require-analysis refuses Claude's first edit to such a file once, with the impact report, unless it already analyzed the file's impact with code_intel; the retry goes through (works headless and in CI).",
 			"default": "off",
-			"options": ["off", "dialog", "native", "require-analysis"]
+			"options": ["off", "ask", "require-analysis", "dialog", "native"]
 		},
 		"impactThreshold": {
 			"type": "string",
