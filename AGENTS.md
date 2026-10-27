@@ -15,7 +15,7 @@ Claude Code plugin (and its own marketplace) for Constellation. **Public repo.**
 
 CI (`.github/workflows/test.yml`) runs the tests and the validate on the floor (2.1.304) and the latest Claude Code (the directory profile on latest only), plus a grep that fails on any hex color literal outside `hooks/theme.ts`. CI does not run `tsc`: run all checks locally before pushing.
 
-The eval suite under `evals/` makes real model calls (about $2.50 for a full run with the pinned models) and never runs in CI. It mocks the constellation MCP server from `evals/mocks/constellation/`, so no access key or hosted API is involved; only `EVAL_*` env reaches a run, so the hooks module (gated on `CONSTELLATION_ACCESS_KEY`) is inert and the cases cover skills and the MCP tool only. `--scaffold` runs the suite's own fixture scripts (`impact-before-edit` seeds a small project to edit) and `--allow-tools Edit` lets that case edit it. Add `--trust-plugin` on the first run in a directory, `--case <glob>` to run one case, and read the with/without-plugin delta in the table. Results land in `evals/results/` (git-ignored). The behavioural cases (`impact-before-edit`, `symbol-lookup-prefers-code-intel`) depend on model choice and can score below 1.00 on a run.
+The eval suite under `evals/` makes real model calls (about $2.50 for a full run with the pinned models) and never runs in CI. It mocks the constellation MCP server from `evals/mocks/constellation/`, so no access key or hosted API is involved; only `EVAL_*` env reaches a run, so the hooks module (gated on `CONSTELLATION_ACCESS_KEY`) is inert and the cases cover skills and the MCP tool only. The mock answers every call with one fixed body, not the real response shapes, so the cases prove that skills fire and call the tool, not that their output layout matches what the server returns. `--scaffold` runs the suite's own fixture scripts (`impact-before-edit` seeds a small project to edit) and `--allow-tools Edit` lets that case edit it. Add `--trust-plugin` on the first run in a directory, `--case <glob>` to run one case, and read the with/without-plugin delta in the table. Results land in `evals/results/` (git-ignored). The behavioural cases (`impact-before-edit`, `symbol-lookup-prefers-code-intel`) depend on model choice and can score below 1.00 on a run.
 
 Validate on the plugin manifest prints every event the module hooks and every `$.*` call. The README Data Handling row must list exactly those `calls:`.
 
@@ -31,6 +31,7 @@ Validate on the plugin manifest prints every event the module hooks and every `$
 | `hooks/hooks.json` | Empty `"hooks"` block beside `"modules": ["./register.ts"]` |
 | `hooks/register.ts` | Module entry: one `registerX(on[, options])` call per handler file |
 | `hooks/*.ts` / `*.test.ts` | In-process hooks module and co-located tests (`claude-code/testing`) |
+| `evals/` | Local `claude plugin eval` suite: one folder per case (`prompt.md`, `graders/`, optional `case.yaml` and fixture), mocked MCP server in `mocks/constellation/` |
 | `types/index.d.ts` | The plugin's contract (`"types"` in `plugin.json`): the `$.state` keys its drawings read (`PluginState`) |
 
 Loading the plugin writes git-ignored `.claude-plugin/types/` (engine `.d.ts`) and a root `tsconfig.json` extending it.
