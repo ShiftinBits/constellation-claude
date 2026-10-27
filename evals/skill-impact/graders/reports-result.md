@@ -1,5 +1,4 @@
 ---
 type: regex
-flags: i
 ---
-87|high
+\b87\b
