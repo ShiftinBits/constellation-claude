@@ -8,7 +8,7 @@ While Constellation's MCP server provides raw code intelligence capabilities, th
 |---------|---------|
 | **Slash Commands** | Quick access to common workflows |
 | **Contextual Skills** | Claude automatically loads relevant knowledge, including proactive impact analysis before risky changes |
-| **Safety Hooks** | Nudges Claude toward `code_intel` over text search at session start, in subagents, in the search tools' descriptions, and before symbol-like searches inside indexed projects, and adds a one-line `code_intel` hint to the result of a symbol search |
+| **Safety Hooks** | Nudges Claude toward `code_intel` over text search in the search tools' descriptions (which subagents see too) and before symbol-like searches inside indexed projects, and adds a one-line `code_intel` hint to the result of a symbol search |
 
 ## Features
 
