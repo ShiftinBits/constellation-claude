@@ -1,7 +1,7 @@
 ---
 name: impact-analysis
-description: Assess the blast radius and risk of a code change (rename, refactor, delete, move, restructure) before making it, listing affected files, dependents and public API exposure.
-when_to_use: Trigger before any non-trivial code modification, when the user discusses renaming, refactoring, deleting, moving, restructuring, or modifying code, or asks "what would break if...", "is X safe to remove", or wants to estimate risk before a refactor.
+description: Use before renaming, moving, deleting or changing the signature of an existing function, class, type or file, even when the user has already said exactly what to change. Lists every caller and dependent to update, including ones a text search misses, with the change's risk and public API exposure.
+when_to_use: Trigger as the first step of a rename, refactor, move, delete or signature change ("rename X to Y and update its callers", "move this to another file", "change this function's parameters"), and when the user asks "what would break if...", "what uses X", "is X safe to remove", or wants the risk of a refactor. Skip it for purely additive changes.
 allowed-tools: mcp__plugin_constellation_constellation__code_intel
 ---
 
@@ -69,8 +69,8 @@ The `impactAnalysis` response includes a `data.breakingChangeRisk.riskLevel` fie
 
 - `✓ LOW`: fewer than 5 files affected, internal-only, tests among the dependents. Proceed normally
 - `⚠ MEDIUM`: 5 to 15 files affected, or some public surface. Review dependents before changing
-- `✗ HIGH`: more than 15 files affected, exported API, or no impacted test files. Stage the change, add tests first
-- `✗ CRITICAL`: core infrastructure, security-adjacent, or hub modules. Pause, propose a migration plan
+- `✗ HIGH`: more than 15 files affected, exported API, or no impacted test files. Update every dependent in the same change and suggest tests
+- `✗ CRITICAL`: core infrastructure, security-adjacent, or hub modules. Update every dependent in the same change and suggest a staged migration
 
 ## Reporting Format
 
@@ -96,7 +96,11 @@ Next         <proceed | review the listed files | stage in N steps | add tests f
 
 A failed call is reported as `✗ CODE · headline · next step`, for example `✗ AUTH_ERROR · Your access key wasn't accepted · const auth`.
 
-For high or critical risk, lead with the warning and offer to suggest a safer change order.
+For high or critical risk, lead with the warning and suggest a safer change order.
+
+## After the Analysis
+
+The analysis informs the change; it never replaces it. When the user has already asked for the change, do not stop to ask for confirmation: use the dependents as the list of places to update, make the change, and give the report with the result. Stop after the report only when the user asked for an assessment rather than the change.
 
 ## Fallbacks
 

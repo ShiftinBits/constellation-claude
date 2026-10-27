@@ -32,13 +32,13 @@ Claude automatically activates specialized knowledge based on your questions:
 | Skill | Triggers When You Ask About... |
 |-------|-------------------------------|
 | **constellation-troubleshooting** | Error codes, connectivity issues, debugging problems |
-| **impact-analysis** | Renaming, refactoring, deleting, or moving symbols/files; "what would break if...", "is X dead code", "what depends on X" |
+| **impact-analysis** | Renaming, refactoring, deleting, moving or changing the signature of symbols/files, even when you have already said exactly what to change; "what would break if...", "is X dead code", "what depends on X" |
 
 **Example Trigger:**
 ```
 You: "Rename AuthService to AuthenticationService"
 Claude: "Before renaming, let me analyze the potential impact..."
-[impact-analysis skill activates, runs api.impactAnalysis, reports risk + dependents]
+[impact-analysis skill activates, runs api.impactAnalysis, updates every dependent, reports risk + dependents with the result]
 ```
 
 ### Hooks
